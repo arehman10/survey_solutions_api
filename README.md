@@ -43,7 +43,7 @@ suso.jar    -> same folder, OR anywhere, then:  suso config , jar("C:/path/suso.
 Then in Stata:
 
 ```stata
-suso config , server(https://decpm11-surveys.worldbank.org) workspace(srilankainf) user(myapiuser)
+suso config , server(https://myserver) workspace(myspace) user(myapiuser)
 suso doctor          // environment + Java check
 suso ping            // connectivity + auth check
 ```
