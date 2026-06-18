@@ -1,0 +1,4 @@
+v 3
+d Survey Solutions (SuSo) tools for Stata
+d Attique Ur Rehman, The World Bank (DEC, Enterprise Surveys)
+p suso   Client for the Survey Solutions REST API (list, export, approve/reject, manage)

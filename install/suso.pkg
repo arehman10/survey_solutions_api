@@ -1,0 +1,29 @@
+v 3
+d 'SUSO': module providing a Stata client for the Survey Solutions REST API
+d
+d  suso is a complete Stata interface to the World Bank Survey
+d  Solutions (SuSo) REST API (v1 and v2). It lets you script
+d  fieldwork operations from do-files: list and inspect assignments
+d  and interviews; approve, reject, comment on, reassign and delete
+d  interviews; create and manage assignments and users; start,
+d  monitor and download data exports; and administer workspaces and
+d  server settings. List endpoints paginate automatically and load
+d  results as a Stata dataset; single-object responses are returned
+d  in r(). Requests run through a small, dependency-free Java backend
+d  (suso.jar) via javacall, which performs the HTTPS calls (PATCH/
+d  PUT/DELETE, proxy, streaming downloads, redirect handling).
+d
+d  Requires a Survey Solutions API user (not HQ/Admin credentials).
+d
+d Requires: Stata version 14.2 and a Java 11+ runtime (suso doctor checks)
+d
+d Distribution-Date: 20260617
+d
+d Author: Attique Ur Rehman, Economist
+d Affiliation: The World Bank, Development Economics (DEC), Enterprise Surveys
+d Support: email attique@@worldbank.org
+d Web: https://sites.google.com/view/attique-ur-rehman
+d
+f suso.ado
+f suso.sthlp
+f suso.jar
