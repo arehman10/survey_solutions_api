@@ -1,6 +1,6 @@
 # suso — Survey Solutions REST API client for Stata
 
-**The World Bank · DEC · Enterprise Surveys**
+
 
 `suso` is a safety-first Stata command that wraps the World Bank **Survey Solutions**
 REST API. A small Java backend (`suso.jar`) performs the authenticated HTTPS calls
