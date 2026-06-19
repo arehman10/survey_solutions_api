@@ -342,6 +342,21 @@ Exporting data is three steps: {cmd:start}, poll {cmd:status} until it reports
 Add {opt unzip} to extract the archive after download (into a folder named after the zip, or {opt unzipto(}{it:dir}{cmd:)}). Survey Solutions can password-protect exports; for those, use {opt unzipw(}{it:password}{cmd:)}. Extraction is done by the bundled Java backend and supports the traditional ZipCrypto scheme SuSo uses, so no external unzip tool is required. {cmd:r(unzipped)} and {cmd:r(unzipdir)} report the result.
 
 {pstd}
+Extraction variants:
+
+{p 8 12 2}{it:// plain archive {c 45}{c 45} extract beside the zip}{p_end}
+{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("ses_v11.zip") replace unzip}{p_end}
+{p 8 12 2}{it:// password-protected archive}{p_end}
+{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("ses_v11.zip") replace unzipw("yourpassword")}{p_end}
+{p 8 12 2}{it:// password-protected, extracting to a chosen folder}{p_end}
+{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("ses_v11.zip") replace unzipw("pw") unzipto("O:/.../2026-06-17/extracted")}{p_end}
+
+{pstd}
+{opt unzipw()} implies {opt unzip}, so you need not give both. The {opt unzipw()}
+password is the {bf:archive} password set on the export, which is different from
+your API {opt password()}.
+
+{pstd}
 {cmd:start} returns the job id in {cmd:r(jobid)}. A questionnaire {bf:version}
 is required (the API identifies a questionnaire as {it:guid}${it:version}); set
 {opt qver()} or a default via {cmd:suso config}. Immediately after a job reports
