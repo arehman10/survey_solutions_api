@@ -98,20 +98,32 @@ recording timestamp, user, server/workspace, action, target and HTTP status.
 Pagination is automatic (`, all`) but capped at `SUSO_MAXROWS` (default 100,000) to avoid
 accidental mega-pulls; raise it with `suso config , maxrows()` or use `suso export` /
 `suso backup` for bulk data.
-SSL / proxy on a corporate network
-Preferred: import the corporate root CA into the trust store of the Java runtime Stata
-uses. Find it with `suso doctor` (prints Java home), then:
+SSL / certificates / proxy
+If a command fails with `SSLHandshakeException` / `PKIX path building failed` /
+`unable to find valid certification path`, Stata's Java runtime doesn't trust the
+server's TLS certificate. This is common on non-World-Bank servers, self-signed
+certificates, or with an outdated Java trust store — not just corporate networks.
+Two fixes:
+Trust the certificate (recommended). Import the server's root CA into the trust
+store of the Java runtime Stata uses — find it with `suso doctor` (prints Java home):
 ```bash
-keytool -importcert -alias corp-root -file corp-root.crt -cacerts
+keytool -importcert -alias suso-server -file server-ca.crt -cacerts
 # older layout: -keystore "<java.home>/lib/security/cacerts" -storepass changeit
 ```
+Skip verification for this session (quick, less secure). Useful for a quick test
+or a server you trust whose CA you can't easily import:
+```stata
+suso config , insecure
+suso ping
+```
+This disables TLS certificate + hostname checks for the session and warns on every
+request; turn it back on with `suso config , noinsecure`. Prefer importing the CA for
+anything ongoing.
 Proxy:
 ```stata
 suso config , proxyhost(proxy.example.org) proxyport(8080)
 suso config , proxyhost(...) proxyport(...) proxyuser(...) proxypass(...)
 ```
-Escape hatch (use with care): `suso config , insecure` disables TLS verification for
-the session and warns on every request. Prefer importing the CA.
 `suso raw` — reach any endpoint
 ```stata
 suso raw /api/v1/settings/globalnotice                       // GET, flatten to r()
@@ -152,7 +164,7 @@ Contributing
 Issues and pull requests are welcome. For backend changes, please rebuild the jar from
 `src/` and confirm `suso doctor` / `suso ping` pass against a test workspace.
 Acknowledgments
-Huge thanks to Fahad Mirza (World Bank) for his
+Huge thanks to Fahad Mirza (World Bank / CERP) for his
 insights and guidance, and for his self-contained Stata tooling
 (sparkta,
 wordcloud2), which helped shape the
