@@ -247,6 +247,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:start} {opt type()}}start an export ({opt istatus()} {opt guid()} {opt qver()} {opt from()} {opt to()} {opt meta}|{opt nometa} {opt paradatareduced}){p_end}
 {synopt :{cmd:status} {opt id()}}poll an export job's status{p_end}
 {synopt :{cmd:download} {opt id()} {opt saving()}}download a completed export archive; add {opt unzip} (or {opt unzipw(pw)} for password-protected archives, {opt unzipto(dir)} for the target folder) to extract it{p_end}
+{synopt :{cmd:get} {opt type()} {opt saving()}}{bf:one-shot}: start, show progress, and auto-download when complete (accepts {opt unzip}/{opt unzipw()}/{opt unzipto()} and all {cmd:start} filters){p_end}
 {synopt :{cmd:cancel} {opt id()}}cancel/delete an export job {it:(destructive)}{p_end}
 {synoptline}
 
@@ -332,11 +333,28 @@ total number of rows a single {opt all} call will load.
 
 {pstd}
 Exporting data is three steps: {cmd:start}, poll {cmd:status} until it reports
-{cmd:Completed}, then {cmd:download}.
+{cmd:Completed}, then {cmd:download}. To do all three at once, use the one-shot
+{cmd:export get} (below) {hline 1} it starts the job, prints progress as it
+climbs, and downloads automatically the moment it hits 100%.
 
 {p 8 12 2}{cmd:. suso export start , type(STATA) qver(11) istatus(ApprovedBySupervisor)}{p_end}
 {p 8 12 2}{cmd:. suso export status , id(`=r(jobid)')}{p_end}
 {p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("data.zip") replace unzip}{p_end}
+
+{pstd}
+Or the same end to end in one command (no manual polling):
+
+{p 8 12 2}{cmd:. suso export get , type(STATA) qver(11) istatus(ApprovedBySupervisor) saving("ses_v11.zip") replace}{p_end}
+{p 8 12 2}{cmd:. suso export get , type(STATA) qver(11) saving("ses_v11.zip") replace unzipw("pw") unzipto("O:/.../extracted")}{p_end}
+
+{pstd}
+{cmd:get} takes the same filters as {cmd:start} ({opt type()}, {opt guid()},
+{opt qver()}, {opt istatus()}, {opt meta}|{opt nometa}) plus the extraction
+options of {cmd:download}. Polling cadence is {opt pollsecs()} (default 10s) and it
+gives up after {opt jobtimeout()} (default 3600s). If the completed job has no data
+for the filter, nothing is downloaded and {cmd:r(status)} is {cmd:NoFile}. Returns
+{cmd:r(saved)}, {cmd:r(jobid)}, {cmd:r(status)} and (when extracting)
+{cmd:r(unzipped)}/{cmd:r(unzipdir)}.
 
 {pstd}
 Add {opt unzip} to extract the archive after download (into a folder named after the zip, or {opt unzipto(}{it:dir}{cmd:)}). Survey Solutions can password-protect exports; for those, use {opt unzipw(}{it:password}{cmd:)}. Extraction is done by the bundled Java backend and supports the traditional ZipCrypto scheme SuSo uses, so no external unzip tool is required. {cmd:r(unzipped)} and {cmd:r(unzipdir)} report the result.
