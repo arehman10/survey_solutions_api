@@ -1,5 +1,4 @@
-* ALM
-*! suso v1.6.2  18jun2026  (suso export get: show 100% on Completed instead of the server per-phase Progress value)
+*! suso v1.6.3  18jun2026  (clear, server-agnostic TLS/certificate error guidance; works on non-WB / self-signed servers via insecure or CA import)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
 *! The World Bank — Development Economics (DEC) · Enterprise Surveys
@@ -210,7 +209,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.6.2  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.6.3  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -377,7 +376,7 @@ program _suso_gql, rclass
         exit 459
     }
     if "`rc'"!="0" {
-        di as err `"suso: `macval(msg)'"'
+        _suso_transport_err `"`macval(msg)'"'
         exit 459
     }
     if "`todata'"!="" {
@@ -789,6 +788,28 @@ program _suso_backup, rclass
     return scalar failed  = `nfail'
 end
 
+program _suso_transport_err
+    * Display a backend transport error and, if it is a TLS/certificate trust
+    * failure, explain how to fix it on ANY server (not just the WBG network).
+    local msg `"`macval(0)'"'
+    * drop the legacy WBG-specific hint the backend may append
+    local msg = subinstr(`"`macval(msg)'"', `"  (TLS/proxy issue on the WBG network? See 'suso doctor' and the SSL notes in the README.)"', "", .)
+    di as err `"suso: `macval(msg)'"'
+    local low = lower(`"`macval(msg)'"')
+    if strpos(`"`low'"',"sslhandshake") | strpos(`"`low'"',"pkix") | strpos(`"`low'"',"certification path") | strpos(`"`low'"',"certpath") | strpos(`"`low'"',"unable to find valid cert") {
+        di as txt ""
+        di as txt "  Stata's Java runtime does not trust this server's TLS certificate. This is"
+        di as txt "  common for non-World-Bank servers, self-signed certificates, or an outdated"
+        di as txt "  Java trust store. Fix it in one of these ways:"
+        di as txt "    1) {bf:Trust the certificate (recommended).}  Run {bf:suso doctor} to find the"
+        di as txt "       Java home, then import the server's root CA into that JVM with keytool"
+        di as txt "       (see the SSL / proxy notes in {bf:help suso} or the README)."
+        di as txt "    2) {bf:Skip TLS verification for this session (quick, less secure).}"
+        di as txt "         {bf:. suso config , insecure}"
+        di as txt "       then re-run your command. Use only against a server you trust."
+    }
+end
+
 program _suso_jar
     if "$SUSO_JAR"=="" {
         * 1) anywhere on the adopath
@@ -925,7 +946,7 @@ program _suso_call, rclass
     }
     if "`rc'"!="0" {
         _suso_clearbridge
-        di as err `"suso: `macval(msg)'"'
+        _suso_transport_err `"`macval(msg)'"'
         exit 459
     }
 
