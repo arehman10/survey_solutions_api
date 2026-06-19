@@ -151,6 +151,12 @@ If `suso` supports your research or fieldwork, please cite it:
 Contributing
 Issues and pull requests are welcome. For backend changes, please rebuild the jar from
 `src/` and confirm `suso doctor` / `suso ping` pass against a test workspace.
+Acknowledgments
+Huge thanks to Fahad Mirza (World Bank) for his
+insights and guidance, and for his self-contained Stata tooling
+(sparkta,
+wordcloud2), which helped shape the
+design of this package.
 License
 MIT © 2026 Attique Ur Rehman (The World Bank, Development Economics).
 Architecture (one line)
