@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.5.0  17jun2026}{...}
+{* *! version 1.6.0  18jun2026}{...}
 {viewerdialog suso "dialog suso"}{...}
 {vieweralsosee "[D] import" "help import"}{...}
 {vieweralsosee "" "--"}{...}
@@ -12,6 +12,7 @@
 {viewerjumpto "Pagination" "suso##pagination"}{...}
 {viewerjumpto "Export workflow" "suso##export"}{...}
 {viewerjumpto "Maps (GraphQL)" "suso##maps"}{...}
+{viewerjumpto "Administration (workspace/settings/statistics)" "suso##admin"}{...}
 {viewerjumpto "Destructive operations" "suso##destructive"}{...}
 {viewerjumpto "Stored results" "suso##results"}{...}
 {viewerjumpto "Examples" "suso##examples"}{...}
@@ -311,7 +312,8 @@ data is preserved/restored. Example: {cmd:suso backup , dir("C:/archive/srilanka
 
 {pstd}
 Most {cmd:workspace} verbs require admin rights and accept {opt usews} to act
-against the configured workspace context.
+against the configured workspace context. See {help suso##admin:Administration}
+below for worked examples of {cmd:workspace}, {cmd:settings} and {cmd:statistics}.
 
 {marker pagination}{...}
 {title:Pagination}
@@ -373,6 +375,102 @@ default 200) and tolerant of per-map failures, reporting {cmd:r(deleted)}/{cmd:r
 can download a given map to their tablet. If your server expects a workspace
 argument on a map operation and rejects a call, the GraphQL error message is
 shown verbatim so you can adjust.
+
+{marker admin}{...}
+{title:Administration: workspace, settings, statistics}
+
+{pstd}
+These verbs administer the {bf:server}, not survey data. Most default to the
+server {bf:root} rather than your configured workspace; add {opt usews} only if
+your deployment scopes them under the workspace path.
+
+{pstd}
+{bf:Who can run what.} Permission is set by the account in {cmd:suso config , user()}.
+Running an admin-only verb with a plain API user returns HTTP 401/403 from the server.
+
+{p2colset 9 32 34 2}{...}
+{p2col :{bf:Any API user} {hline 1} read}{cmd:workspace list}, {cmd:workspace get}, {cmd:workspace status}, {cmd:settings get}, and all {cmd:statistics} verbs{p_end}
+{p2col :{bf:Admin only} {hline 1} write}{cmd:workspace create}, {cmd:update}, {cmd:enable}, {cmd:disable}, {cmd:delete}, {cmd:assign}; and {cmd:settings set} / {cmd:clear}{p_end}
+{p2colreset}{...}
+
+{pstd}
+Two of the admin-only verbs {hline 1} {cmd:workspace disable} and
+{cmd:workspace delete} {hline 1} are also {bf:destructive} and carry extra
+guards (see {help suso##destructive:Destructive operations}).
+
+{marker admin_read}{...}
+{dlgtab:Read (any API user)}
+
+{pstd}{bf:Workspaces.} {cmd:list} loads a dataset; {cmd:get} and {cmd:status} return values in {cmd:r()}:
+
+{p 8 12 2}{cmd:. suso workspace list , includedisabled}{p_end}
+{p 8 12 2}{cmd:. suso workspace get    , name("srilankainf")}{space 3}{it:// r(name), r(displayname)}{p_end}
+{p 8 12 2}{cmd:. suso workspace status , name("srilankainf")}{p_end}
+
+{pstd}
+{cmd:status} reports, and returns, {cmd:r(canbedeleted)} alongside
+{cmd:r(existingquestionnairescount)}, {cmd:r(supervisorscount)},
+{cmd:r(interviewerscount)} and {cmd:r(mapscount)} {hline 1} use it before a
+{cmd:delete} to see what a workspace still holds.
+
+{pstd}{bf:Settings.} {cmd:get} returns the server login banner in {cmd:r(message)}:
+
+{p 8 12 2}{cmd:. suso settings get}{p_end}
+
+{pstd}{bf:Statistics} are server-side tabulations, with no microdata pulled:
+
+{p 8 12 2}{cmd:. suso statistics questionnaires}{space 3}{it:// dataset of reportable questionnaires}{p_end}
+{p 8 12 2}{cmd:. suso statistics questions , guid(<guid>) qver(3)}{space 3}{it:// reportable questions}{p_end}
+{p 8 12 2}{cmd:. suso statistics report , question(q14_sector) guid(<guid>) qver(3)}{p_end}
+{p 8 12 2}{cmd:. suso statistics report , question(q14_sector) guid(<guid>) qver(3) exporttype(xlsx) saving("sector_tab.xlsx") replace}{p_end}
+
+{pstd}
+{cmd:report} needs the question's {bf:variable name} (for example {cmd:q14_sector}),
+not a guid; it loads the tabulation into a dataset, or writes it to a file with
+{opt saving()} ({opt exporttype()} = {cmd:csv}, {cmd:tab} or {cmd:xlsx}). Pass any
+extra report parameters verbatim with {opt query()}. If {opt guid()}/{opt qver()}
+are omitted they fall back to {cmd:suso config}. For case-level data use
+{cmd:suso export} or {cmd:suso backup} instead.
+
+{marker admin_write}{...}
+{dlgtab:Admin only (write)}
+
+{pstd}
+{bf:These require an administrator account.} A plain API user cannot run them.
+
+{pstd}{bf:Create / rename / enable.} {opt displayname()} is the human-readable label:
+
+{p 8 12 2}{cmd:. suso workspace create , name("ises2026") displayname("ISES Sri Lanka 2026")}{p_end}
+{p 8 12 2}{cmd:. suso workspace update , name("ises2026") displayname("ISES SL 2026 (field)")}{p_end}
+{p 8 12 2}{cmd:. suso workspace enable  , name("ises2026")}{p_end}
+
+{pstd}
+{bf:Disable} (reversible, but destructive {hline 1} blocks the workspace) requires {opt confirm}:
+
+{p 8 12 2}{cmd:. suso workspace disable , name("ises2026") confirm}{p_end}
+
+{pstd}
+{bf:Delete} (irreversible) is the most guarded command: retype the name in
+{opt iknowthis()}, and it runs a pre-flight {cmd:status} check that refuses a
+non-empty workspace unless you add {opt force}:
+
+{p 8 12 2}{cmd:. suso workspace delete , name("ises2026") iknowthis("ises2026")}{p_end}
+{p 8 12 2}{cmd:. suso workspace delete , name("ises2026") iknowthis("ises2026") force}{p_end}
+
+{pstd}
+{bf:Assign} maps users to workspaces. {opt userids()} and {opt workspaces()} are
+{bf:space-separated} lists; {opt mode()} is {cmd:Assign} (replace; the default),
+{cmd:Add} or {cmd:Remove}; {opt supervisor()} attaches interviewers to a
+supervisor id:
+
+{p 8 12 2}{cmd:. suso workspace assign , userids("11111111-id1 22222222-id2") workspaces("ises2026")}{p_end}
+{p 8 12 2}{cmd:. suso workspace assign , userids("33333333-id3") workspaces("ises2026") mode(Add) supervisor("99999999-sup")}{p_end}
+
+{pstd}{bf:Settings.} {cmd:set} writes the server-wide login banner; {cmd:clear} removes it:
+
+{p 8 12 2}{cmd:. suso settings set , message("Fieldwork freeze 20-22 Jun for QC.")}{p_end}
+{p 8 12 2}{cmd:. suso settings clear}{p_end}
+
 
 {marker destructive}{...}
 {title:Destructive operations}
