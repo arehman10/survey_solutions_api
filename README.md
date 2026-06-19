@@ -39,11 +39,13 @@ The `.jar` can live there too, or anywhere if you point to it with `suso config 
 Then verify and configure:
 ```stata
 suso doctor          // environment + Java check
-suso config , server("https://<your-server>") workspace("<workspace>") user("<api-user>")
-suso ping            // connectivity + auth check
+suso config , server("https://<your-server>") workspace("<workspace>")
+suso ping            // prompts for user + password (masked), then checks auth
 ```
-The password can be typed (`password()`), entered at an interactive prompt
-(`suso login`), or exported as the `SUSO_PASSWORD` environment variable before launching
+Only `server()` and `workspace()` are required. `user()` and `password()` are optional —
+if omitted, `suso` prompts for them (masked) the first time a command contacts the server,
+or you can run `suso login`. To supply them non-interactively, add `user()`/`password()`,
+or — safer — export the `SUSO_PASSWORD` environment variable before launching
 Stata so it never enters your command history. Configuration lives in the Stata session
 only and is never written to disk. Survey Solutions' convention is to create an
 API-user account and use Basic auth (`auth(bearer) token()` is also supported).
