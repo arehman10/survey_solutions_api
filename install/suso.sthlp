@@ -99,17 +99,22 @@ Operations that change or remove data on the server are guarded
 {title:Setup}
 
 {pstd}
-Configure the server, workspace and an {bf:API user} once per session. Do not
-use Headquarters or Administrator credentials {hline 1} create a dedicated API
-user in the workspace.
+Configure the server and workspace once per session. {opt user()} and
+{opt password()} are {bf:optional} {hline 1} if you omit them, {cmd:suso} prompts
+for the user name and a masked password the first time a command contacts the
+server (or run {cmd:suso login} to enter them up front). Use a dedicated
+{bf:API user}, not Headquarters or Administrator credentials.
 
 {p 8 12 2}
-{cmd:. suso config , server("https://your-server") workspace("myws") user("API_USER") password("secret")}{p_end}
+{cmd:. suso config , server("https://your-server") workspace("myws")}{p_end}
 {p 8 12 2}
 {cmd:. suso ping}{p_end}
 
 {pstd}
-You may omit {opt user()} and {opt password()}: if they are not configured, {cmd:suso} prompts for them (with a masked password field) the first time a command contacts the server. You can also trigger this at any time with {cmd:suso login}. Credentials are kept for the session only.
+To supply credentials non-interactively, add {opt user()} (and optionally
+{opt password()}); safer still, set the {cmd:SUSO_PASSWORD} environment variable
+before launching Stata so the password never enters your command history.
+Credentials are kept for the session only.
 
 {pstd}
 Optionally pin a default questionnaire so you can omit {opt guid()}/{opt qver()}:
