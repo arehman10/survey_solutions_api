@@ -48,9 +48,3 @@ suso ping
 To script it non-interactively, add `user()`/`password()`, or set the
 `SUSO_PASSWORD` environment variable before launching Stata. Use a dedicated
 API user — not Headquarters or Administrator credentials.
-Submitting to SSC (maintainer note)
-To publish on SSC (so users can `ssc install suso`), email the five files to
-`research@stata.com` per `help ssc` / http://repec.org/bocode/s/sscsubmit.html.
-SSC distributes binary files such as `suso.jar` without issue. The `suso.pkg` and
-`stata.toc` here already follow the required format (`v 3`, `d`/`f` lines,
-`Distribution-Date`).
