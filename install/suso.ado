@@ -1,4 +1,4 @@
-*! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
+*! suso v1.6.1  18jun2026  (suso export get: one-shot start->poll(progress)->auto-download; export download unzip passthrough)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
 *! The World Bank — Development Economics (DEC) · Enterprise Surveys
@@ -209,7 +209,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.6.0  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.6.1  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -608,13 +608,13 @@ program _suso_maps_del1, rclass
 end
 
 program _suso_export_get, rclass
-    * Start one export, poll to completion, download it. Errors (exit 459) on
-    * failure/timeout so callers can wrap in capture. A Completed job with no
-    * data file returns r(status)=="NoFile" (not an error). Mirrors the backup
-    * notebook's start_export / wait_for_export / download_export chain.
-    syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)         ///
+    * Start one export, poll to completion (showing progress as it changes), then
+    * download it (optionally unzip). Errors (exit 459) on failure/timeout so callers
+    * can wrap in capture. A Completed job with no data file returns r(status)=="NoFile"
+    * (not an error). Mirrors the backup notebook's start/wait/download chain.
+    syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)          ///
         ISTATUS(string) META NOMETA POLLSecs(integer 10) JOBTimeout(integer 3600) ///
-        replace VERBOSE ]
+        replace UNZIP UNZIPW(string) UNZIPto(string) VERBOSE ]
     if "`istatus'"=="" local istatus "All"
     local metaopt = cond("`nometa'"!="","nometa","meta")
     suso export start , type(`type') guid(`guid') qver(`qver') istatus(`istatus') `metaopt' `verbose'
@@ -623,13 +623,20 @@ program _suso_export_get, rclass
         di as err "suso: export start returned no JobId."
         exit 459
     }
-    local elapsed = 0
-    local status  ""
-    local hasfile "true"
+    local elapsed  = 0
+    local status   ""
+    local hasfile  "true"
+    local lastline ""
     while 1 {
-        suso export status , id(`jid') `verbose'
+        quietly suso export status , id(`jid') `verbose'
         local status  `"`r(exportstatus)'"'
         local hasfile `"`r(hasexportfile)'"'
+        local pct     `"`r(progress)'"'
+        * print a progress line only when it changes (auto-suppressed under capture)
+        if "`status' `pct'"!="`lastline'" {
+            di as txt "  export " as res "`jid'" as txt "  {col 50}" as res "`status'" as txt "  " as res "`pct'%"
+            local lastline "`status' `pct'"
+        }
         if "`status'"=="Completed" continue, break
         if inlist("`status'","Fail","Failed","Canceled","Cancelled") {
             di as err "suso: export job `jid' `status'."
@@ -649,13 +656,13 @@ program _suso_export_get, rclass
         return local status "NoFile"
         exit
     }
-    capture suso export download , id(`jid') saving(`"`saving'"') `replace' `verbose'
+    capture suso export download , id(`jid') saving(`"`saving'"') `replace' `unzip' unzipw(`"`unzipw'"') unzipto(`"`unzipto'"') `verbose'
     if _rc {
         * the /file endpoint can 403/404 for a beat right after Completed: retry once
         sleep 2000
-        suso export download , id(`jid') saving(`"`saving'"') `replace' `verbose'
+        suso export download , id(`jid') saving(`"`saving'"') `replace' `unzip' unzipw(`"`unzipw'"') unzipto(`"`unzipto'"') `verbose'
     }
-    return local saved  `"`r(saved)'"'
+    return add
     return scalar jobid = `jid'
     return local status "`status'"
 end
@@ -1735,6 +1742,29 @@ program _suso_export, rclass
         exit
     }
 
+    if "`verb'"=="get" {
+        * One-shot: start -> poll (live progress) -> auto-download when 100%.
+        syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)      ///
+            ISTATUS(string) META NOMETA POLLSecs(integer 10) JOBTimeout(integer 3600) ///
+            replace UNZIP UNZIPW(string) UNZIPto(string) VERBOSE ]
+        if "`replace'"=="" {
+            capture confirm new file `"`saving'"'
+            if _rc {
+                di as err "suso: file already exists. Use -replace-."
+                exit 602
+            }
+        }
+        _suso_export_get , type(`type') saving(`"`saving'"') guid(`guid') qver(`qver') ///
+            istatus(`istatus') `meta' `nometa' pollsecs(`pollsecs')                 ///
+            jobtimeout(`jobtimeout') `replace' `unzip' unzipw(`"`unzipw'"')          ///
+            unzipto(`"`unzipto'"') `verbose'
+        if "`r(status)'"=="NoFile" {
+            di as txt "suso: export completed but has no data file for this filter — nothing downloaded."
+        }
+        return add
+        exit
+    }
+
     if "`verb'"=="cancel" {
         syntax , ID(string) [ CONFIRM VERBOSE ]
         _suso_block , action("Cancel/delete export job `id' in workspace $SUSO_WS") `confirm'
@@ -2219,7 +2249,7 @@ program _suso_endpoints
     di as txt    "             hqapprove  hqreject  hqunapprove  assign  assignsupervisor"
     di as txt    "             comment  commentbyvar  delete"
     di as res _n "  questionnaire" as txt " list  get  document  interviews  audio  criticality"
-    di as res _n "  export    " as txt " list  start  status  download  cancel"
+    di as res _n "  export    " as txt " list  start  status  download  get  cancel"
     di as res _n "  maps      " as txt " list  upload  delete  deleteall  assign  unassign"
     di as res _n "  user      " as txt " get  create  archive  unarchive"
     di as res    "  supervisor" as txt " list  get  interviewers"
