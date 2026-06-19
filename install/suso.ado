@@ -1,4 +1,4 @@
-*! suso v1.6.1  18jun2026  (suso export get: one-shot start->poll(progress)->auto-download; export download unzip passthrough)
+*! suso v1.6.2  18jun2026  (suso export get: show 100% on Completed instead of the server per-phase Progress value)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
 *! The World Bank — Development Economics (DEC) · Enterprise Surveys
@@ -209,7 +209,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.6.1  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.6.2  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -632,6 +632,7 @@ program _suso_export_get, rclass
         local status  `"`r(exportstatus)'"'
         local hasfile `"`r(hasexportfile)'"'
         local pct     `"`r(progress)'"'
+        if "`status'"=="Completed" local pct "100"
         * print a progress line only when it changes (auto-suppressed under capture)
         if "`status' `pct'"!="`lastline'" {
             di as txt "  export " as res "`jid'" as txt "  {col 50}" as res "`status'" as txt "  " as res "`pct'%"
