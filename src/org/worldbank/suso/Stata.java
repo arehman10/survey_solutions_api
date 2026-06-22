@@ -633,7 +633,9 @@ public final class Stata {
             else if (v instanceof Boolean) sval = ((Boolean) v) ? "1" : "0";
             else if (v instanceof Number) sval = numStr(v);
             else sval = Json.write(v);
-            String k = uniqueName(sanitizeName(key, 28).toLowerCase(Locale.ROOT), used);
+            // Stata macro names are capped at 32 chars; "SUSO_F_" is 7, so the
+            // key may be at most 25 chars (was 28, which overflowed to 35).
+            String k = uniqueName(sanitizeName(key, 25).toLowerCase(Locale.ROOT), used);
             setG("SUSO_F_" + k, snippet(sval, 8000));
             keys.add(k);
         }

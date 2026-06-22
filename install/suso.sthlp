@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.6.2  18jun2026}{...}
+{* *! version 1.6.4  18jun2026}{...}
 {viewerdialog suso "dialog suso"}{...}
 {vieweralsosee "[D] import" "help import"}{...}
 {vieweralsosee "" "--"}{...}
@@ -717,7 +717,7 @@ Web: {browse "https://sites.google.com/view/attique-ur-rehman":https://sites.goo
 {title:Acknowledgments}
 
 {pstd}
-Huge thanks to {bf:Fahad Mirza} (World Bank / CERP,
+Thanks to {bf:Fahad Mirza} (World Bank / CERP,
 {browse "https://github.com/fahad-mirza":github.com/fahad-mirza}) for his insights
 and guidance, and for his self-contained Stata tooling ({cmd:sparkta},
 {cmd:wordcloud2}) that helped shape this package's design.

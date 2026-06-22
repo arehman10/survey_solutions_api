@@ -1,4 +1,4 @@
-*! suso v1.6.3  18jun2026  (clear, server-agnostic TLS/certificate error guidance; works on non-WB / self-signed servers via insecure or CA import)
+*! suso v1.6.4  18jun2026  (fix: flattened scalar names capped to Stata 32-char macro limit (was overflowing on e.g. ExistingQuestionnairesCount); workspace status count restored)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
 *! The World Bank — Development Economics (DEC) · Enterprise Surveys
@@ -209,7 +209,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.6.3  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.6.4  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -363,7 +363,7 @@ program _suso_gql, rclass
     local total "$SUSO_TOTALCOUNT"
     local fkeys "$SUSO_FKEYS"
     foreach k of local fkeys {
-        local F_`k' `"${SUSO_F_`k'}"'
+        if length("SUSO_F_`k'") <= 32 local F_`k' `"${SUSO_F_`k'}"'
     }
     capture macro drop SUSO_GQL_BODY SUSO_GQL_OPERATIONS SUSO_GQL_MAP SUSO_UP_FILE ///
         SUSO_UP_NAME SUSO_GQL_NODEPATH SUSO_GQL_TODATA SUSO_VERBOSE
@@ -930,7 +930,7 @@ program _suso_call, rclass
     local datecols "$SUSO_DATECOLS"
     local fkeys    "$SUSO_FKEYS"
     foreach k of local fkeys {
-        local F_`k' `"${SUSO_F_`k'}"'
+        if length("SUSO_F_`k'") <= 32 local F_`k' `"${SUSO_F_`k'}"'
     }
 
     if `jrc' {
@@ -1982,7 +1982,9 @@ program _suso_workspace, rclass
         _suso_call , method(GET) path(/api/v1/workspaces/status/`name') `rootopt' `verbose'
         di as txt _n "Workspace status: " as res `"`name'"'
         di as txt "  can be deleted    : " as res `"`r(canbedeleted)'"'
-        di as txt "  questionnaires    : " as res `"`r(existingquestionnairescount)'"'
+        local _enq `"`r(existingquestionnairescou)'"'
+        if `"`_enq'"'=="" local _enq `"`r(existingquestionnairescount)'"'
+        di as txt "  questionnaires    : " as res `"`_enq'"'
         di as txt "  supervisors       : " as res `"`r(supervisorscount)'"'
         di as txt "  interviewers      : " as res `"`r(interviewerscount)'"'
         di as txt "  maps              : " as res `"`r(mapscount)'"'
