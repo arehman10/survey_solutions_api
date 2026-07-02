@@ -4205,7 +4205,7 @@ end
 * are unanswered is scored "cannot determine" and excluded from both counts.
 program _suso_para_check, rclass
     version 14.2
-    syntax , QX(string) DATA(string) [ SAVing(string) replace MISScodes(numlist) TOP(integer 10) ]
+    syntax , QX(string) DATA(string) [ SAVing(string) replace MISScodes(numlist) TOP(integer 10) HTML(string) ]
     confirm file `"`qx'"'
     confirm file `"`data'"'
     if "`misscodes'"=="" local misscodes "-999999999"
@@ -4223,7 +4223,9 @@ program _suso_para_check, rclass
     quietly replace c_tr = ustrregexra(c_tr, "([A-Za-z_][A-Za-z0-9_]*)\.Contains\(([0-9-]+)\)", ///
         char(36) + "1__" + char(36) + "2==1")
     quietly replace c_tr = strtrim(stritrim(c_tr))
-    local ncb = _N
+    quietly bysort qx_var (qx_section): keep if _n==1
+    quietly count
+    local ncb = r(N)
     forvalues i = 1/`ncb' {
         local v_`i'  = qx_var[`i']
         local c_`i'  = c_tr[`i']
@@ -4231,6 +4233,10 @@ program _suso_para_check, rclass
         local ov_`i' = qx_optvals[`i']
         local no_`i' = qx_nopts[`i']
     }
+    tempfile CB
+    rename qx_var qvar
+    quietly keep qvar qx_section qx_type qx_text qx_enable
+    quietly save `"`CB'"'
 
     * ---- data: normalise SuSo sentinels so missing() means unanswered ------------
     di as txt "suso paradata: loading exported data and normalising missing codes ..."
@@ -4256,7 +4262,8 @@ program _suso_para_check, rclass
     tempname P
     tempfile RES
     postfile `P' str80 qvar str16 qstatus                                        ///
-        long n_on long n_off long n_und long n_viol long n_imiss long n_bad using `"`RES'"'
+        long n_on long n_off long n_und long n_viol long n_imiss long n_bad       ///
+        str244 badv using `"`RES'"'
     local k_eval 0
     local k_noev 0
     local k_absent 0
@@ -4267,7 +4274,7 @@ program _suso_para_check, rclass
         capture confirm variable `v_`i''
         if _rc {
             local ++k_absent
-            post `P' ("`v_`i''") ("not in file") (.) (.) (.) (.) (.) (.)
+            post `P' ("`v_`i''") ("not in file") (.) (.) (.) (.) (.) (.) ("")
             continue
         }
         local isnum 1
@@ -4290,7 +4297,7 @@ program _suso_para_check, rclass
             if _rc {
                 local ++k_noev
                 if `:list sizeof badlist' < 12 local badlist "`badlist' `v_`i''"
-                post `P' ("`v_`i''") ("not evaluable") (.) (.) (.) (.) (.) (.)
+                post `P' ("`v_`i''") ("not evaluable") (.) (.) (.) (.) (.) (.) ("")
                 continue
             }
             * C#/Stata null gap: if any numeric variable the condition refers to is
@@ -4326,17 +4333,29 @@ program _suso_para_check, rclass
             local nim = r(N)
         }
         local nbd 0
+        local bvs ""
         if `isnum' & `no_`i''>0 & `no_`i''<=60 & strpos(lower("`t_`i''"),"single-select")>0 {
             local vl : subinstr local ov_`i' " " ",", all
             if "`vl'"!="" {
                 capture quietly count if !missing(`v_`i'') & !inlist(`v_`i'', `vl')
                 if !_rc local nbd = r(N)
+                if `nbd'>0 {
+                    preserve
+                    quietly keep if !missing(`v_`i'') & !inlist(`v_`i'', `vl')
+                    quietly contract `v_`i'', freq(__bc)
+                    gsort -__bc `v_`i''
+                    forvalues b = 1/`=min(5,_N)' {
+                        local bvs "`bvs' `=strofreal(`v_`i''[`b'])' (x`=__bc[`b']')"
+                    }
+                    restore
+                }
             }
         }
-        post `P' ("`v_`i''") ("`st'") (`non') (`nof') (`nund') (`nvl') (`nim') (`nbd')
+        post `P' ("`v_`i''") ("`st'") (`non') (`nof') (`nund') (`nvl') (`nim') (`nbd') (strtrim("`bvs'"))
     }
     postclose `P'
     quietly use `"`RES'"', clear
+    quietly merge 1:1 qvar using `"`CB'"', keep(master match) nogenerate
     quietly gen double imiss_share = n_imiss/n_on if n_on>0
 
     * ---- report -------------------------------------------------------------------
@@ -4393,6 +4412,297 @@ program _suso_para_check, rclass
     di as txt "  referenced numeric question was itself unanswered (excluded from counts)."
     di as txt "  data in memory = one row per codebook question (merge/save as needed)."
     di as txt "{hline 72}"
+
+    * ---- dynamic dashboard ------------------------------------------------------
+    if `"`html'"'!="" {
+        if "`replace'"=="" {
+            capture confirm new file `"`html'"'
+            if _rc {
+                di as err "suso: html() file already exists. Use -replace-."
+                exit 602
+            }
+        }
+        * JSON rows built in expression-land: escape backslash, quote, control chars
+        foreach v in qvar qstatus qx_section qx_type qx_text qx_enable badv {
+            quietly gen strL e_`v' = subinstr(subinstr(`v', char(92), char(92)+char(92), .), char(34), char(92)+char(34), .)
+            quietly replace e_`v' = subinstr(subinstr(subinstr(e_`v', char(10), " ", .), char(13), " ", .), char(9), " ", .)
+        }
+        sort qvar
+        quietly gen strL j_row = cond(_n>1, ",", "")                                        ///
+            + "{" + char(34)+"v"+char(34)  + ":" + char(34) + e_qvar + char(34)             ///
+            + "," + char(34)+"st"+char(34) + ":" + char(34) + e_qstatus + char(34)          ///
+            + "," + char(34)+"s"+char(34)  + ":" + char(34) + substr(e_qx_section,1,120) + char(34) ///
+            + "," + char(34)+"t"+char(34)  + ":" + char(34) + substr(e_qx_type,1,60) + char(34)     ///
+            + "," + char(34)+"on"+char(34) + ":" + cond(missing(n_on), "null", strofreal(n_on))     ///
+            + "," + char(34)+"und"+char(34)+ ":" + cond(missing(n_und), "null", strofreal(n_und))   ///
+            + "," + char(34)+"vi"+char(34) + ":" + cond(missing(n_viol), "null", strofreal(n_viol)) ///
+            + "," + char(34)+"im"+char(34) + ":" + cond(missing(n_imiss), "null", strofreal(n_imiss)) ///
+            + "," + char(34)+"bd"+char(34) + ":" + cond(missing(n_bad), "null", strofreal(n_bad))   ///
+            + "," + char(34)+"sh"+char(34) + ":" + cond(missing(imiss_share), "null", strtrim(string(imiss_share, "%9.4f"))) ///
+            + "," + char(34)+"q"+char(34)  + ":" + char(34) + substr(e_qx_text,1,400) + char(34)    ///
+            + "," + char(34)+"e"+char(34)  + ":" + char(34) + substr(e_qx_enable,1,300) + char(34)  ///
+            + "," + char(34)+"bv"+char(34) + ":" + char(34) + e_badv + char(34) + "}"
+        _suso_para_hesc `"`data'"'
+        local dsrc `"`r(out)'"'
+        local nobsc : di %12.0fc `nobs'
+        local nobsc = trim("`nobsc'")
+        local wst ""
+        if "$SUSO_WS"!="" local wst " — $SUSO_WS"
+        local now = trim("`c(current_date)' `c(current_time)'")
+        tempname hf
+        quietly file open `hf' using `"`html'"', write replace text
+    file write `hf' `"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Data QC - Skip Logic and Values</title><style>"' _n
+    file write `hf' `"body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f4f5f7;color:#1a1a1a}"' _n
+    file write `hf' `".logobar{background:#fff;padding:10px 28px;border-bottom:1px solid #e0e0e0}"' _n
+    file write `hf' `".logobar .wbtxt{font-size:13px;letter-spacing:.06em;color:#002244;font-weight:600}.logobar .wbtxt span{color:#8a8a8a;font-weight:400}"' _n
+    file write `hf' `".mast{background:#002244;color:#fff;padding:18px 28px}.mast h1{margin:0;font-size:21px;font-weight:600}.mast .sub{color:#c9d4e0;font-size:12px;margin-top:5px;word-break:break-all}"' _n
+    file write `hf' `".wrap{max-width:1040px;margin:0 auto;padding:16px 28px 40px}"' _n
+    file write `hf' `".cards{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 4px}"' _n
+    file write `hf' `".card{flex:1 1 130px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 13px;border-top:3px solid #002244}"' _n
+    file write `hf' `".card.dim{border-top-color:#9aa7b5}.card.warn{border-top-color:#C9A227}"' _n
+    file write `hf' `".card .v{font-size:20px;font-weight:700;color:#002244}.card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
+    file write `hf' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;position:sticky;top:0;z-index:5;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
+    file write `hf' `".ctrl{display:flex;flex-direction:column;gap:3px}"' _n
+    file write `hf' `".ctrl label{font-size:10.5px;color:#555;text-transform:uppercase;letter-spacing:.03em}"' _n
+    file write `hf' `".ctrl input,.ctrl select{font-size:13px;padding:4px 6px;border:1px solid #c9cfd6;border-radius:5px;min-width:64px}"' _n
+    file write `hf' `"#c_q{min-width:200px}#c_sec{min-width:180px}"' _n
+    file write `hf' `"h2{font-size:15px;color:#002244;border-bottom:2px solid #C9A227;padding-bottom:4px;margin:22px 0 6px}"' _n
+    file write `hf' `".note{font-size:12px;color:#555;margin:2px 0 8px}"' _n
+    file write `hf' `"section{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 16px 12px;margin-top:8px}"' _n
+    file write `hf' `".hrow{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px}"' _n
+    file write `hf' `".hlab{width:200px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"' _n
+    file write `hf' `".htrack{flex:1;background:#eef0f2;border-radius:3px;height:12px;overflow:hidden}"' _n
+    file write `hf' `".hbar{display:block;height:12px;background:#002244}"' _n
+    file write `hf' `".hval{width:120px;white-space:nowrap}"' _n
+    file write `hf' `"details.qrow{background:#fff;border:1px solid #e3e6ea;border-radius:6px;margin:4px 0}"' _n
+    file write `hf' `".qrow summary{display:flex;gap:10px;align-items:center;padding:7px 12px;cursor:pointer;font-size:12.5px;flex-wrap:wrap;list-style:none}"' _n
+    file write `hf' `".qrow summary::-webkit-details-marker{display:none}"' _n
+    file write `hf' `".qv{min-width:150px;font-weight:700;color:#002244}"' _n
+    file write `hf' `".qsec{color:#777;font-size:11px;flex:1;min-width:120px}"' _n
+    file write `hf' `".qn{color:#444;font-size:11.5px;white-space:nowrap}"' _n
+    file write `hf' `".strack{display:inline-block;width:60px;background:#eef0f2;height:8px;border-radius:2px;vertical-align:middle;margin-right:4px}"' _n
+    file write `hf' `".sbar{display:block;height:8px;background:#C9A227}"' _n
+    file write `hf' `".qbody{padding:4px 14px 10px;border-top:1px solid #eef0f2;font-size:12px;color:#333}"' _n
+    file write `hf' `".qt{margin:6px 0}.qm{color:#666;margin:3px 0;font-size:11.5px}"' _n
+    file write `hf' `".chip{font-size:10px;border-radius:9px;padding:2px 8px;text-transform:uppercase;letter-spacing:.03em}"' _n
+    file write `hf' `".chip.ok{background:#eaf0f7;color:#002244}.chip.dim{background:#f0f0f0;color:#666}"' _n
+    file write `hf' `".chip.warn{background:#fdf6e3;color:#7a5b00}.chip.off{background:#f7f7f7;color:#999}"' _n
+    file write `hf' `".mono{font-family:Consolas,monospace}.nodata{color:#888;font-size:12px}"' _n
+    file write `hf' `".foot{font-size:11px;color:#777;margin-top:24px;line-height:1.5}"' _n
+    file write `hf' `"#l_more{font-size:11.5px;color:#8a6d00}"' _n
+    file write `hf' `"</style></head><body>"' _n
+    file write `hf' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
+    file write `hf' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
+    file write `hf' `"<div class="mast"><h1>Data QC — Skip Logic and Values`wst'</h1>"' _n
+    file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; `dsrc'</div></div>"' _n
+    file write `hf' `"<div class="wrap">"' _n
+    file write `hf' `"<div class="cards">"' _n
+    file write `hf' `"<div class="card dim"><div class="v">`nobsc'</div><div class="k">records audited</div></div>"' _n
+    file write `hf' `"<div class="card"><div class="v">`k_eval'</div><div class="k">conditions evaluated</div></div>"' _n
+    file write `hf' `"<div class="card dim"><div class="v">`k_nocond'</div><div class="k">always on</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v">`k_noev'</div><div class="k">not evaluable</div></div>"' _n
+    file write `hf' `"<div class="card dim"><div class="v">`k_absent'</div><div class="k">not in this file</div></div>"' _n
+    file write `hf' `"</div>"' _n
+    file write `hf' `"<div class="panel">"' _n
+    file write `hf' `"<div class="ctrl"><label>Search variable or text</label><input id="c_q" type="text" placeholder="e.g. a3 or sales"></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Section</label><select id="c_sec"></select></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Status</label><select id="c_st"><option value="">All</option><option>evaluated</option><option>always on</option><option>not evaluable</option><option>not in file</option></select></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Min share % (chart)</label><input id="c_minsh" type="number" min="0" max="100" step="1" value="0"></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Sort questions by</label><select id="c_sort"><option value="sh">worst nonresponse share</option><option value="im">most unanswered</option><option value="vi">most violations</option><option value="bd">most out-of-list</option><option value="v">variable name</option></select></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Problems only</label><input id="c_prob" type="checkbox" style="width:20px;height:20px"></div>"' _n
+    file write `hf' `"</div>"' _n
+    file write `hf' `"<div class="cards">"' _n
+    file write `hf' `"<div class="card"><div class="v" id="k_shown">-</div><div class="k">questions in view</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_imiss">-</div><div class="k">unanswered when enabled</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_viol">-</div><div class="k">answers on disabled qs</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_bad">-</div><div class="k">out-of-list values</div></div>"' _n
+    file write `hf' `"</div>"' _n
+    file write `hf' `"<h2>Item nonresponse (enabled but unanswered)</h2>"' _n
+    file write `hf' `"<div class="note">Top questions by unanswered share among records where the question was enabled (10+ enabled records). Service and desk questions often sit at 100% - use the filters or search to focus on interview content, and raise Min share to cut noise.</div>"' _n
+    file write `hf' `"<section id="ch_imiss"></section>"' _n
+    file write `hf' `"<div id="sec_viol">"' _n
+    file write `hf' `"<h2>Answers on disabled questions</h2>"' _n
+    file write `hf' `"<div class="note">Hard skip violations: an answer is present although the skip logic disables the question. These enter via preloading, API writes, or questionnaire version changes.</div>"' _n
+    file write `hf' `"<section id="ch_viol"></section>"' _n
+    file write `hf' `"</div>"' _n
+    file write `hf' `"<div id="sec_bad">"' _n
+    file write `hf' `"<h2>Single-select values outside the option list</h2>"' _n
+    file write `hf' `"<div class="note">Values not in the questionnaire option list - open the question below to see which values (often special codes missing from the instrument definition).</div>"' _n
+    file write `hf' `"<section id="ch_bad"></section>"' _n
+    file write `hf' `"</div>"' _n
+    file write `hf' `"<h2>Questions</h2>"' _n
+    file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
+    file write `hf' `"<div id="list"></div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML were translated from C# to Stata; conditions whose numeric referents are unanswered are scored undetermined and excluded from both counts (C# treats null as false, Stata treats missing as infinity). Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Untranslatable conditions are labelled, never guessed. Produced by suso paradata check (suso v1.7.0) on `now'.</div>"' _n
+    file write `hf' `"</div><script>"' _n
+    file write `hf' `"var D={"rows":["' _n
+    forvalues i = 1/`=_N' {
+        file write `hf' (j_row[`i']) _n
+    }
+    file write `hf' `"]};"' _n
+    file write `hf' `"/* suso paradata check - dynamic dashboard engine */"' _n
+    file write `hf' `"var C = {"' _n
+    file write `hf' `"  filt: function(rows, S){"' _n
+    file write `hf' `"    var out=[], i, r, q;"' _n
+    file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `hf' `"      r=rows[i];"' _n
+    file write `hf' `"      if(S.sec && r.s!==S.sec) continue;"' _n
+    file write `hf' `"      if(S.st && r.st!==S.st) continue;"' _n
+    file write `hf' `"      if(S.prob && !((r.vi||0)>0 || (r.im||0)>0 || (r.bd||0)>0)) continue;"' _n
+    file write `hf' `"      if(S.q){"' _n
+    file write `hf' `"        q=S.q.toLowerCase();"' _n
+    file write `hf' `"        if(r.v.toLowerCase().indexOf(q)<0 && (r.q||'').toLowerCase().indexOf(q)<0) continue;"' _n
+    file write `hf' `"      }"' _n
+    file write `hf' `"      out.push(r);"' _n
+    file write `hf' `"    }"' _n
+    file write `hf' `"    return out;"' _n
+    file write `hf' `"  },"' _n
+    file write `hf' `"  srt: function(rows, key){"' _n
+    file write `hf' `"    var out=rows.slice();"' _n
+    file write `hf' `"    if(key==='v'){ out.sort(function(a,b){ return a.v<b.v?-1:1; }); return out; }"' _n
+    file write `hf' `"    out.sort(function(a,b){"' _n
+    file write `hf' `"      var av=a[key], bv=b[key];"' _n
+    file write `hf' `"      if(av===null||av===undefined) av=-1;"' _n
+    file write `hf' `"      if(bv===null||bv===undefined) bv=-1;"' _n
+    file write `hf' `"      if(bv!==av) return bv-av;"' _n
+    file write `hf' `"      return a.v<b.v?-1:1;"' _n
+    file write `hf' `"    });"' _n
+    file write `hf' `"    return out;"' _n
+    file write `hf' `"  },"' _n
+    file write `hf' `"  kpis: function(rows){"' _n
+    file write `hf' `"    var t={n:rows.length, im:0, vi:0, bd:0}, i;"' _n
+    file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `hf' `"      t.im+=rows[i].im||0; t.vi+=rows[i].vi||0; t.bd+=rows[i].bd||0;"' _n
+    file write `hf' `"    }"' _n
+    file write `hf' `"    return t;"' _n
+    file write `hf' `"  },"' _n
+    file write `hf' `"  topBy: function(rows, key, minOn, minSh, n){"' _n
+    file write `hf' `"    var out=[], i, r;"' _n
+    file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `hf' `"      r=rows[i];"' _n
+    file write `hf' `"      if(!(r[key]>0)) continue;"' _n
+    file write `hf' `"      if(minOn && !((r.on||0)>=minOn)) continue;"' _n
+    file write `hf' `"      if(minSh && !((r.sh||0)>=minSh)) continue;"' _n
+    file write `hf' `"      out.push(r);"' _n
+    file write `hf' `"    }"' _n
+    file write `hf' `"    out=C.srt(out, key==='im'?'sh':key);"' _n
+    file write `hf' `"    return out.slice(0, n||15);"' _n
+    file write `hf' `"  }"' _n
+    file write `hf' `"};"' _n
+    file write `hf' `"if (typeof module!=='undefined' && module.exports) module.exports=C;"' _n
+    file write `hf' _n
+    file write `hf' `"if (typeof document!=='undefined') {"' _n
+    file write `hf' `"var Q=String.fromCharCode(34);"' _n
+    file write `hf' `"function at(n,v){ return ' '+n+'='+Q+v+Q; }"' _n
+    file write `hf' `"function el(id){ return document.getElementById(id); }"' _n
+    file write `hf' `"function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }"' _n
+    file write `hf' `"function fc(x){"' _n
+    file write `hf' `"  if(x===null||x===undefined) return '.';"' _n
+    file write `hf' `"  var s=String(Math.round(x)), o='', c=0, i;"' _n
+    file write `hf' `"  for(i=s.length-1;i>=0;i--){ o=s.charAt(i)+o; c++; if(c%3===0&&i>0) o=','+o; }"' _n
+    file write `hf' `"  return o;"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"function pct(x){ return (x===null||x===undefined)?'.':(100*x).toFixed(1)+'%'; }"' _n
+    file write `hf' _n
+    file write `hf' `"function settings(){"' _n
+    file write `hf' `"  return {"' _n
+    file write `hf' `"    q: el('c_q').value.trim(),"' _n
+    file write `hf' `"    sec: el('c_sec').value,"' _n
+    file write `hf' `"    st: el('c_st').value,"' _n
+    file write `hf' `"    prob: el('c_prob').checked,"' _n
+    file write `hf' `"    minsh: (parseFloat(el('c_minsh').value)||0)/100,"' _n
+    file write `hf' `"    sort: el('c_sort').value"' _n
+    file write `hf' `"  };"' _n
+    file write `hf' `"}"' _n
+    file write `hf' _n
+    file write `hf' `"function hbars(cont, rows, key, denomNote){"' _n
+    file write `hf' `"  if(!rows.length){ el(cont).innerHTML='<p class='+Q+'nodata'+Q+'>Nothing above the current thresholds.</p>'; return; }"' _n
+    file write `hf' `"  var max=0, i;"' _n
+    file write `hf' `"  for(i=0;i<rows.length;i++) if(rows[i][key]>max) max=rows[i][key];"' _n
+    file write `hf' `"  var s='';"' _n
+    file write `hf' `"  for(i=0;i<rows.length;i++){"' _n
+    file write `hf' `"    var r=rows[i], w=Math.max(2, Math.round(100*r[key]/max));"' _n
+    file write `hf' `"    var val=(key==='im') ? (fc(r.im)+' ('+pct(r.sh)+')') : fc(r[key]);"' _n
+    file write `hf' `"    s+='<div class='+Q+'hrow'+Q+'><span class='+Q+'hlab mono'+Q+'>'+esc(r.v)+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'htrack'+Q+'><span class='+Q+'hbar'+Q+at('style','width:'+w+'%')+'></span></span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'hval'+Q+'>'+val+'</span></div>';"' _n
+    file write `hf' `"  }"' _n
+    file write `hf' `"  el(cont).innerHTML=s;"' _n
+    file write `hf' `"}"' _n
+    file write `hf' _n
+    file write `hf' `"function chip(st){"' _n
+    file write `hf' `"  var cl = st==='evaluated'?'ok':(st==='always on'?'dim':(st==='not evaluable'?'warn':'off'));"' _n
+    file write `hf' `"  return '<span class='+Q+'chip '+cl+Q+'>'+esc(st)+'</span>';"' _n
+    file write `hf' `"}"' _n
+    file write `hf' _n
+    file write `hf' `"function renderList(rows, S){"' _n
+    file write `hf' `"  var k=Math.min(rows.length, 250), s='', i;"' _n
+    file write `hf' `"  for(i=0;i<k;i++){"' _n
+    file write `hf' `"    var r=rows[i];"' _n
+    file write `hf' `"    var shb = (r.sh!=null && r.on>0)"' _n
+    file write `hf' `"      ? '<span class='+Q+'strack'+Q+'><span class='+Q+'sbar'+Q+at('style','width:'+Math.round(100*Math.min(r.sh,1))+'%')+'></span></span>'+pct(r.sh)"' _n
+    file write `hf' `"      : '';"' _n
+    file write `hf' `"    s+='<details class='+Q+'qrow'+Q+'><summary>'+"' _n
+    file write `hf' `"       '<span class='+Q+'mono qv'+Q+'>'+esc(r.v)+'</span>'+chip(r.st)+"' _n
+    file write `hf' `"       '<span class='+Q+'qsec'+Q+'>'+esc(r.s||'')+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'qn'+Q+'>on '+fc(r.on)+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'qn'+Q+(r.vi>0?' style='+Q+'color:#a33;font-weight:700'+Q:'')+'>viol '+fc(r.vi)+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'qn'+Q+'>miss '+fc(r.im)+' '+shb+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'qn'+Q+(r.bd>0?' style='+Q+'color:#7a5b00;font-weight:700'+Q:'')+'>bad '+fc(r.bd)+'</span>'+"' _n
+    file write `hf' `"       '</summary><div class='+Q+'qbody'+Q+'>'+"' _n
+    file write `hf' `"       (r.q?('<div class='+Q+'qt'+Q+'>&quot;'+esc(r.q)+'&quot;</div>'):'')+"' _n
+    file write `hf' `"       (r.t?('<div class='+Q+'qm'+Q+'>Type: '+esc(r.t)+'</div>'):'')+"' _n
+    file write `hf' `"       (r.e?('<div class='+Q+'qm'+Q+'>Asked only when: <span class='+Q+'mono'+Q+'>'+esc(r.e)+'</span></div>'):'')+"' _n
+    file write `hf' `"       (r.bv?('<div class='+Q+'qm'+Q+'>Out-of-list values (count): <span class='+Q+'mono'+Q+'>'+esc(r.bv)+'</span></div>'):'')+"' _n
+    file write `hf' `"       ((r.und>0)?('<div class='+Q+'qm'+Q+'>'+fc(r.und)+' records undetermined (a referenced question was unanswered).</div>'):'')+"' _n
+    file write `hf' `"       '</div></details>';"' _n
+    file write `hf' `"  }"' _n
+    file write `hf' `"  el('list').innerHTML=s || '<p class='+Q+'nodata'+Q+'>No questions match the filters.</p>';"' _n
+    file write `hf' `"  el('l_more').textContent = rows.length>k ? ('Showing '+k+' of '+rows.length+' questions - refine the filters.') : '';"' _n
+    file write `hf' `"}"' _n
+    file write `hf' _n
+    file write `hf' `"function renderAll(){"' _n
+    file write `hf' `"  var S=settings();"' _n
+    file write `hf' `"  var rows=C.filt(D.rows,S);"' _n
+    file write `hf' `"  var K=C.kpis(rows);"' _n
+    file write `hf' `"  el('k_shown').textContent=fc(K.n);"' _n
+    file write `hf' `"  el('k_imiss').textContent=fc(K.im);"' _n
+    file write `hf' `"  el('k_viol').textContent=fc(K.vi);"' _n
+    file write `hf' `"  el('k_bad').textContent=fc(K.bd);"' _n
+    file write `hf' `"  hbars('ch_imiss', C.topBy(rows,'im',10,S.minsh,15), 'im');"' _n
+    file write `hf' `"  var tv=C.topBy(rows,'vi',0,0,15);"' _n
+    file write `hf' `"  el('sec_viol').style.display = tv.length ? '' : 'none';"' _n
+    file write `hf' `"  if(tv.length) hbars('ch_viol', tv, 'vi');"' _n
+    file write `hf' `"  var tb=C.topBy(rows,'bd',0,0,15);"' _n
+    file write `hf' `"  el('sec_bad').style.display = tb.length ? '' : 'none';"' _n
+    file write `hf' `"  if(tb.length) hbars('ch_bad', tb, 'bd');"' _n
+    file write `hf' `"  renderList(C.srt(rows, S.sort), S);"' _n
+    file write `hf' `"}"' _n
+    file write `hf' _n
+    file write `hf' `"function init(){"' _n
+    file write `hf' `"  var secs={}, i;"' _n
+    file write `hf' `"  for(i=0;i<D.rows.length;i++) if(D.rows[i].s) secs[D.rows[i].s]=1;"' _n
+    file write `hf' `"  var names=Object.keys(secs).sort(), s='<option value='+Q+Q+'>All sections</option>';"' _n
+    file write `hf' `"  for(i=0;i<names.length;i++) s+='<option>'+esc(names[i])+'</option>';"' _n
+    file write `hf' `"  el('c_sec').innerHTML=s;"' _n
+    file write `hf' `"  var ids=['c_q','c_sec','c_st','c_prob','c_minsh','c_sort'];"' _n
+    file write `hf' `"  for(i=0;i<ids.length;i++){"' _n
+    file write `hf' `"    el(ids[i]).addEventListener('change',renderAll);"' _n
+    file write `hf' `"    el(ids[i]).addEventListener('input',renderAll);"' _n
+    file write `hf' `"  }"' _n
+    file write `hf' `"  renderAll();"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"init();"' _n
+    file write `hf' `"}"' _n
+    file write `hf' _n
+    file write `hf' `"</script></body></html>"' _n
+    file close `hf'
+    local fullh `"`html'"'
+    if strpos(`"`html'"',"/")==0 & strpos(`"`html'"',"\")==0 local fullh `"`c(pwd)'/`html'"'
+    di as txt "  dashboard written: " as res `"`fullh'"'
+    di as txt `"               {browse "`fullh'":Click to open in your browser}"'
+    }
+
     sort qvar
     if `"`saving'"'!="" {
         if "`replace'"=="" {

@@ -264,7 +264,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions, {opt messages(file.txt)} writes an email-ready action list, and {opt html(file.html)} writes a shareable, printable Skip Violation Review page for the vendor/field supervisor{p_end}
 {synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report with figures (all thresholds accepted; runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
-{synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}){p_end}
+{synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section/status filters, problems-only view, expandable questions with text, skip conditions and out-of-list values{p_end}
 {synoptline}
 
 {pstd}{bf:maps} {it:(uploads/deletes via the GraphQL endpoint; see {help suso##maps:Maps})}{p_end}
@@ -571,7 +571,7 @@ in {cmd:r()}.
 {p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
 {p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
 {p 8 12 2}{cmd:. suso paradata skips , qx("English_Global_informal2026.html") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata check , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_codebook.dta") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata check , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_codebook.dta") html("qc_dashboard.html") replace}{p_end}
 {p 8 12 2}{cmd:. save para_events, replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata flags , saving("para_flags.dta") replace}{p_end}
 {p 8 12 2}{cmd:. use para_events, clear}{p_end}

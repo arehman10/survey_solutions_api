@@ -95,7 +95,7 @@ suso paradata report , saving("qc.html")  // interactive one-page QC report: fil
                                            //   search questions, adjust night window + all flag thresholds live
 suso paradata flags                        // per-interview red flags + interviewer league table
 suso paradata skips , qx("qx.html") messages("review.txt") html("review.html")  // supervisor action list: which gate
-suso paradata check , qx("qx.html") data("main.dta")  // audit exported data against the skip logic:
+suso paradata check , qx("qx.html") data("main.dta") html("qc.html")  // audit exported data against the skip logic:
                                            //   answers on disabled questions, item nonresponse, bad values
                                            //   was flipped, what it erased, what to do - email-ready
 suso paradata timing , by(question)        // slowest questions first (instrument diagnostics)
