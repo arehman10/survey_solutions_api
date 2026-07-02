@@ -2948,7 +2948,7 @@ end
 program _suso_para_skips, rclass
     version 14.2
     syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ///
-        QX(string) MESSages(string) DETail(string) ]
+        QX(string) MESSages(string) HTML(string) DETail(string) ]
     _suso_para_need events
     if `cascade'<2 {
         di as err "suso paradata skips: cascade() is the minimum run of AnswerRemoved events; use 2 or more."
@@ -3258,6 +3258,133 @@ program _suso_para_skips, rclass
             file write `mf' "General note: occasional cases are honest corrections. The pattern to challenge is the same gate variable erased across many interviews, or one enumerator producing many cases." _n
             file close `mf'
             di as txt _n "  vendor/supervisor message file written: " as res `"`messages'"'
+        }
+
+        * ---- shareable Skip Violation Review page (self-contained, printable) ------
+        if `"`html'"'!="" {
+            if "`replace'"=="" {
+                capture confirm new file `"`html'"'
+                if _rc {
+                    di as err "suso: html() file already exists. Use -replace-."
+                    exit 602
+                }
+            }
+            tempfile DET1 DET2 GSUM
+            quietly save `"`DET1'"'
+            tempvar i1 g1
+            quietly bysort interview__id: gen byte `i1' = _n==1
+            quietly count if `i1'
+            local nintaff = r(N)
+            quietly bysort trigger: gen byte `g1' = _n==1
+            quietly count if `g1' & trigger!=""
+            local ngates = r(N)
+            quietly gen long __w = nrem
+            collapse (count) flips=__w (sum) wiped=__w, by(trigger) fast
+            quietly drop if trigger==""
+            gsort -wiped -flips trigger
+            quietly keep in 1/`=min(10,_N)'
+            quietly save `"`GSUM'"'
+            quietly use `"`DET1'"', clear
+            gsort -nrem interview__id sk_run
+            * pre-built display columns: data reaches the file only via (exp)
+            quietly gen strL h_ac = cond(actor!="", actor, resp)
+            quietly gen strL h_tg = trigger
+            quietly gen strL h_tv0 = trigval
+            quietly gen strL h_qt = ""
+            quietly gen strL h_sc = ""
+            quietly gen strL h_en = ""
+            if `hasqxt' {
+                quietly replace h_qt = substr(qx_text,1,300)
+                quietly replace h_sc = substr(qx_section,1,80)
+                quietly replace h_en = substr(qx_enable,1,200)
+            }
+            quietly gen strL h_wl = substr(wl,1,400)
+            foreach v in h_ac h_tg h_tv0 h_qt h_sc h_en h_wl {
+                quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
+            }
+            quietly gen strL h_open = "<div class=" + char(34) + "case" + cond(nrem>=5, " big", "") + char(34) + ">"
+            quietly gen strL h_chip = "<div class=" + char(34) + "chip" + char(34) + ">" + strofreal(nrem) + " erased</div>"
+            quietly gen strL h_l1 = "<div class=" + char(34) + "c1" + char(34) + "><span class=" + char(34) + "mono" + char(34) + ">" ///
+                + interview__id + "</span> &nbsp;&middot;&nbsp; <b>" + h_ac + "</b> &nbsp;&middot;&nbsp; " ///
+                + string(ts0/86400000, "%tdDD_Mon_CCYY") + " " + string(ts0, "%tcHH:MM") + " UTC</div>"
+            quietly gen strL h_l2 = "<div class=" + char(34) + "c2" + char(34) + ">The answer to <b class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</b> was changed"
+            quietly replace h_l2 = h_l2 + " to &quot;" + h_tv0 + "&quot;" if h_tv0!=""
+            quietly replace h_l2 = h_l2 + " after <b>" + strofreal(nrem) + "</b> later answers were recorded - the skip logic erased them.</div>"
+            quietly gen strL h_l3 = ""
+            quietly replace h_l3 = "<blockquote>" + h_tg + ": &quot;" + h_qt + "&quot;</blockquote>" if h_qt!=""
+            quietly gen strL h_l4 = ""
+            quietly replace h_l4 = "Section: " + h_sc if h_sc!=""
+            quietly replace h_l4 = h_l4 + cond(h_l4!="", " &nbsp;&middot;&nbsp; ", "") + "Asked only when: <span class=" + char(34) + "mono" + char(34) + ">" + h_en + "</span>" if h_en!=""
+            quietly replace h_l4 = "<div class=" + char(34) + "meta" + char(34) + ">" + h_l4 + "</div>" if h_l4!=""
+            quietly gen strL h_l5 = ""
+            quietly replace h_l5 = "<div class=" + char(34) + "meta" + char(34) + ">Erased: <span class=" + char(34) + "mono" + char(34) + ">" + h_wl ///
+                + cond(nrem>8, " ... and " + strofreal(nrem-8) + " more", "") + "</span></div>" if h_wl!=""
+            local now = trim("`c(current_date)' `c(current_time)'")
+            local wst ""
+            if "$SUSO_WS"!="" local wst " — $SUSO_WS"
+            tempname hf
+            quietly file open `hf' using `"`html'"', write replace text
+            file write `hf' `"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Skip Violation Review</title><style>"' _n
+            file write `hf' `"body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f4f5f7;color:#1a1a1a}"' _n
+            file write `hf' `".logobar{background:#fff;padding:10px 28px;border-bottom:1px solid #e0e0e0}"' _n
+            file write `hf' `".logobar .wbtxt{font-size:13px;letter-spacing:.06em;color:#002244;font-weight:600}.logobar .wbtxt span{color:#8a8a8a;font-weight:400}"' _n
+            file write `hf' `".mast{background:#002244;color:#fff;padding:18px 28px}.mast h1{margin:0;font-size:21px;font-weight:600}.mast .sub{color:#c9d4e0;font-size:12.5px;margin-top:5px}"' _n
+            file write `hf' `".wrap{max-width:900px;margin:0 auto;padding:16px 28px 40px}"' _n
+            file write `hf' `".cards{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}"' _n
+            file write `hf' `".card{flex:1 1 140px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 13px;border-top:3px solid #002244}"' _n
+            file write `hf' `".card .v{font-size:20px;font-weight:700;color:#002244}.card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
+            file write `hf' `".how{background:#fdf6e3;border:1px solid #ecd9a0;border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.55;margin:12px 0}"' _n
+            file write `hf' `"h2{font-size:15px;color:#002244;border-bottom:2px solid #C9A227;padding-bottom:4px;margin:22px 0 8px}"' _n
+            file write `hf' `"table{border-collapse:collapse;width:100%;font-size:12.5px;background:#fff}"' _n
+            file write `hf' `"th{background:#002244;color:#fff;text-align:left;padding:6px 8px;font-weight:600}td{padding:5px 8px;border-bottom:1px solid #eef0f2}td.r,th.r{text-align:right}"' _n
+            file write `hf' `".case{background:#fff;border:1px solid #e3e6ea;border-left:4px solid #002244;border-radius:8px;padding:12px 16px;margin:10px 0;position:relative;page-break-inside:avoid}"' _n
+            file write `hf' `".case.big{border-left-color:#C9A227}"' _n
+            file write `hf' `".chip{position:absolute;top:10px;right:12px;background:#002244;color:#fff;border-radius:12px;font-size:11px;padding:3px 10px}"' _n
+            file write `hf' `".case.big .chip{background:#C9A227;color:#002244;font-weight:700}"' _n
+            file write `hf' `".c1{font-size:12.5px;color:#444;margin-right:90px}.c2{font-size:13.5px;margin-top:6px}"' _n
+            file write `hf' `"blockquote{margin:8px 0;padding:8px 12px;background:#f7f8fa;border-left:3px solid #c9cfd6;font-size:12.5px;color:#333}"' _n
+            file write `hf' `".meta{font-size:11.5px;color:#666;margin-top:4px}.mono{font-family:Consolas,monospace}"' _n
+            file write `hf' `".foot{font-size:11px;color:#777;margin-top:24px;line-height:1.5}"' _n
+            file write `hf' `"@media print{body{background:#fff}.case{border:1px solid #bbb;border-left-width:4px}}"' _n
+            file write `hf' `"</style></head><body>"' _n
+            file write `hf' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
+            file write `hf' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
+            file write `hf' `"<div class="mast"><h1>Skip Violation Review`wst'</h1>"' _n
+            file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; a case is `cascade'+ answers erased by the skip logic within `window's of an answer being changed</div></div>"' _n
+            file write `hf' `"<div class="wrap">"' _n
+            file write `hf' `"<div class="cards">"' _n
+            file write `hf' `"<div class="card"><div class="v">`ncasc'</div><div class="k">cases</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v">`nwiped'</div><div class="k">answers erased</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v">`nintaff'</div><div class="k">interviews affected</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v">`ngates'</div><div class="k">gate questions involved</div></div>"' _n
+            file write `hf' `"</div>"' _n
+            file write `hf' `"<div class="how"><b>How to handle every case below:</b> open the interview in Headquarters and check the changed question; ask the enumerator why it changed after the later questions were done; if the NEW value is correct, <b>reject the interview</b> so the erased questions are asked again (they are empty now); if the OLD value was correct, restore it and verify the answers below it. Occasional cases are honest corrections - the pattern to challenge is the same gate erased across many interviews, or one enumerator producing many cases.</div>"' _n
+            quietly save `"`DET2'"'
+            quietly use `"`GSUM'"', clear
+            file write `hf' `"<h2>Gate questions flipped most</h2>"' _n
+            file write `hf' `"<table><tr><th>variable</th><th class="r">cases</th><th class="r">answers erased</th></tr>"' _n
+            forvalues i = 1/`=_N' {
+                file write `hf' `"<tr><td class="mono">"' (trigger[`i']) `"</td><td class="r">"' (strofreal(flips[`i'])) `"</td><td class="r">"' (strofreal(wiped[`i'])) `"</td></tr>"' _n
+            }
+            file write `hf' `"</table>"' _n
+            quietly use `"`DET2'"', clear
+            file write `hf' `"<h2>Cases, largest first</h2>"' _n
+            local kk = min(_N, 200)
+            forvalues i = 1/`kk' {
+                file write `hf' (h_open[`i']) _n
+                file write `hf' (h_chip[`i']) _n
+                file write `hf' (h_l1[`i']) _n
+                file write `hf' (h_l2[`i']) _n
+                if h_l3[`i']!="" file write `hf' (h_l3[`i']) _n
+                if h_l4[`i']!="" file write `hf' (h_l4[`i']) _n
+                if h_l5[`i']!="" file write `hf' (h_l5[`i']) _n
+                file write `hf' `"</div>"' _n
+            }
+            if _N>`kk' file write `hf' `"<div class="meta">Showing the `kk' largest of `ncasc' cases.</div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.0). Cases are screening signals from the paradata event stream, not proof of misconduct.</div>"' _n
+            file write `hf' `"</div></body></html>"' _n
+            file close `hf'
+            di as txt "  shareable review page written: " as res `"`html'"'
         }
         restore
     }
@@ -4171,6 +4298,8 @@ string scalar _suso_qx_clean(string scalar t0)
     t = subinstr(t, "&lt;", "<")
     t = subinstr(t, "&gt;", ">")
     t = subinstr(t, "&amp;", "&")
+    t = subinstr(t, char(10), " ")
+    t = subinstr(t, char(9), " ")
     return(strtrim(stritrim(t)))
 }
 
