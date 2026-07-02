@@ -1,4 +1,4 @@
-*! suso v1.7.0  02jul2026  (suso paradata: timing analysis, behaviour flags and skip-flip cascade detection; suso export get: one-shot start->poll->download->unzip)
+*! suso v1.7.0 build 2026-07-02-SUITE  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0 (build 2026-07-02-SUITE)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -2195,6 +2195,7 @@ end
 *   suso paradata report   one-page self-contained HTML QC report with figures
 *   suso paradata qx       parse the exported questionnaire HTML (text, skips, validations)
 *   suso paradata check    evaluate the skip logic + option values against exported data
+*   suso paradata suite    all three QC pages (behaviour, skip review, data QC) in one tabbed HTML
 *
 * Design notes (kept deliberately vectorised: one import, 2 sorts, 1 collapse):
 *   - Works with both paradata layouts: v21.01+ (event, timestamp_utc, tz_offset)
@@ -2219,6 +2220,7 @@ program _suso_paradata, rclass
     if inlist("`verb'","html","dashboard","qc")               local verb report
     if inlist("`verb'","questionnaire","instrument")           local verb qx
     if inlist("`verb'","skiplogic","datacheck","codebook")      local verb check
+    if inlist("`verb'","all","combined","onepage")               local verb suite
 
     if "`verb'"=="get" {
         _suso_para_get `macval(0)'
@@ -2260,7 +2262,12 @@ program _suso_paradata, rclass
         return add
         exit
     }
-    di as err "suso paradata: action must be get, load, timing, flags, skips, report, qx or check.  See {help suso##paradata:help suso}."
+    if "`verb'"=="suite" {
+        _suso_para_suite `macval(0)'
+        return add
+        exit
+    }
+    di as err "suso paradata: action must be get, load, timing, flags, skips, report, qx, check or suite.  See {help suso##paradata:help suso}."
     exit 198
 end
 
@@ -3518,6 +3525,26 @@ program _suso_para_report, rclass
         else local lite 1
     }
 
+    * ---- workflow state at the last status event ------------------------------------
+    tempfile WS
+    local hasws 0
+    quietly use `"`EVD'"', clear
+    quietly keep if inlist(para_ev, "completed", "restarted", "rejectedbysupervisor", "approvedbysupervisor") ///
+        | inlist(para_ev, "approvedbyheadquarter", "approvedbyheadquarters", "rejectedbyheadquarter", "rejectedbyheadquarters", "unapprovebyheadquarters", "unapprovedbyheadquarters")
+    if _N>0 {
+        local hasws 1
+        quietly bysort interview__id (para_ord para_seq): keep if _n==_N
+        quietly gen ws = "Completed"
+        quietly replace ws = "In progress"      if para_ev=="restarted"
+        quietly replace ws = "Approved by Sup"  if para_ev=="approvedbysupervisor"
+        quietly replace ws = "Rejected by Sup"  if para_ev=="rejectedbysupervisor"
+        quietly replace ws = "Approved by HQ"   if inlist(para_ev, "approvedbyheadquarter", "approvedbyheadquarters")
+        quietly replace ws = "Rejected by HQ"   if inlist(para_ev, "rejectedbyheadquarter", "rejectedbyheadquarters")
+        quietly replace ws = "Unapproved by HQ" if inlist(para_ev, "unapprovebyheadquarters", "unapprovedbyheadquarters")
+        quietly keep interview__id ws
+        quietly save `"`WS'"'
+    }
+
     * ---- skip cascades ------------------------------------------------------------
     quietly use `"`EV'"', clear
     quietly _suso_para_skips , cascade(`cascade') window(`window') qx(`"`qx'"') detail(`"`RSD'"')
@@ -3547,6 +3574,15 @@ program _suso_para_report, rclass
             quietly replace g`g' = 0 if missing(g`g')
         }
     }
+    quietly gen ws = "In progress"
+    if `hasws' {
+        quietly rename ws __wsfill
+        quietly merge 1:1 interview__id using `"`WS'"', nogenerate
+        quietly replace ws = "In progress" if ws==""
+        quietly drop __wsfill
+    }
+    quietly replace ws = "" if !started
+    label variable ws "workflow state at last paradata event"
     char _dta[suso_paradata] timing
     local nints = _N
     quietly count if started
@@ -3628,6 +3664,7 @@ program _suso_para_report, rclass
     file write `fh' `"</div>"' _n
     file write `fh' `"<div class="panel">"' _n
     file write `fh' `"<div class="ctrl"><label>Enumerator</label><select id="c_resp"></select></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Interview status</label><select id="c_ws"></select></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Fast answer &lt; sec</label><input id="c_fs" type="number" min="1" max="10" step="1"></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Burst share %</label><input id="c_burst" type="number" min="5" max="90" step="1" value="33"></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Min active min</label><input id="c_minact" type="number" min="1" max="240" step="1" value="10"></div>"' _n
@@ -3728,7 +3765,7 @@ program _suso_para_report, rclass
     }
     _suso_para_hesc `"`rolenote'"'
     local rnesc `"`r(out)'"'
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Active time sums inter-event gaps within each interview, capping every gap at `gapmins' minutes and zeroing Paused-to-Resumed intervals. Answer speed is the gap preceding each AnswerSet within a session. Night uses device-local time. Duration outliers use a robust (median/MAD) z on log active time. Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from all figures. Flags are screening signals for review, not evidence of fabrication.<br><b>Produced by</b> suso paradata report (suso v1.7.0) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Active time sums inter-event gaps within each interview, capping every gap at `gapmins' minutes and zeroing Paused-to-Resumed intervals. Answer speed is the gap preceding each AnswerSet within a session. Night uses device-local time. Interview status is the workflow state at the last status event in the paradata (completion, rejection, approval). Duration outliers use a robust (median/MAD) z on log active time. Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from all figures. Flags are screening signals for review, not evidence of fabrication.<br><b>Produced by</b> suso paradata report (suso v1.7.0) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
     * ---- embedded data ------------------------------------------------------------
@@ -3756,7 +3793,7 @@ program _suso_para_report, rclass
             local vecs `","h":[`hv'],"g":[`gv']"'
         }
         local sep = cond(`i'==1, "", ",")
-        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","r":"`rj'","nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']'`vecs'}"' _n
+        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","r":"`rj'","ws":"`=ws[`i']'","nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']'`vecs'}"' _n
     }
     file write `fh' `"],"' _n
     file write `fh' `""q":["' _n
@@ -3830,10 +3867,17 @@ program _suso_para_report, rclass
     file write `fh' `"      z!==null && Math.abs(z)>S.z"' _n
     file write `fh' `"    ];"' _n
     file write `fh' `"  },"' _n
-    file write `fh' `"  filterRows: function(rows,resp){"' _n
-    file write `fh' `"    if(!resp) return rows.slice();"' _n
-    file write `fh' `"    var out=[],i;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].r===resp) out.push(rows[i]);"' _n
+    file write `fh' `"  filterRows: function(rows,resp,ws){"' _n
+    file write `fh' `"    var out=[],i,r;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      r=rows[i];"' _n
+    file write `fh' `"      if(resp && r.r!==resp) continue;"' _n
+    file write `fh' `"      if(ws){"' _n
+    file write `fh' `"        if(ws==='APP'){ if(r.ws!=='Approved by HQ' && r.ws!=='Approved by Sup') continue; }"' _n
+    file write `fh' `"        else if(r.ws!==ws) continue;"' _n
+    file write `fh' `"      }"' _n
+    file write `fh' `"      out.push(r);"' _n
+    file write `fh' `"    }"' _n
     file write `fh' `"    return out;"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  aggregate: function(rows,S){"' _n
@@ -3973,6 +4017,7 @@ program _suso_para_report, rclass
     file write `fh' `"function settings(){"' _n
     file write `fh' `"  return {"' _n
     file write `fh' `"    resp: el('c_resp').value,"' _n
+    file write `fh' `"    ws:   el('c_ws').value,"' _n
     file write `fh' `"    fs:   Math.max(1,parseInt(el('c_fs').value,10)||2),"' _n
     file write `fh' `"    burst:(parseFloat(el('c_burst').value)||33)/100,"' _n
     file write `fh' `"    minact:parseFloat(el('c_minact').value)||10,"' _n
@@ -3986,6 +4031,7 @@ program _suso_para_report, rclass
     file write `fh' `"}"' _n
     file write `fh' `"function resetSettings(){"' _n
     file write `fh' `"  el('c_resp').value='';"' _n
+    file write `fh' `"  el('c_ws').value='';"' _n
     file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
     file write `fh' `"  el('c_burst').value=33; el('c_minact').value=10;"' _n
     file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
@@ -4028,9 +4074,10 @@ program _suso_para_report, rclass
     file write `fh' _n
     file write `fh' `"function renderAll(){"' _n
     file write `fh' `"  var S=settings();"' _n
-    file write `fh' `"  var rows=P.filterRows(D.rows,S.resp);"' _n
+    file write `fh' `"  var rows=P.filterRows(D.rows,S.resp,S.ws);"' _n
     file write `fh' `"  var A=P.aggregate(rows,S);"' _n
     file write `fh' `"  var scope=S.resp?('enumerator '+S.resp):'all enumerators';"' _n
+    file write `fh' `"  if(S.ws) scope+=(S.ws==='APP')?', approved interviews':(', status '+S.ws);"' _n
     file write `fh' _n
     file write `fh' `"  el('k_started').textContent=fmtc(A.n);"' _n
     file write `fh' `"  el('k_flagged').textContent=fmtc(A.nflagged)+' ('+fmt(100*A.nflagged/Math.max(A.n,1))+'%)';"' _n
@@ -4104,12 +4151,20 @@ program _suso_para_report, rclass
     file write `fh' `"  var s='<option value="">All enumerators ('+names.length+')</option>';"' _n
     file write `fh' `"  for(i=0;i<names.length;i++) s+='<option>'+esc(names[i])+'</option>';"' _n
     file write `fh' `"  el('c_resp').innerHTML=s;"' _n
+    file write `fh' `"  var Q2=String.fromCharCode(34), wsm={}, wnames=[];"' _n
+    file write `fh' `"  for(i=0;i<D.rows.length;i++){ var w=D.rows[i].ws||''; if(w) wsm[w]=(wsm[w]||0)+1; }"' _n
+    file write `fh' `"  for(var k2 in wsm){ if(wsm.hasOwnProperty(k2)) wnames.push(k2); }"' _n
+    file write `fh' `"  wnames.sort();"' _n
+    file write `fh' `"  var so='<option value='+Q2+Q2+'>All statuses</option>';"' _n
+    file write `fh' `"  if(wsm['Approved by HQ']||wsm['Approved by Sup']) so+='<option value='+Q2+'APP'+Q2+'>Approved only (Sup + HQ)</option>';"' _n
+    file write `fh' `"  for(i=0;i<wnames.length;i++) so+='<option value='+Q2+esc(wnames[i])+Q2+'>'+esc(wnames[i])+' ('+wsm[wnames[i]]+')</option>';"' _n
+    file write `fh' `"  el('c_ws').innerHTML=so;"' _n
     file write `fh' `"  var hsel='';"' _n
     file write `fh' `"  for(i=0;i<24;i++) hsel+='<option>'+i+'</option>';"' _n
     file write `fh' `"  el('c_n1').innerHTML=hsel; el('c_n2').innerHTML=hsel;"' _n
     file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
     file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
-    file write `fh' `"  var ids=['c_resp','c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_top'];"' _n
+    file write `fh' `"  var ids=['c_resp','c_ws','c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_top'];"' _n
     file write `fh' `"  for(i=0;i<ids.length;i++) el(ids[i]).addEventListener('change',renderAll);"' _n
     file write `fh' `"  el('c_q').addEventListener('input',renderQuestions);"' _n
     file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
@@ -4855,6 +4910,94 @@ program _suso_para_check, rclass
     return scalar nnoteval   = `k_noev'
 end
 
+* ---- suite: the three QC pages combined into one tabbed, self-contained HTML ----
+* Tab 1 Behaviour (interactive paradata report), tab 2 Skip violations (supervisor
+* review page), tab 3 Data QC (skip logic + option values vs the exported data).
+* Each page is embedded in its own sandboxed iframe (srcdoc), so their scripts,
+* styles and element ids cannot collide; the outer file remains one offline HTML.
+program _suso_para_suite, rclass
+    version 14.2
+    syntax [, SAVing(string) replace TITle(string) QX(string) DATA(string)       ///
+        GAPMins(real 30) FASTsecs(real 2) ALLRoles LITEcap(integer 15000)        ///
+        CASCade(integer 3) WINdow(real 60) TOP(integer 15)                        ///
+        MISScodes(numlist) STatus(string) ]
+    _suso_para_need events
+    if `"`saving'"'=="" local saving "suso_qc_suite.html"
+    if "`replace'"=="" {
+        capture confirm new file `"`saving'"'
+        if _rc {
+            di as err "suso: file already exists. Use -replace-."
+            exit 602
+        }
+    }
+    if `"`data'"'!="" & `"`qx'"'=="" {
+        di as err "suso paradata suite: the Data QC tab needs the questionnaire — add qx(file.html)."
+        exit 198
+    }
+    if `"`title'"'=="" {
+        local title "Survey QC Suite"
+        if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
+    }
+    di as txt "suso paradata: building the QC suite ..."
+    tempfile EVX T1 T2 T3
+    quietly save `"`EVX'"'
+
+    di as txt "  [1/3] behaviour report"
+    quietly _suso_para_report , saving(`"`T1'"') replace qx(`"`qx'"')             ///
+        gapmins(`gapmins') fastsecs(`fastsecs') `allroles'                        ///
+        cascade(`cascade') window(`window') litecap(`litecap')
+    local nstarted = r(nstarted)
+    local ncasc    = r(ncascades)
+
+    di as txt "  [2/3] skip violation review"
+    quietly use `"`EVX'"', clear
+    quietly _suso_para_skips , cascade(`cascade') window(`window') top(`top')     ///
+        qx(`"`qx'"') html(`"`T2'"') replace
+    local t2p `"`T2'"'
+    local note2 ""
+    capture confirm file `"`T2'"'
+    if _rc {
+        local t2p ""
+        local note2 "No skip cascades were detected in the paradata - nothing to review here."
+    }
+
+    local t3p ""
+    local note3 "Run the suite with data(mainexport.dta) to add this tab: it audits the exported data against the questionnaire skip logic and option lists."
+    local nviol .
+    if `"`data'"'!="" {
+        di as txt "  [3/3] data QC dashboard"
+        local xopt ""
+        if "`misscodes'"!="" local xopt "`xopt' misscodes(`misscodes')"
+        if `"`status'"'!=""  local xopt `"`xopt' status(`status')"'
+        quietly _suso_para_check , qx(`"`qx'"') data(`"`data'"') html(`"`T3'"') replace top(`top') `xopt'
+        local nviol = r(nviol)
+        local t3p `"`T3'"'
+        local note3 ""
+    }
+    else di as txt "  [3/3] data QC dashboard skipped (no data() given)"
+
+    _suso_para_hesc `"`title'"'
+    local etitle `"`r(out)'"'
+    local sub "Generated `c(current_date)' `c(current_time)'"
+    if "$SUSO_BASE"!="" local sub "`sub' - $SUSO_BASE"
+    local t1p `"`T1'"'
+    mata: _suso_suite_write(st_local("saving"), st_local("etitle"), st_local("sub"), ///
+        st_local("t1p"), st_local("t2p"), st_local("t3p"),                           ///
+        st_local("note2"), st_local("note3"))
+
+    quietly use `"`EVX'"', clear
+    local fullp `"`saving'"'
+    if strpos(`"`saving'"',"/")==0 & strpos(`"`saving'"',"\")==0 local fullp `"`c(pwd)'/`saving'"'
+    di as txt "suso paradata: QC suite written to " as res `"`fullp'"'
+    di as txt `"               {browse "`fullp'":Click to open in your browser}"'
+    di as txt "  tabs: Behaviour (interactive) | Skip violations | Data QC"
+    di as txt "  events left in memory, unchanged."
+    return local  suite `"`fullp'"'
+    return scalar nstarted  = `nstarted'
+    return scalar ncascades = `ncasc'
+    if `"`data'"'!="" return scalar nviol = `nviol'
+end
+
 *===============================================================================
 * examples — copy/paste recipes printed in the Results window
 *===============================================================================
@@ -4936,7 +5079,7 @@ program _suso_endpoints
     di as txt    "             comment  commentbyvar  delete"
     di as res _n "  questionnaire" as txt " list  get  document  interviews  audio  criticality"
     di as res _n "  export    " as txt " list  start  status  download  get  cancel"
-    di as res _n "  paradata  " as txt " get  load  timing  flags  skips  report  qx  check"
+    di as res _n "  paradata  " as txt " get  load  timing  flags  skips  report  qx  check  suite"
     di as res _n "  maps      " as txt " list  upload  delete  deleteall  assign  unassign"
     di as res _n "  user      " as txt " get  create  archive  unarchive"
     di as res    "  supervisor" as txt " list  get  interviewers"
@@ -5125,6 +5268,76 @@ void _suso_qx_parse(string scalar fn)
     st_sstore(., "qx_optvals", Cov)
     st_store(., "qx_nopts", Cno)
     st_store(., "qx_nval", Cnv)
+}
+
+string scalar _suso_suite_read(string scalar fn)
+{
+    real scalar fh, n
+    string scalar s
+    fh = _fopen(fn, "r")
+    if (fh < 0) return("")
+    fseek(fh, 0, 1)
+    n = ftell(fh)
+    fseek(fh, 0, -1)
+    s = fread(fh, n)
+    fclose(fh)
+    return(s)
+}
+
+string scalar _suso_suite_esc(string scalar s0)
+{
+    string scalar s
+    s = subinstr(s0, "&", "&amp;")
+    s = subinstr(s, char(34), "&quot;")
+    return(s)
+}
+
+void _suso_suite_pane(real scalar fh, real scalar k, string scalar src, string scalar note)
+{
+    string scalar disp
+    disp = (k==1 ? "block" : "none")
+    fwrite(fh, `"<div class="pane" id="p"' + strofreal(k) + `"" style="display:"' + disp + `"">"')
+    if (src != "") {
+        fwrite(fh, `"<iframe srcdoc=""')
+        fwrite(fh, _suso_suite_esc(_suso_suite_read(src)))
+        fwrite(fh, `""></iframe>"')
+    }
+    else fwrite(fh, `"<div class="empty">"' + note + `"</div>"')
+    fwrite(fh, "</div>" + char(10))
+}
+
+void _suso_suite_write(string scalar fout, string scalar title, string scalar sub,
+    string scalar f1, string scalar f2, string scalar f3,
+    string scalar note2, string scalar note3)
+{
+    real scalar fh
+    fh = fopen(fout, "w")
+    fwrite(fh, `"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>"' + title + "</title><style>" + char(10))
+    fwrite(fh, "html,body{margin:0;height:100%;font-family:Segoe UI,Arial,sans-serif;background:#f4f5f7;color:#1a1a1a}" + char(10))
+    fwrite(fh, ".logobar{background:#fff;padding:9px 24px;border-bottom:1px solid #e0e0e0}" + char(10))
+    fwrite(fh, ".logobar .wbtxt{font-size:12.5px;letter-spacing:.06em;color:#002244;font-weight:600}.logobar .wbtxt span{color:#8a8a8a;font-weight:400}" + char(10))
+    fwrite(fh, ".mast{background:#002244;color:#fff;padding:12px 24px 0}" + char(10))
+    fwrite(fh, ".mast h1{margin:0;font-size:19px;font-weight:600}.mast .sub{color:#c9d4e0;font-size:11.5px;margin:3px 0 9px}" + char(10))
+    fwrite(fh, ".tabs{display:flex;gap:4px}" + char(10))
+    fwrite(fh, ".tb{background:#0a3560;color:#c9d4e0;border:0;border-radius:7px 7px 0 0;padding:8px 18px;font-size:13px;cursor:pointer}" + char(10))
+    fwrite(fh, ".tb.on{background:#f4f5f7;color:#002244;font-weight:700}" + char(10))
+    fwrite(fh, ".pane iframe{display:block;width:100%;height:calc(100vh - 118px);border:0;background:#f4f5f7}" + char(10))
+    fwrite(fh, ".empty{padding:40px;color:#666;font-size:14px;max-width:640px}" + char(10))
+    fwrite(fh, "</style></head><body>" + char(10))
+    fwrite(fh, `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' + char(10))
+    fwrite(fh, `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' + char(10))
+    fwrite(fh, `"<div class="mast"><h1>"' + title + "</h1>" + `"<div class="sub">"' + sub + "</div>" + char(10))
+    fwrite(fh, `"<div class="tabs"><button class="tb on" id="b1">Behaviour</button><button class="tb" id="b2">Skip violations</button><button class="tb" id="b3">Data QC</button></div></div>"' + char(10))
+    _suso_suite_pane(fh, 1, f1, "")
+    _suso_suite_pane(fh, 2, f2, note2)
+    _suso_suite_pane(fh, 3, f3, note3)
+    fwrite(fh, "<script>" + char(10))
+    fwrite(fh, "function sh(k){var i;for(i=1;i<=3;i++){document.getElementById('p'+i).style.display=(i===k)?'block':'none';document.getElementById('b'+i).className=(i===k)?'tb on':'tb';}}" + char(10))
+    fwrite(fh, "document.getElementById('b1').addEventListener('click',function(){sh(1);});" + char(10))
+    fwrite(fh, "document.getElementById('b2').addEventListener('click',function(){sh(2);});" + char(10))
+    fwrite(fh, "document.getElementById('b3').addEventListener('click',function(){sh(3);});" + char(10))
+    fwrite(fh, "</script></body></html>" + char(10))
+    fclose(fh)
 }
 
 end

@@ -264,6 +264,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions, {opt messages(file.txt)} writes an email-ready action list, and {opt html(file.html)} writes a shareable, printable Skip Violation Review page for the vendor/field supervisor{p_end}
 {synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report with figures (all thresholds accepted; runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
+{synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report), Skip violations (supervisor review), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option{p_end}
 {synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values; {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130){p_end}
 {synoptline}
 
@@ -442,7 +443,8 @@ the server's own {cmd:NotAnsweredCount} per interview.
 and it produces an {bf:interactive} one-page HTML report. All data is embedded in the
 file (no internet, no external libraries), so it opens on locked-down machines and can
 be emailed as-is {hline 1} and everything on the page recomputes live: filter by
-enumerator, search and sort the question-timing table, move the night window and the
+enumerator and by interview status (workflow state at the last paradata event,
+including an approved-only view), search and sort the question-timing table, move the night window and the
 fast-answer, burst, minimum-active, churn and outlier-z thresholds from the control
 panel. It shows KPI cards, the six flags, histograms of interview duration and answer
 speed, answers by hour of day, fieldwork volume over time, the enumerator league
@@ -572,6 +574,7 @@ in {cmd:r()}.
 {p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
 {p 8 12 2}{cmd:. suso paradata skips , qx("English_Global_informal2026.html") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata check , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_codebook.dta") html("qc_dashboard.html") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata suite , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_suite.html") replace}{p_end}
 {p 8 12 2}{cmd:. save para_events, replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata flags , saving("para_flags.dta") replace}{p_end}
 {p 8 12 2}{cmd:. use para_events, clear}{p_end}

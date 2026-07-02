@@ -6,7 +6,7 @@ d  Solutions (SuSo) REST API (v1 and v2). It lets you script
 d  fieldwork operations from do-files: list and inspect assignments
 d  and interviews; approve, reject, comment on, reassign and delete
 d  interviews; create and manage assignments and users; start,
-d  monitor and download data exports; analyse the paradata event log
+d  monitor and download data exports; analyse the paradata event log + tabbed QC suite (build 2026-07-02-SUITE)
 d  (interview timing, speeding/night-work/answer-churn flags); and
 d  administer workspaces and server settings. List endpoints paginate automatically and load
 d  results as a Stata dataset; single-object responses are returned
