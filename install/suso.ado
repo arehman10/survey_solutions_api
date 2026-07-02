@@ -4302,8 +4302,8 @@ program _suso_para_check, rclass
     tempname P
     tempfile RES
     postfile `P' str80 qvar str16 qstatus                                        ///
-        long n_on long n_off long n_und long n_viol long n_imiss long n_bad       ///
-        str244 badv str2000 jstat using `"`RES'"'
+        long n_on long n_off long n_und long n_vund long n_viol long n_imiss      ///
+        long n_bad str244 badv str2000 jstat using `"`RES'"'
     local k_eval 0
     local k_noev 0
     local k_absent 0
@@ -4314,7 +4314,7 @@ program _suso_para_check, rclass
         capture confirm variable `v_`i''
         if _rc {
             local ++k_absent
-            post `P' ("`v_`i''") ("not in file") (.) (.) (.) (.) (.) (.) ("") ("")
+            post `P' ("`v_`i''") ("not in file") (.) (.) (.) (.) (.) (.) (.) ("") ("")
             continue
         }
         local isnum 1
@@ -4322,6 +4322,7 @@ program _suso_para_check, rclass
         if _rc local isnum 0
         local anse = cond(`isnum', "(!missing(`v_`i''))", `"(`v_`i''!="")"')
         local nund 0
+        local nvu 0
         local f_on ""
         local f_un ""
         local f_vi ""
@@ -4349,7 +4350,7 @@ program _suso_para_check, rclass
             if _rc {
                 local ++k_noev
                 if `:list sizeof badlist' < 12 local badlist "`badlist' `v_`i''"
-                post `P' ("`v_`i''") ("not evaluable") (.) (.) (.) (.) (.) (.) ("") ("")
+                post `P' ("`v_`i''") ("not evaluable") (.) (.) (.) (.) (.) (.) (.) ("") ("")
                 continue
             }
             * C#/Stata null gap: if any numeric variable the condition refers to is
@@ -4383,6 +4384,8 @@ program _suso_para_check, rclass
             local nvl = r(N)
             quietly count if `en'==1 & !`anse'
             local nim = r(N)
+            quietly count if missing(`en') & `anse'
+            local nvu = r(N)
             foreach s of local slist {
                 quietly count if `en'==1 & interview__status==`s'
                 local f_on "`f_on',`r(N)'"
@@ -4426,7 +4429,7 @@ program _suso_para_check, rclass
         if "`slist'"!="" {
             local jfrag `","ons":[`=substr("`f_on'",2,.)'],"uns":[`=substr("`f_un'",2,.)'],"vis":[`=substr("`f_vi'",2,.)'],"ims":[`=substr("`f_im'",2,.)'],"bds":[`=substr("`f_bd'",2,.)']"'
         }
-        post `P' ("`v_`i''") ("`st'") (`non') (`nof') (`nund') (`nvl') (`nim') (`nbd') (strtrim("`bvs'")) (`"`jfrag'"')
+        post `P' ("`v_`i''") ("`st'") (`non') (`nof') (`nund') (`nvu') (`nvl') (`nim') (`nbd') (strtrim("`bvs'")) (`"`jfrag'"')
     }
     postclose `P'
     quietly use `"`RES'"', clear
@@ -4445,7 +4448,10 @@ program _suso_para_check, rclass
     di as txt "{hline 72}"
     di as txt "  conditions evaluated " as res "`k_eval'" as txt "   always-on " as res "`k_nocond'" ///
         as txt "   not evaluable " as res "`k_noev'" as txt "   not in this file " as res "`k_absent'"
+    quietly summarize n_vund
+    local tvund = r(sum)
     di as txt "  answers on DISABLED questions (hard skip violations) : " as res "`tviol'"
+    di as txt "  answered while the gate itself is unanswered          : " as res "`tvund'"
     di as txt "  enabled questions left unanswered (item nonresponse) : " as res "`timiss'"
     di as txt "  single-select values outside the option list         : " as res "`tbad'"
     tempvar sk
@@ -4484,7 +4490,9 @@ program _suso_para_check, rclass
     di as txt _n "  complements {bf:suso paradata skips} - skips catches mid-interview gate"
     di as txt "  flips from the paradata; check audits the final exported data state."
     di as txt "  n_und = records where the condition could not be scored because a"
-    di as txt "  referenced numeric question was itself unanswered (excluded from counts)."
+    di as txt "  referenced numeric question was itself unanswered; n_vund counts the"
+    di as txt "  suspicious subset of those that nevertheless carry an answer - impossible"
+    di as txt "  in a clean interview flow (preloads or a questionnaire version change)."
     di as txt "  data in memory = one row per codebook question (merge/save as needed)."
     di as txt "{hline 72}"
 
@@ -4510,6 +4518,7 @@ program _suso_para_check, rclass
             + "," + char(34)+"t"+char(34)  + ":" + char(34) + substr(e_qx_type,1,60) + char(34)     ///
             + "," + char(34)+"on"+char(34) + ":" + cond(missing(n_on), "null", strofreal(n_on))     ///
             + "," + char(34)+"und"+char(34)+ ":" + cond(missing(n_und), "null", strofreal(n_und))   ///
+            + "," + char(34)+"vu"+char(34) + ":" + cond(missing(n_vund), "null", strofreal(n_vund)) ///
             + "," + char(34)+"vi"+char(34) + ":" + cond(missing(n_viol), "null", strofreal(n_viol)) ///
             + "," + char(34)+"im"+char(34) + ":" + cond(missing(n_imiss), "null", strofreal(n_imiss)) ///
             + "," + char(34)+"bd"+char(34) + ":" + cond(missing(n_bad), "null", strofreal(n_bad))   ///
@@ -4588,6 +4597,7 @@ program _suso_para_check, rclass
     file write `hf' `"<div class="ctrl"><label>Problems only</label><input id="c_prob" type="checkbox" style="width:20px;height:20px"></div>"' _n
     file write `hf' `"</div>"' _n
     file write `hf' `"<div class="cards">"' _n
+    file write `hf' `"<div class="card"><div class="v" id="k_recs">-</div><div class="k">records in view</div></div>"' _n
     file write `hf' `"<div class="card"><div class="v" id="k_shown">-</div><div class="k">questions in view</div></div>"' _n
     file write `hf' `"<div class="card warn"><div class="v" id="k_imiss">-</div><div class="k">unanswered when enabled</div></div>"' _n
     file write `hf' `"<div class="card warn"><div class="v" id="k_viol">-</div><div class="k">answers on disabled qs</div></div>"' _n
@@ -4628,7 +4638,7 @@ program _suso_para_check, rclass
     file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
     file write `hf' `"      var r=rows[i];"' _n
     file write `hf' `"      if(!r.ons){ out.push(r); continue; }"' _n
-    file write `hf' `"      var d={v:r.v, st:r.st, s:r.s, t:r.t, q:r.q, e:r.e, bv:r.bv, on:0, und:0, vi:0, im:0, bd:0, sh:null};"' _n
+    file write `hf' `"      var d={v:r.v, st:r.st, s:r.s, t:r.t, q:r.q, e:r.e, bv:r.bv, vu:r.vu, on:0, und:0, vi:0, im:0, bd:0, sh:null};"' _n
     file write `hf' `"      for(j=0;j<idxs.length;j++){"' _n
     file write `hf' `"        var k=idxs[j];"' _n
     file write `hf' `"        d.on+=r.ons[k]||0; d.und+=(r.uns?r.uns[k]:0)||0; d.vi+=(r.vis?r.vis[k]:0)||0;"' _n
@@ -4639,13 +4649,24 @@ program _suso_para_check, rclass
     file write `hf' `"    }"' _n
     file write `hf' `"    return out;"' _n
     file write `hf' `"  },"' _n
+    file write `hf' `"  recs: function(meta, sel){"' _n
+    file write `hf' `"    if(!meta || !meta.statuses || !meta.statuses.length) return null;"' _n
+    file write `hf' `"    var i, t=0;"' _n
+    file write `hf' `"    if(sel===''){ for(i=0;i<meta.statuses.length;i++) t+=meta.statuses[i].n||0; return t; }"' _n
+    file write `hf' `"    if(sel==='APP'){"' _n
+    file write `hf' `"      for(i=0;i<meta.statuses.length;i++) if(meta.statuses[i].c===120||meta.statuses[i].c===130) t+=meta.statuses[i].n||0;"' _n
+    file write `hf' `"      return t;"' _n
+    file write `hf' `"    }"' _n
+    file write `hf' `"    var k=parseInt(sel,10);"' _n
+    file write `hf' `"    return meta.statuses[k] ? (meta.statuses[k].n||0) : null;"' _n
+    file write `hf' `"  },"' _n
     file write `hf' `"  filt: function(rows, S){"' _n
     file write `hf' `"    var out=[], i, r, q;"' _n
     file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
     file write `hf' `"      r=rows[i];"' _n
     file write `hf' `"      if(S.sec && r.s!==S.sec) continue;"' _n
     file write `hf' `"      if(S.st && r.st!==S.st) continue;"' _n
-    file write `hf' `"      if(S.prob && !((r.vi||0)>0 || (r.im||0)>0 || (r.bd||0)>0)) continue;"' _n
+    file write `hf' `"      if(S.prob && !((r.vi||0)>0 || (r.im||0)>0 || (r.bd||0)>0 || (r.vu||0)>0)) continue;"' _n
     file write `hf' `"      if(S.q){"' _n
     file write `hf' `"        q=S.q.toLowerCase();"' _n
     file write `hf' `"        if(r.v.toLowerCase().indexOf(q)<0 && (r.q||'').toLowerCase().indexOf(q)<0) continue;"' _n
@@ -4752,7 +4773,7 @@ program _suso_para_check, rclass
     file write `hf' `"       (r.t?('<div class='+Q+'qm'+Q+'>Type: '+esc(r.t)+'</div>'):'')+"' _n
     file write `hf' `"       (r.e?('<div class='+Q+'qm'+Q+'>Asked only when: <span class='+Q+'mono'+Q+'>'+esc(r.e)+'</span></div>'):'')+"' _n
     file write `hf' `"       (r.bv?('<div class='+Q+'qm'+Q+'>Out-of-list values (count): <span class='+Q+'mono'+Q+'>'+esc(r.bv)+'</span></div>'):'')+"' _n
-    file write `hf' `"       ((r.und>0)?('<div class='+Q+'qm'+Q+'>'+fc(r.und)+' records undetermined (a referenced question was unanswered).</div>'):'')+"' _n
+    file write `hf' `"       ((r.und>0)?('<div class='+Q+'qm'+Q+'>'+fc(r.und)+' records undetermined (a referenced question was unanswered)'+((r.vu>0)?(' - <b>'+fc(r.vu)+' of them carry an answer anyway</b>, which a clean interview flow cannot produce'):'')+'.</div>'):'')+"' _n
     file write `hf' `"       '</div></details>';"' _n
     file write `hf' `"  }"' _n
     file write `hf' `"  el('list').innerHTML=s || '<p class='+Q+'nodata'+Q+'>No questions match the filters.</p>';"' _n
@@ -4764,6 +4785,8 @@ program _suso_para_check, rclass
     file write `hf' `"  var rows=C.filt(C.derive(D.rows, D.meta, S.ist), S);"' _n
     file write `hf' `"  var K=C.kpis(rows);"' _n
     file write `hf' `"  el('k_shown').textContent=fc(K.n);"' _n
+    file write `hf' `"  var rc=C.recs(D.meta, S.ist);"' _n
+    file write `hf' `"  el('k_recs').textContent = rc===null ? '-' : fc(rc);"' _n
     file write `hf' `"  el('k_imiss').textContent=fc(K.im);"' _n
     file write `hf' `"  el('k_viol').textContent=fc(K.vi);"' _n
     file write `hf' `"  el('k_bad').textContent=fc(K.bd);"' _n
@@ -4794,7 +4817,7 @@ program _suso_para_check, rclass
     file write `hf' `"  var names=Object.keys(secs).sort(), s='<option value='+Q+Q+'>All sections</option>';"' _n
     file write `hf' `"  for(i=0;i<names.length;i++) s+='<option>'+esc(names[i])+'</option>';"' _n
     file write `hf' `"  el('c_sec').innerHTML=s;"' _n
-    file write `hf' `"  var ids=['c_q','c_sec','c_st','c_prob','c_minsh','c_sort'];"' _n
+    file write `hf' `"  var ids=['c_q','c_sec','c_st','c_prob','c_minsh','c_sort','c_ist'];"' _n
     file write `hf' `"  for(i=0;i<ids.length;i++){"' _n
     file write `hf' `"    el(ids[i]).addEventListener('change',renderAll);"' _n
     file write `hf' `"    el(ids[i]).addEventListener('input',renderAll);"' _n
@@ -4825,6 +4848,7 @@ program _suso_para_check, rclass
         di as txt "  saved: " as res `"`saving'"'
     }
     return scalar nviol   = `tviol'
+    return scalar nvund   = `tvund'
     return scalar nimiss  = `timiss'
     return scalar nbadval = `tbad'
     return scalar nevaluated = `k_eval'
