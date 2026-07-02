@@ -2214,7 +2214,7 @@ program _suso_paradata, rclass
     if inlist("`verb'","fetch","download")                    local verb get
     if inlist("`verb'","import","read")                       local verb load
     if inlist("`verb'","time","timings","durations")          local verb timing
-    if inlist("`verb'","flag","check","quality","anomalies")  local verb flags
+    if inlist("`verb'","flag","quality","anomalies")           local verb flags
     if inlist("`verb'","skip","skipcheck","gates","cascades") local verb skips
     if inlist("`verb'","html","dashboard","qc")               local verb report
     if inlist("`verb'","questionnaire","instrument")           local verb qx
