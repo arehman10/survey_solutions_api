@@ -3172,10 +3172,38 @@ program _suso_para_skips, rclass
     di as txt "{hline 72}"
 
     * ---- supervisor action list: one clear message per cascade -------------------
+    * Every line is built in expression-land (never through macros): answer values
+    * and question wording can contain quotes/backticks/dollars that would break
+    * macro expansion, so data only ever reaches the screen/file via (exp).
     if `hasdet' {
         preserve
         quietly use `"`skdet'"', clear
         gsort -nrem interview__id sk_run
+        local hasqxt 0
+        capture confirm variable qx_text
+        if !_rc local hasqxt 1
+        quietly gen strL m_head = "CASE " + strofreal(_n) + " of `ncasc'.  Interview " ///
+            + interview__id + ".  Enumerator: " + cond(actor!="", actor, resp)          ///
+            + ".  On " + string(ts0/86400000, "%tdDD_Mon_CCYY") + " at "                ///
+            + string(ts0, "%tcHH:MM") + " UTC."
+        quietly gen strL m_what = "WHAT HAPPENED: the answer to [" + trigger + "] was changed"
+        quietly replace m_what = m_what + " to " + char(34) + trigval + char(34) if trigval!=""
+        quietly replace m_what = m_what + " after " + strofreal(nrem)                   ///
+            + " later answer(s) had already been recorded. The skip logic then ERASED those " ///
+            + strofreal(nrem) + " answer(s)."
+        quietly gen strL m_q = ""
+        quietly gen strL m_s = ""
+        quietly gen strL m_e = ""
+        if `hasqxt' {
+            quietly replace m_q = "QUESTION [" + trigger + "]: " + char(34)             ///
+                + substr(qx_text,1,160) + char(34) if qx_text!=""
+            quietly replace m_s = "SECTION: " + substr(qx_section,1,60) if qx_section!=""
+            quietly replace m_e = "This question is itself asked only when: "           ///
+                + substr(qx_enable,1,120) if qx_enable!=""
+        }
+        quietly gen strL m_w = ""
+        quietly replace m_w = "ERASED ANSWERS: " + substr(wl,1,300) if wl!=""
+        quietly replace m_w = m_w + " ... and " + strofreal(nrem-8) + " more" if wl!="" & nrem>8
         local k = min(`top', _N)
         local mh 0
         if `"`messages'"'!="" {
@@ -3197,60 +3225,32 @@ program _suso_para_skips, rclass
         di as txt _n "  {hline 70}"
         di as res "  ACTION LIST — what to tell the field supervisor (top `k' of `ncasc')"
         di as txt "  {hline 70}"
-        if !`hasqx' di as txt "  tip: add qx(questionnaire.html) to include the question wording below."
+        if !`hasqxt' di as txt "  tip: add qx(questionnaire.html) to include the question wording below."
         forvalues i = 1/`k' {
-            local id  = interview__id[`i']
-            local tg  = trigger[`i']
-            local tv  = trigval[`i']
-            local ac  = cond(actor[`i']!="", actor[`i'], resp[`i'])
-            local nr  = nrem[`i']
-            local wls = wl[`i']
-            if `nr'>8 & "`wls'"!="" local wls "`wls' ... and `=`nr'-8' more"
-            local wh : di %tdDD_Mon_CCYY ts0[`i']/86400000
-            local wt : di %tcHH:MM ts0[`i']
-            local L1 "CASE `i' of `ncasc'.  Interview `id'.  Enumerator: `ac'.  On `=trim("`wh'")' at `=trim("`wt'")' UTC."
-            local L2 "WHAT HAPPENED: the answer to [`tg'] was changed"
-            if `"`tv'"'!="" local L2 `"`L2' to "`tv'""'
-            local L2 "`L2' after `nr' later answer(s) had already been recorded. The skip logic then ERASED those `nr' answer(s)."
             di as txt ""
-            di as res "  `L1'"
-            di as txt "  `L2'"
+            di as res "  " m_head[`i']
+            di as txt "  " m_what[`i']
             if `mh' {
                 file write `mf' _n "----------------------------------------------------------------------" _n
-                file write `mf' "`L1'" _n
-                file write `mf' "`L2'" _n
+                file write `mf' (m_head[`i']) _n
+                file write `mf' (m_what[`i']) _n
             }
-            if `hasqx' {
-                capture confirm variable qx_text
-                if !_rc {
-                    local qt = substr(qx_text[`i'], 1, 160)
-                    local qs = substr(qx_section[`i'], 1, 60)
-                    local qe = substr(qx_enable[`i'], 1, 120)
-                    if `"`qt'"'!="" {
-                        di as txt `"  QUESTION [`tg']: "`qt'""'
-                        if `mh' file write `mf' `"QUESTION [`tg']: "`qt'""' _n
-                    }
-                    if `"`qs'"'!="" {
-                        di as txt "  SECTION: `qs'"
-                        if `mh' file write `mf' "SECTION: `qs'" _n
-                    }
-                    if `"`qe'"'!="" {
-                        di as txt "  This question is itself asked only when: `qe'"
-                        if `mh' file write `mf' "This question is itself asked only when: `qe'" _n
-                    }
+            foreach mv in m_q m_s m_e m_w {
+                if `mv'[`i']!="" {
+                    di as txt "  " `mv'[`i']
+                    if `mh' file write `mf' (`mv'[`i']) _n
                 }
             }
-            if `"`wls'"'!="" {
-                di as txt "  ERASED ANSWERS: `wls'"
-                if `mh' file write `mf' "ERASED ANSWERS: `wls'" _n
-            }
-            local A1 "ACTION: 1. Open this interview in Headquarters and check [`tg']."
-            local A2 "        2. Ask the enumerator why it changed after the later questions were done."
-            local A3 "        3. If the NEW value is correct: REJECT the interview so the erased questions are asked again — they are empty now."
-            local A4 "        4. If the OLD value was correct: restore it and verify the answers below it."
-            foreach a in A1 A2 A3 A4 {
-                di as txt "  ``a''"
-                if `mh' file write `mf' "``a''" _n
+            di as txt "  ACTION: 1. Open this interview in Headquarters and check the changed question."
+            di as txt "          2. Ask the enumerator why it changed after the later questions were done."
+            di as txt "          3. If the NEW value is correct: REJECT the interview so the erased"
+            di as txt "             questions are asked again - they are empty now."
+            di as txt "          4. If the OLD value was correct: restore it and verify the answers below it."
+            if `mh' {
+                file write `mf' "ACTION: 1. Open this interview in Headquarters and check the changed question." _n
+                file write `mf' "        2. Ask the enumerator why it changed after the later questions were done." _n
+                file write `mf' "        3. If the NEW value is correct: REJECT the interview so the erased questions are asked again - they are empty now." _n
+                file write `mf' "        4. If the OLD value was correct: restore it and verify the answers below it." _n
             }
         }
         if `mh' {
@@ -3558,36 +3558,34 @@ program _suso_para_report, rclass
         local hasqxt 0
         capture confirm variable qx_text
         if !_rc local hasqxt 1
+        * escaped display columns: data reaches the file only via (exp), never macros
+        quietly gen strL e_ac = cond(actor!="", actor, resp)
+        quietly gen strL e_tg = trigger
+        quietly gen strL e_tv0 = trigval
+        quietly gen strL e_qt = ""
+        if `hasqxt' quietly replace e_qt = substr(qx_text,1,160)
+        quietly gen strL e_wl = substr(wl,1,300)
+        foreach v in e_ac e_tg e_tv0 e_qt e_wl {
+            quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
+        }
+        quietly gen strL e_tv = ""
+        quietly replace e_tv = " to &quot;" + e_tv0 + "&quot;" if e_tv0!=""
+        quietly gen strL e_mr = ""
+        quietly replace e_mr = " ... and " + strofreal(nrem-8) + " more" if nrem>8 & e_wl!=""
+        quietly gen str24 e_dt = string(ts0/86400000, "%tdDD_Mon_CCYY")
         file write `fh' `"<h2>Actions for the field supervisor</h2>"' _n
         file write `fh' `"<div class="note">One entry per skip violation, largest first. If the new gate value is right, the interview should be rejected so the erased questions are re-asked; if the old value was right, restore it and verify the section. For an email-ready version run: suso paradata skips , qx(questionnaire.html) messages(review.txt)</div>"' _n
         file write `fh' `"<section>"' _n
         local kk = min(15, _N)
         forvalues i = 1/`kk' {
-            _suso_para_hesc `=trigger[`i']'
-            local tg `"`r(out)'"'
-            local ac = cond(actor[`i']!="", actor[`i'], resp[`i'])
-            _suso_para_hesc `"`ac'"'
-            local ac `"`r(out)'"'
-            local nr = nrem[`i']
-            local wh : di %tdDD_Mon_CCYY ts0[`i']/86400000
-            local tvt ""
-            if trigval[`i']!="" {
-                _suso_para_hesc `"`=trigval[`i']'"'
-                local tvt `" to &quot;`r(out)'&quot;"'
-            }
             file write `fh' `"<div style="border-bottom:1px solid #eef0f2;padding:9px 0">"' _n
-            file write `fh' `"<div style="font-size:13px"><span class="mono"><b>`=interview__id[`i']'</b></span> &nbsp; enumerator <b>`ac'</b> &nbsp; `=trim("`wh'")'</div>"' _n
-            file write `fh' `"<div style="font-size:12.5px;margin-top:3px">The answer to <b class="mono">`tg'</b> was changed`tvt' after <b>`nr'</b> later answers were recorded - the skip logic erased them.</div>"' _n
-            if `hasqxt' {
-                _suso_para_hesc `"`=substr(qx_text[`i'],1,160)'"'
-                local qt `"`r(out)'"'
-                if `"`qt'"'!="" file write `fh' `"<div class="note" style="margin:2px 0 0">`tg': &quot;`qt'&quot;</div>"' _n
+            file write `fh' `"<div style="font-size:13px"><span class="mono"><b>"' (interview__id[`i']) `"</b></span> &nbsp; enumerator <b>"' (e_ac[`i']) `"</b> &nbsp; "' (e_dt[`i']) `"</div>"' _n
+            file write `fh' `"<div style="font-size:12.5px;margin-top:3px">The answer to <b class="mono">"' (e_tg[`i']) `"</b> was changed"' (e_tv[`i']) `" after <b>"' (strofreal(nrem[`i'])) `"</b> later answers were recorded - the skip logic erased them.</div>"' _n
+            if e_qt[`i']!="" {
+                file write `fh' `"<div class="note" style="margin:2px 0 0"><span class="mono">"' (e_tg[`i']) `"</span>: &quot;"' (e_qt[`i']) `"&quot;</div>"' _n
             }
-            if wl[`i']!="" {
-                _suso_para_hesc `"`=substr(wl[`i'],1,300)'"'
-                local wle `"`r(out)'"'
-                local mr = cond(`nr'>8, " ... and `=`nr'-8' more", "")
-                file write `fh' `"<div class="note" style="margin:2px 0 0">Erased: <span class="mono">`wle'`mr'</span></div>"' _n
+            if e_wl[`i']!="" {
+                file write `fh' `"<div class="note" style="margin:2px 0 0">Erased: <span class="mono">"' (e_wl[`i']) (e_mr[`i']) `"</span></div>"' _n
             }
             file write `fh' `"</div>"' _n
         }
