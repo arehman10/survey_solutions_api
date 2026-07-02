@@ -1,4 +1,4 @@
-*! suso v1.7.0 build 2026-07-02-APPROVALS  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.0 build 2026-07-02-CAUSAL  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0 (build 2026-07-02-APPROVALS)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0 (build 2026-07-02-CAUSAL)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -2980,8 +2980,11 @@ program _suso_para_skips, rclass
         preserve
         _suso_para_qxload , file(`"`qx'"')
         quietly keep qx_var qx_text qx_section qx_enable
+        quietly bysort qx_var: keep if _n==1
+        forvalues j = 1/`=_N' {
+            local en_`=qx_var[`j']' = substr(qx_enable[`j'], 1, 300)
+        }
         quietly rename qx_var trigger
-        quietly bysort trigger: keep if _n==1
         quietly save `"`QXT'"'
         restore
         local hasqx 1
@@ -3021,10 +3024,20 @@ program _suso_para_skips, rclass
     quietly gen sk_actor = ""
     capture confirm string variable responsible
     if !_rc quietly replace sk_actor = responsible
+    quietly gen sk_nextvar = sk_lastvar
+    quietly gen double sk_nextts = sk_lastts
+    quietly gen sk_nextval = sk_lastval
     quietly bysort interview__id (para_ord para_seq): ///
         replace sk_lastvar = sk_lastvar[_n-1] if sk_lastvar=="" & _n>1
     quietly by interview__id: replace sk_lastts = sk_lastts[_n-1] if missing(sk_lastts) & _n>1
     quietly by interview__id: replace sk_lastval = sk_lastval[_n-1] if sk_lastval=="" & _n>1
+    * SuSo logs the removal run BEFORE the gate answer that caused it, so also
+    * carry the NEXT AnswerSet backward - it is usually the true gate
+    gsort interview__id -para_ord -para_seq
+    quietly by interview__id: replace sk_nextvar = sk_nextvar[_n-1] if sk_nextvar=="" & _n>1
+    quietly by interview__id: replace sk_nextts = sk_nextts[_n-1] if missing(sk_nextts) & _n>1
+    quietly by interview__id: replace sk_nextval = sk_nextval[_n-1] if sk_nextval=="" & _n>1
+    sort interview__id para_ord para_seq
 
     * runs of consecutive AnswerRemoved events
     tempvar rise
@@ -3062,9 +3075,42 @@ program _suso_para_skips, rclass
             quietly by interview__id sk_run: replace sk_wl =                     ///
                 cond(sk_k==1, para_var, cond(sk_k<=8, sk_wl[_n-1]+", "+para_var, sk_wl[_n-1]))
         }
-        collapse (last) wl=sk_wl (count) nrem=sk_k (min) ts0=para_tsu            ///
+        collapse (last) wl=sk_wl avar=sk_nextvar aval=sk_nextval               ///
+            (max) ats=sk_nextts tend=para_tsu                                    ///
+            (count) nrem=sk_k (min) ts0=para_tsu                                 ///
             (first) trigger=sk_trig trigval=sk_val actor=sk_actor resp=sk_resp,  ///
             by(interview__id sk_run) fast
+        quietly replace avar = "" if missing(ats) | (ats - tend) > `window'*1000
+        * adjudicate the gate against the questionnaire skip conditions:
+        * conf 2 = erased questions depend on the NEXT answer (true gate, re-attributed)
+        * conf 1 = they depend on the previous answer (original attribution stands)
+        * conf 0 = neither (timing-only); allsvc = erased items have no conditions
+        quietly gen byte conf = 0
+        quietly gen byte allsvc = 0
+        if `hasqx' {
+            forvalues r = 1/`=_N' {
+                local wlw = subinstr(wl[`r'], ",", " ", .)
+                local av = avar[`r']
+                local bv = trigger[`r']
+                local hitA 0
+                local hitB 0
+                local nz 0
+                foreach w of local wlw {
+                    local ee `"`en_`w''"'
+                    if `"`ee'"'=="" continue
+                    local ++nz
+                    if "`av'"!="" & ustrregexm(`"`ee'"', "`av'") local hitA 1
+                    if ustrregexm(`"`ee'"', "`bv'") local hitB 1
+                }
+                if `hitA' {
+                    quietly replace conf = 2 in `r'
+                    quietly replace trigger = avar[`r'] in `r'
+                    quietly replace trigval = substr(aval[`r'],1,60) in `r'
+                }
+                else if `hitB' quietly replace conf = 1 in `r'
+                if `nz'==0 quietly replace allsvc = 1 in `r'
+            }
+        }
         if `hasqx' {
             quietly merge m:1 trigger using `"`QXT'"', keep(master match) nogenerate
         }
@@ -3218,6 +3264,12 @@ program _suso_para_skips, rclass
         quietly gen strL m_w = ""
         quietly replace m_w = "ERASED ANSWERS: " + substr(wl,1,300) if wl!=""
         quietly replace m_w = m_w + " ... and " + strofreal(nrem-8) + " more" if wl!="" & nrem>8
+        quietly gen strL m_c = ""
+        if `hasqxt' {
+            quietly replace m_c = "GATE CONFIRMED: the erased questions depend on [" + trigger + "] in the questionnaire skip logic." if conf>0
+            quietly replace m_c = "NOTE: the erased items carry no skip conditions (service/review fields) - this is a review/approval workflow reset, not enumerator skip abuse. No action needed with the enumerator." if conf==0 & allsvc==1
+            quietly replace m_c = "CAUTION: timing points to [" + trigger + "] but none of the erased questions depends on it - verify in the interview history before raising this with the enumerator." if conf==0 & allsvc==0
+        }
         local k = min(`top', _N)
         local mh 0
         if `"`messages'"'!="" {
@@ -3249,7 +3301,7 @@ program _suso_para_skips, rclass
                 file write `mf' (m_head[`i']) _n
                 file write `mf' (m_what[`i']) _n
             }
-            foreach mv in m_q m_s m_e m_w {
+            foreach mv in m_q m_s m_e m_w m_c {
                 if `mv'[`i']!="" {
                     di as txt "  " `mv'[`i']
                     if `mh' file write `mf' (`mv'[`i']) _n
@@ -3333,6 +3385,12 @@ program _suso_para_skips, rclass
             quietly gen strL h_l5 = ""
             quietly replace h_l5 = "<div class=" + char(34) + "meta" + char(34) + ">Erased: <span class=" + char(34) + "mono" + char(34) + ">" + h_wl ///
                 + cond(nrem>8, " ... and " + strofreal(nrem-8) + " more", "") + "</span></div>" if h_wl!=""
+            quietly gen strL h_l6 = ""
+            if `hasqxt' {
+                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#1e6b34;font-weight:600" + char(34) + ">Gate confirmed: the erased questions depend on this variable.</div>" if conf>0
+                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#666" + char(34) + ">Review/approval workflow reset (erased items carry no skip conditions) - not enumerator skip abuse.</div>" if conf==0 & allsvc==1
+                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#7a5b00;font-weight:600" + char(34) + ">Unconfirmed (timing only) - none of the erased questions depends on this variable; verify in the interview history first.</div>" if conf==0 & allsvc==0
+            }
             local now = trim("`c(current_date)' `c(current_time)'")
             local wst ""
             if "$SUSO_WS"!="" local wst " — $SUSO_WS"
@@ -3392,6 +3450,7 @@ program _suso_para_skips, rclass
                 if h_l3[`i']!="" file write `hf' (h_l3[`i']) _n
                 if h_l4[`i']!="" file write `hf' (h_l4[`i']) _n
                 if h_l5[`i']!="" file write `hf' (h_l5[`i']) _n
+                if h_l6[`i']!="" file write `hf' (h_l6[`i']) _n
                 file write `hf' `"</div>"' _n
             }
             if _N>`kk' file write `hf' `"<div class="meta">Showing the `kk' largest of `ncasc' cases.</div>"' _n
@@ -3428,6 +3487,7 @@ end
 program _suso_para_report, rclass
     version 14.2
     syntax [, SAVing(string) replace TITle(string) QX(string)                    ///
+        DATA(string) FILTERS(string)                                             ///
         GAPMins(real 30) FASTsecs(real 2) ALLRoles                               ///
         CASCade(integer 3) WINdow(real 60) LITEcap(integer 15000) ]
     _suso_para_need events
@@ -3455,6 +3515,52 @@ program _suso_para_report, rclass
     _suso_para_derive , gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
     local rolenote `"`r(rolenote)'"'
     quietly save `"`EVD'"'
+
+    * variable-filter lookup from the main export: value per interview + labels
+    tempfile FLK
+    local fdimvars ""
+    local jfdims ""
+    if `"`data'"'!="" & `"`filters'"'!="" {
+        preserve
+        quietly use `"`data'"', clear
+        capture confirm variable interview__id
+        if _rc di as txt "  filters(): data() has no interview__id - variable filters skipped."
+        else {
+            local __fvb 0
+            foreach fvv of local filters {
+                capture confirm numeric variable `fvv'
+                if _rc {
+                    di as txt "  filters(): " as res "`fvv'" as txt " not found or not numeric in data() - skipped."
+                    continue
+                }
+                quietly levelsof `fvv', local(fl)
+                local nfl : word count `fl'
+                if `nfl'==0 | `nfl'>20 | `__fvb'+`nfl'>40 {
+                    di as txt "  filters(): " as res "`fvv'" as txt " skipped (`nfl' values; limit 20 per variable, 40 total)."
+                    continue
+                }
+                local __fvb = `__fvb' + `nfl'
+                local fdimvars "`fdimvars' `fvv'"
+                local jv1 ""
+                foreach s of local fl {
+                    local lb : label (`fvv') `s'
+                    local lb = subinstr(subinstr(`"`lb'"', char(34), "", .), char(92), "", .)
+                    local jv1 `"`jv1'`=cond(`"`jv1'"'=="","",",")'{"c":"`s'","l":"`lb'"}"'
+                }
+                local jfdims `"`jfdims'`=cond(`"`jfdims'"'=="","",",")'{"v":"`fvv'","vals":[`jv1']}"'
+            }
+            local fdimvars = strtrim("`fdimvars'")
+            if "`fdimvars'"!="" {
+                quietly keep interview__id `fdimvars'
+                quietly bysort interview__id: keep if _n==1
+                foreach fvv of local fdimvars {
+                    quietly rename `fvv' f__`fvv'
+                }
+                quietly save `"`FLK'"'
+            }
+        }
+        restore
+    }
 
     * ---- question timing table --------------------------------------------------
     local hasq 0
@@ -3586,6 +3692,9 @@ program _suso_para_report, rclass
     }
     quietly replace ws = "" if !started
     label variable ws "workflow state at last paradata event"
+    if "`fdimvars'"!="" {
+        quietly merge 1:1 interview__id using `"`FLK'"', keep(master match) nogenerate
+    }
     char _dta[suso_paradata] timing
     local nints = _N
     quietly count if started
@@ -3668,6 +3777,8 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="panel">"' _n
     file write `fh' `"<div class="ctrl"><label>Enumerator</label><select id="c_resp"></select></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Interview status</label><select id="c_ws"></select></div>"' _n
+    file write `fh' `"<div class="ctrl" id="ctl_fd"><label>Filter variable</label><select id="c_fd"></select></div>"' _n
+    file write `fh' `"<div class="ctrl" id="ctl_fv"><label>= value</label><select id="c_fv"></select></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Fast answer &lt; sec</label><input id="c_fs" type="number" min="1" max="10" step="1"></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Burst share %</label><input id="c_burst" type="number" min="5" max="90" step="1" value="33"></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Min active min</label><input id="c_minact" type="number" min="1" max="240" step="1" value="10"></div>"' _n
@@ -3746,6 +3857,12 @@ program _suso_para_report, rclass
         quietly replace e_tv = " to &quot;" + e_tv0 + "&quot;" if e_tv0!=""
         quietly gen strL e_mr = ""
         quietly replace e_mr = " ... and " + strofreal(nrem-8) + " more" if nrem>8 & e_wl!=""
+        quietly gen strL e_cf = ""
+        if `hasqxt' {
+            quietly replace e_cf = "<div class=" + char(34) + "note" + char(34) + " style=" + char(34) + "margin:2px 0 0;color:#1e6b34;font-weight:600" + char(34) + ">Gate confirmed: the erased questions depend on this variable.</div>" if conf>0
+            quietly replace e_cf = "<div class=" + char(34) + "note" + char(34) + " style=" + char(34) + "margin:2px 0 0;color:#666" + char(34) + ">Review/approval workflow reset - not enumerator skip abuse.</div>" if conf==0 & allsvc==1
+            quietly replace e_cf = "<div class=" + char(34) + "note" + char(34) + " style=" + char(34) + "margin:2px 0 0;color:#7a5b00;font-weight:600" + char(34) + ">Unconfirmed (timing only) - verify in the interview history first.</div>" if conf==0 & allsvc==0
+        }
         quietly gen str24 e_dt = string(ts0/86400000, "%tdDD_Mon_CCYY")
         file write `fh' `"<h2>Actions for the field supervisor</h2>"' _n
         file write `fh' `"<div class="note">One entry per skip violation, largest first. If the new gate value is right, the interview should be rejected so the erased questions are re-asked; if the old value was right, restore it and verify the section. For an email-ready version run: suso paradata skips , qx(questionnaire.html) messages(review.txt)</div>"' _n
@@ -3761,6 +3878,7 @@ program _suso_para_report, rclass
             if e_wl[`i']!="" {
                 file write `fh' `"<div class="note" style="margin:2px 0 0">Erased: <span class="mono">"' (e_wl[`i']) (e_mr[`i']) `"</span></div>"' _n
             }
+            if e_cf[`i']!="" file write `fh' (e_cf[`i']) _n
             file write `fh' `"</div>"' _n
         }
         file write `fh' `"</section>"' _n
@@ -3773,7 +3891,7 @@ program _suso_para_report, rclass
 
     * ---- embedded data ------------------------------------------------------------
     file write `fh' `"<script>"' _n
-    file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"lite":`lite'},"' _n
+    file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"lite":`lite',"fdims":[`jfdims']},"' _n
     file write `fh' `""rows":["' _n
     quietly use `"`MERGED'"', clear
     quietly keep if started
@@ -3795,8 +3913,14 @@ program _suso_para_report, rclass
             }
             local vecs `","h":[`hv'],"g":[`gv']"'
         }
+        local fjm ""
+        foreach fvv of local fdimvars {
+            local fval = cond(missing(f__`fvv'[`i']), "", strofreal(f__`fvv'[`i']))
+            local fjm `"`fjm'`=cond(`"`fjm'"'=="","",",")'"`fvv'":"`fval'""'
+        }
+        if `"`fjm'"'!="" local fjm `","f":{`fjm'}"'
         local sep = cond(`i'==1, "", ",")
-        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","r":"`rj'","ws":"`=ws[`i']'","nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']'`vecs'}"' _n
+        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","r":"`rj'","ws":"`=ws[`i']'"`fjm',"nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']'`vecs'}"' _n
     }
     file write `fh' `"],"' _n
     file write `fh' `""q":["' _n
@@ -3870,7 +3994,7 @@ program _suso_para_report, rclass
     file write `fh' `"      z!==null && Math.abs(z)>S.z"' _n
     file write `fh' `"    ];"' _n
     file write `fh' `"  },"' _n
-    file write `fh' `"  filterRows: function(rows,resp,ws){"' _n
+    file write `fh' `"  filterRows: function(rows,resp,ws,fd,fv){"' _n
     file write `fh' `"    var out=[],i,r;"' _n
     file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
     file write `fh' `"      r=rows[i];"' _n
@@ -3879,6 +4003,7 @@ program _suso_para_report, rclass
     file write `fh' `"        if(ws==='APP'){ if(r.ws!=='Approved by HQ' && r.ws!=='Approved by Sup') continue; }"' _n
     file write `fh' `"        else if(r.ws!==ws) continue;"' _n
     file write `fh' `"      }"' _n
+    file write `fh' `"      if(fd && fv){ if(!r.f || r.f[fd]!==fv) continue; }"' _n
     file write `fh' `"      out.push(r);"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"    return out;"' _n
@@ -4021,6 +4146,8 @@ program _suso_para_report, rclass
     file write `fh' `"  return {"' _n
     file write `fh' `"    resp: el('c_resp').value,"' _n
     file write `fh' `"    ws:   el('c_ws').value,"' _n
+    file write `fh' `"    fd:   el('c_fd').value,"' _n
+    file write `fh' `"    fv:   el('c_fv').value,"' _n
     file write `fh' `"    fs:   Math.max(1,parseInt(el('c_fs').value,10)||2),"' _n
     file write `fh' `"    burst:(parseFloat(el('c_burst').value)||33)/100,"' _n
     file write `fh' `"    minact:parseFloat(el('c_minact').value)||10,"' _n
@@ -4035,12 +4162,33 @@ program _suso_para_report, rclass
     file write `fh' `"function resetSettings(){"' _n
     file write `fh' `"  el('c_resp').value='';"' _n
     file write `fh' `"  el('c_ws').value='';"' _n
+    file write `fh' `"  el('c_fd').value='';"' _n
+    file write `fh' `"  fvOptions();"' _n
     file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
     file write `fh' `"  el('c_burst').value=33; el('c_minact').value=10;"' _n
     file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
     file write `fh' `"  el('c_nshare').value=25; el('c_churn').value=20;"' _n
     file write `fh' `"  el('c_z').value=3.5; el('c_top').value=15;"' _n
     file write `fh' `"  renderAll();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function fvOptions(){"' _n
+    file write `fh' `"  var dim=el('c_fd').value, Q5=String.fromCharCode(34), s='<option value='+Q5+Q5+'>-</option>', i, j, cnt={};"' _n
+    file write `fh' `"  if(dim && D.meta && D.meta.fdims){"' _n
+    file write `fh' `"    for(i=0;i<D.rows.length;i++){"' _n
+    file write `fh' `"      var rv=(D.rows[i].f&&D.rows[i].f[dim])?D.rows[i].f[dim]:'';"' _n
+    file write `fh' `"      if(rv) cnt[rv]=(cnt[rv]||0)+1;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    for(i=0;i<D.meta.fdims.length;i++){"' _n
+    file write `fh' `"      if(D.meta.fdims[i].v!==dim) continue;"' _n
+    file write `fh' `"      var vv=D.meta.fdims[i].vals;"' _n
+    file write `fh' `"      for(j=0;j<vv.length;j++){"' _n
+    file write `fh' `"        var lab=(vv[j].l&&vv[j].l!==vv[j].c)?(vv[j].c+' '+vv[j].l):vv[j].c;"' _n
+    file write `fh' `"        s+='<option value='+Q5+esc(vv[j].c)+Q5+'>'+esc(lab)+' ('+(cnt[vv[j].c]||0)+')</option>';"' _n
+    file write `fh' `"      }"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('c_fv').innerHTML=s;"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
     file write `fh' `"var qSortKey='med', qSortDir=-1;"' _n
@@ -4077,10 +4225,11 @@ program _suso_para_report, rclass
     file write `fh' _n
     file write `fh' `"function renderAll(){"' _n
     file write `fh' `"  var S=settings();"' _n
-    file write `fh' `"  var rows=P.filterRows(D.rows,S.resp,S.ws);"' _n
+    file write `fh' `"  var rows=P.filterRows(D.rows,S.resp,S.ws,S.fd,S.fv);"' _n
     file write `fh' `"  var A=P.aggregate(rows,S);"' _n
     file write `fh' `"  var scope=S.resp?('enumerator '+S.resp):'all enumerators';"' _n
     file write `fh' `"  if(S.ws) scope+=(S.ws==='APP')?', approved interviews':(', status '+S.ws);"' _n
+    file write `fh' `"  if(S.fd && S.fv) scope+=', '+S.fd+' = '+S.fv;"' _n
     file write `fh' _n
     file write `fh' `"  el('k_started').textContent=fmtc(A.n);"' _n
     file write `fh' `"  el('k_flagged').textContent=fmtc(A.nflagged)+' ('+fmt(100*A.nflagged/Math.max(A.n,1))+'%)';"' _n
@@ -4162,12 +4311,23 @@ program _suso_para_report, rclass
     file write `fh' `"  if(wsm['Approved by HQ']||wsm['Approved by Sup']) so+='<option value='+Q2+'APP'+Q2+'>Approved only (Sup + HQ)</option>';"' _n
     file write `fh' `"  for(i=0;i<wnames.length;i++) so+='<option value='+Q2+esc(wnames[i])+Q2+'>'+esc(wnames[i])+' ('+wsm[wnames[i]]+')</option>';"' _n
     file write `fh' `"  el('c_ws').innerHTML=so;"' _n
+    file write `fh' `"  var fds=(D.meta&&D.meta.fdims)?D.meta.fdims:[];"' _n
+    file write `fh' `"  if(fds.length){"' _n
+    file write `fh' `"    var fo='<option value='+Q2+Q2+'>None</option>';"' _n
+    file write `fh' `"    for(i=0;i<fds.length;i++) fo+='<option>'+esc(fds[i].v)+'</option>';"' _n
+    file write `fh' `"    el('c_fd').innerHTML=fo;"' _n
+    file write `fh' `"    fvOptions();"' _n
+    file write `fh' `"    el('c_fd').addEventListener('change',function(){ fvOptions(); renderAll(); });"' _n
+    file write `fh' `"  } else {"' _n
+    file write `fh' `"    el('ctl_fd').style.display='none';"' _n
+    file write `fh' `"    el('ctl_fv').style.display='none';"' _n
+    file write `fh' `"  }"' _n
     file write `fh' `"  var hsel='';"' _n
     file write `fh' `"  for(i=0;i<24;i++) hsel+='<option>'+i+'</option>';"' _n
     file write `fh' `"  el('c_n1').innerHTML=hsel; el('c_n2').innerHTML=hsel;"' _n
     file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
     file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
-    file write `fh' `"  var ids=['c_resp','c_ws','c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_top'];"' _n
+    file write `fh' `"  var ids=['c_resp','c_ws','c_fv','c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_top'];"' _n
     file write `fh' `"  for(i=0;i<ids.length;i++) el(ids[i]).addEventListener('change',renderAll);"' _n
     file write `fh' `"  el('c_q').addEventListener('input',renderQuestions);"' _n
     file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
@@ -5089,6 +5249,7 @@ program _suso_para_suite, rclass
 
     di as txt "  [1/3] behaviour report"
     quietly _suso_para_report , saving(`"`T1'"') replace qx(`"`qx'"')             ///
+        data(`"`data'"') filters(`"`filters'"')                                    ///
         gapmins(`gapmins') fastsecs(`fastsecs') `allroles'                        ///
         cascade(`cascade') window(`window') litecap(`litecap')
     local nstarted = r(nstarted)
