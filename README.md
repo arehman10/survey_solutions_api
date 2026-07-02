@@ -31,13 +31,9 @@ build.bat     Rebuild the jar       (Windows)
 
 ## Install
 
-Copy the three files to your Stata `PLUS` or `PERSONAL` folder (find them in Stata with
-`display c(sysdir_plus)` and `display c(sysdir_personal)`):
 
 ```
-suso.ado    -> e.g.  .../ado/plus/s/suso.ado
-suso.sthlp  -> e.g.  .../ado/plus/s/suso.sthlp
-suso.jar    -> same folder, OR anywhere, then:  suso config , jar("C:/path/suso.jar")
+net install suso, from("https://raw.githubusercontent.com/arehman10/survey_solutions_api/main/install") replace
 ```
 
 Then in Stata:
