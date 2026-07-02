@@ -42,13 +42,28 @@ forvalues i = 1/60 {
     sleep 5000
 }
 suso export download , id(`job') saving("ises_data.zip") replace
+* ... or all of the above in one line:
+* suso export get , type(STATA) saving("ises_data.zip") unzipw("pw") unzipto("data") replace
 
-*--- 5) TEAM ------------------------------------------------------------------
+*--- 5) PARADATA QC (timing + behaviour flags) --------------------------------
+* suso paradata get , saving("para_ises.zip")     // export -> download -> load events
+* suso paradata report , saving("qc.html") replace // one-page QC report with figures
+* save para_events, replace                       // keep the raw events to iterate
+* suso paradata flags , saving("para_flags.dta") replace
+*                                                 // -> memory: 1 row/interview, f_* flags
+* use para_events, clear
+* suso paradata timing , by(question)             // slowest questions first
+* use para_events, clear
+* suso paradata timing , by(interviewer)          // per-interviewer speed/night/churn
+* use para_events, clear
+* suso paradata skips                             // gate flips wiping answers (skip abuse)
+
+*--- 6) TEAM ------------------------------------------------------------------
 * suso supervisor list , all
 * suso supervisor interviewers , id(<supervisor-uuid>)
 * suso interviewer actionslog , id(<interviewer-uuid>) start(2026-06-01) end(2026-06-17)
 
-*--- 6) DANGER (commented on purpose; add , confirm to run) -------------------
+*--- 7) DANGER (commented on purpose; add , confirm to run) -------------------
 * suso interview delete , id(<uuid>) confirm
 * suso export cancel    , id(<jobid>) confirm
 * suso workspace status , name(<ws>)

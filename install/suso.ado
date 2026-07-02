@@ -1,4 +1,5 @@
-*! suso v1.6.4  18jun2026  (fix: flattened scalar names capped to Stata 32-char macro limit (was overflowing on e.g. ExistingQuestionnairesCount); workspace status count restored)
+*! suso v1.7.0  02jul2026  (suso paradata: timing analysis, behaviour flags and skip-flip cascade detection; suso export get: one-shot start->poll->download->unzip)
+*! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
 *! The World Bank — Development Economics (DEC) · Enterprise Surveys
@@ -113,9 +114,10 @@ program suso, rclass
     if "`noun'"=="setting"       local noun settings
     if "`noun'"=="statistic" | "`noun'"=="stats" local noun statistics
     if "`noun'"=="map"           local noun maps
+    if "`noun'"=="para"          local noun paradata
 
     if !inlist("`noun'","assignment","interview","questionnaire","export","user","maps") ///
-     & !inlist("`noun'","supervisor","interviewer","workspace","settings","statistics") {
+     & !inlist("`noun'","supervisor","interviewer","workspace","settings","statistics","paradata") {
         di as err "suso: unknown subcommand '`noun''.  See {help suso}."
         exit 198
     }
@@ -134,13 +136,13 @@ program _suso_config, rclass
         PROXYPort(integer 0) PROXYUser(string) PROXYPass(string)               ///
         INSECURE NOINSECURE CONNTimeout(integer 0) READTimeout(integer 0)      ///
         MAXrows(integer 0) AUDITfile(string) GUID(string) QVER(integer 0)      ///
-        SHOW CLEAR ]
+        EXPORTPw(string) SHOW CLEAR ]
 
     if "`clear'"!="" {
         capture macro drop SUSO_BASE SUSO_WS SUSO_USER SUSO_PWD SUSO_TOKEN          ///
             SUSO_AUTHTYPE SUSO_PROXYHOST SUSO_PROXYPORT SUSO_PROXYUSER SUSO_PROXYPWD ///
             SUSO_INSECURE SUSO_CONNTO SUSO_READTO SUSO_MAXROWS SUSO_AUDIT            ///
-            SUSO_GUID SUSO_QVER
+            SUSO_GUID SUSO_QVER SUSO_EXPORTPWD
         di as txt "suso: configuration cleared for this session."
         exit
     }
@@ -168,6 +170,7 @@ program _suso_config, rclass
     if "`auditfile'"!="" global SUSO_AUDIT   "`auditfile'"
     if "`guid'"!=""      global SUSO_GUID    "`guid'"
     if `qver'>0          global SUSO_QVER    "`qver'"
+    if `"`exportpw'"'!="" global SUSO_EXPORTPWD `"`exportpw'"'   // export-archive password
 
     _suso_init
 
@@ -177,7 +180,7 @@ program _suso_config, rclass
         di as err "      the WBG root CA into your Stata JVM trust store (see the README)."
     }
 
-    if "`show'"!="" | trim("`server'`workspace'`user'`password'`token'`auth'`jar'`proxyhost'")=="" {
+    if "`show'"!="" | trim(`"`server'`workspace'`user'`password'`token'`auth'`jar'`proxyhost'`exportpw'"')=="" {
         _suso_showconfig
     }
 end
@@ -196,6 +199,7 @@ program _suso_showconfig
     di as txt "  user        : " as res cond("$SUSO_USER"=="","(not set)","$SUSO_USER")
     di as txt "  password    : " as res cond("$SUSO_PWD"=="","(not set)","********")
     if "$SUSO_TOKEN"!="" di as txt "  bearer token: " as res "********"
+    if `"$SUSO_EXPORTPWD"'!="" di as txt "  export pw   : " as res "********"
     di as txt "  jar         : " as res cond("$SUSO_JAR"=="","(auto-locate on adopath)","$SUSO_JAR")
     if "$SUSO_PROXYHOST"!="" di as txt "  proxy       : " as res "$SUSO_PROXYHOST:$SUSO_PROXYPORT"
     di as txt "  TLS verify  : " as res cond("$SUSO_INSECURE"=="1","DISABLED (insecure)","on")
@@ -209,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.6.4  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -363,7 +367,7 @@ program _suso_gql, rclass
     local total "$SUSO_TOTALCOUNT"
     local fkeys "$SUSO_FKEYS"
     foreach k of local fkeys {
-        if length("SUSO_F_`k'") <= 32 local F_`k' `"${SUSO_F_`k'}"'
+        local F_`k' `"${SUSO_F_`k'}"'
     }
     capture macro drop SUSO_GQL_BODY SUSO_GQL_OPERATIONS SUSO_GQL_MAP SUSO_UP_FILE ///
         SUSO_UP_NAME SUSO_GQL_NODEPATH SUSO_GQL_TODATA SUSO_VERBOSE
@@ -376,7 +380,7 @@ program _suso_gql, rclass
         exit 459
     }
     if "`rc'"!="0" {
-        _suso_transport_err `"`macval(msg)'"'
+        di as err `"suso: `macval(msg)'"'
         exit 459
     }
     if "`todata'"!="" {
@@ -608,36 +612,30 @@ program _suso_maps_del1, rclass
 end
 
 program _suso_export_get, rclass
-    * Start one export, poll to completion (showing progress as it changes), then
-    * download it (optionally unzip). Errors (exit 459) on failure/timeout so callers
-    * can wrap in capture. A Completed job with no data file returns r(status)=="NoFile"
-    * (not an error). Mirrors the backup notebook's start/wait/download chain.
-    syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)          ///
-        ISTATUS(string) META NOMETA POLLSecs(integer 10) JOBTimeout(integer 3600) ///
-        replace UNZIP UNZIPW(string) UNZIPto(string) VERBOSE ]
+    * Start one export, poll to completion, download it. Errors (exit 459) on
+    * failure/timeout so callers can wrap in capture. A Completed job with no
+    * data file returns r(status)=="NoFile" (not an error). Mirrors the backup
+    * notebook's start_export / wait_for_export / download_export chain.
+    syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)         ///
+        ISTATUS(string) FROM(string) TO(string) REDUCED META NOMETA             ///
+        POLLSecs(integer 10) JOBTimeout(integer 3600) replace VERBOSE ]
     if "`istatus'"=="" local istatus "All"
     local metaopt = cond("`nometa'"!="","nometa","meta")
-    suso export start , type(`type') guid(`guid') qver(`qver') istatus(`istatus') `metaopt' `verbose'
+    local redopt  = cond("`reduced'"!="","paradatareduced","")
+    suso export start , type(`type') guid(`guid') qver(`qver') istatus(`istatus') ///
+        from(`from') to(`to') `redopt' `metaopt' `verbose'
     local jid `"`r(jobid)'"'
     if `"`jid'"'=="" {
         di as err "suso: export start returned no JobId."
         exit 459
     }
-    local elapsed  = 0
-    local status   ""
-    local hasfile  "true"
-    local lastline ""
+    local elapsed = 0
+    local status  ""
+    local hasfile "true"
     while 1 {
-        quietly suso export status , id(`jid') `verbose'
+        suso export status , id(`jid') `verbose'
         local status  `"`r(exportstatus)'"'
         local hasfile `"`r(hasexportfile)'"'
-        local pct     `"`r(progress)'"'
-        if "`status'"=="Completed" local pct "100"
-        * print a progress line only when it changes (auto-suppressed under capture)
-        if "`status' `pct'"!="`lastline'" {
-            di as txt "  export " as res "`jid'" as txt "  {col 50}" as res "`status'" as txt "  " as res "`pct'%"
-            local lastline "`status' `pct'"
-        }
         if "`status'"=="Completed" continue, break
         if inlist("`status'","Fail","Failed","Canceled","Cancelled") {
             di as err "suso: export job `jid' `status'."
@@ -657,13 +655,13 @@ program _suso_export_get, rclass
         return local status "NoFile"
         exit
     }
-    capture suso export download , id(`jid') saving(`"`saving'"') `replace' `unzip' unzipw(`"`unzipw'"') unzipto(`"`unzipto'"') `verbose'
+    capture suso export download , id(`jid') saving(`"`saving'"') `replace' `verbose'
     if _rc {
         * the /file endpoint can 403/404 for a beat right after Completed: retry once
         sleep 2000
-        suso export download , id(`jid') saving(`"`saving'"') `replace' `unzip' unzipw(`"`unzipw'"') unzipto(`"`unzipto'"') `verbose'
+        suso export download , id(`jid') saving(`"`saving'"') `replace' `verbose'
     }
-    return add
+    return local saved  `"`r(saved)'"'
     return scalar jobid = `jid'
     return local status "`status'"
 end
@@ -788,28 +786,6 @@ program _suso_backup, rclass
     return scalar failed  = `nfail'
 end
 
-program _suso_transport_err
-    * Display a backend transport error and, if it is a TLS/certificate trust
-    * failure, explain how to fix it on ANY server (not just the WBG network).
-    local msg `"`macval(0)'"'
-    * drop the legacy WBG-specific hint the backend may append
-    local msg = subinstr(`"`macval(msg)'"', `"  (TLS/proxy issue on the WBG network? See 'suso doctor' and the SSL notes in the README.)"', "", .)
-    di as err `"suso: `macval(msg)'"'
-    local low = lower(`"`macval(msg)'"')
-    if strpos(`"`low'"',"sslhandshake") | strpos(`"`low'"',"pkix") | strpos(`"`low'"',"certification path") | strpos(`"`low'"',"certpath") | strpos(`"`low'"',"unable to find valid cert") {
-        di as txt ""
-        di as txt "  Stata's Java runtime does not trust this server's TLS certificate. This is"
-        di as txt "  common for non-World-Bank servers, self-signed certificates, or an outdated"
-        di as txt "  Java trust store. Fix it in one of these ways:"
-        di as txt "    1) {bf:Trust the certificate (recommended).}  Run {bf:suso doctor} to find the"
-        di as txt "       Java home, then import the server's root CA into that JVM with keytool"
-        di as txt "       (see the SSL / proxy notes in {bf:help suso} or the README)."
-        di as txt "    2) {bf:Skip TLS verification for this session (quick, less secure).}"
-        di as txt "         {bf:. suso config , insecure}"
-        di as txt "       then re-run your command. Use only against a server you trust."
-    }
-end
-
 program _suso_jar
     if "$SUSO_JAR"=="" {
         * 1) anywhere on the adopath
@@ -930,7 +906,7 @@ program _suso_call, rclass
     local datecols "$SUSO_DATECOLS"
     local fkeys    "$SUSO_FKEYS"
     foreach k of local fkeys {
-        if length("SUSO_F_`k'") <= 32 local F_`k' `"${SUSO_F_`k'}"'
+        local F_`k' `"${SUSO_F_`k'}"'
     }
 
     if `jrc' {
@@ -946,7 +922,7 @@ program _suso_call, rclass
     }
     if "`rc'"!="0" {
         _suso_clearbridge
-        _suso_transport_err `"`macval(msg)'"'
+        di as err `"suso: `macval(msg)'"'
         exit 459
     }
 
@@ -1742,6 +1718,34 @@ program _suso_export, rclass
         exit
     }
 
+    if "`verb'"=="get" {
+        * one-shot convenience: start -> poll -> download [-> unzip]
+        syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)     ///
+            ISTATUS(string) FROM(string) TO(string) PARADATAReduced META NOMETA ///
+            POLLSecs(integer 10) JOBTimeout(integer 3600) replace               ///
+            UNZIP UNZIPW(string) UNZIPto(string) VERBOSE ]
+        local redopt = cond("`paradatareduced'"!="","reduced","")
+        _suso_export_get , type(`type') saving(`"`saving'"') guid(`guid')       ///
+            qver(`qver') istatus(`istatus') from(`from') to(`to') `redopt'      ///
+            `meta' `nometa' pollsecs(`pollsecs') jobtimeout(`jobtimeout')       ///
+            `replace' `verbose'
+        local gstatus `"`r(status)'"'
+        local gsaved  `"`r(saved)'"'
+        return add
+        if "`gstatus'"=="NoFile" {
+            di as txt "suso: job completed with no data file for this type/filter — nothing to download."
+            exit
+        }
+        di as txt "suso: downloaded export to " as res `"`gsaved'"'
+        if "`unzip'"!="" | `"`unzipw'"'!="" | `"`unzipto'"'!="" {
+            if `"`unzipw'"'=="" local unzipw `"$SUSO_EXPORTPWD"'
+            _suso_unzip , file(`"`gsaved'"') dir(`"`unzipto'"') pwd(`"`unzipw'"')
+            return local unzipdir `"`r(unzipdir)'"'
+            return scalar unzipped = r(nfiles)
+        }
+        exit
+    }
+
     if "`verb'"=="download" {
         syntax , ID(string) SAVING(string) [ replace UNZIP UNZIPW(string) UNZIPto(string) VERBOSE ]
         if "`replace'"=="" {
@@ -1757,34 +1761,12 @@ program _suso_export, rclass
         local zhttp = r(http)
         return add
         if "`unzip'"!="" | `"`unzipw'"'!="" {
+            if `"`unzipw'"'=="" local unzipw `"$SUSO_EXPORTPWD"'
             _suso_unzip , file(`"`zsaved'"') dir(`"`unzipto'"') pwd(`"`unzipw'"')
             return local unzipdir `"`r(unzipdir)'"'
             return scalar unzipped = r(nfiles)
             return scalar http = `zhttp'
         }
-        exit
-    }
-
-    if "`verb'"=="get" {
-        * One-shot: start -> poll (live progress) -> auto-download when 100%.
-        syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)      ///
-            ISTATUS(string) META NOMETA POLLSecs(integer 10) JOBTimeout(integer 3600) ///
-            replace UNZIP UNZIPW(string) UNZIPto(string) VERBOSE ]
-        if "`replace'"=="" {
-            capture confirm new file `"`saving'"'
-            if _rc {
-                di as err "suso: file already exists. Use -replace-."
-                exit 602
-            }
-        }
-        _suso_export_get , type(`type') saving(`"`saving'"') guid(`guid') qver(`qver') ///
-            istatus(`istatus') `meta' `nometa' pollsecs(`pollsecs')                 ///
-            jobtimeout(`jobtimeout') `replace' `unzip' unzipw(`"`unzipw'"')          ///
-            unzipto(`"`unzipto'"') `verbose'
-        if "`r(status)'"=="NoFile" {
-            di as txt "suso: export completed but has no data file for this filter — nothing downloaded."
-        }
-        return add
         exit
     }
 
@@ -1982,9 +1964,7 @@ program _suso_workspace, rclass
         _suso_call , method(GET) path(/api/v1/workspaces/status/`name') `rootopt' `verbose'
         di as txt _n "Workspace status: " as res `"`name'"'
         di as txt "  can be deleted    : " as res `"`r(canbedeleted)'"'
-        local _enq `"`r(existingquestionnairescou)'"'
-        if `"`_enq'"'=="" local _enq `"`r(existingquestionnairescount)'"'
-        di as txt "  questionnaires    : " as res `"`_enq'"'
+        di as txt "  questionnaires    : " as res `"`r(existingquestionnairescount)'"'
         di as txt "  supervisors       : " as res `"`r(supervisorscount)'"'
         di as txt "  interviewers      : " as res `"`r(interviewerscount)'"'
         di as txt "  maps              : " as res `"`r(mapscount)'"'
@@ -2204,6 +2184,1640 @@ program _suso_statistics, rclass
 end
 
 *===============================================================================
+* Paradata — download / load the SuSo paradata export and analyse timing and
+* interviewer behaviour (speeding, night work, answer churn, duration outliers).
+*
+*   suso paradata get      start->poll->download type(Paradata), unzip, load
+*   suso paradata load     load a local paradata .zip / .tab (offline)
+*   suso paradata timing   event data -> per-interview / question / interviewer
+*   suso paradata flags    per-interview red flags + interviewer league table
+*   suso paradata skips    gate flips: skip-triggered answer-removal cascades
+*   suso paradata report   one-page self-contained HTML QC report with figures
+*
+* Design notes (kept deliberately vectorised: one import, 2 sorts, 1 collapse):
+*   - Works with both paradata layouts: v21.01+ (event, timestamp_utc, tz_offset)
+*     and legacy (action, timestamp [device-local], offset).
+*   - Durations use UTC when available; device-local time is used only for the
+*     night-work metric. Negative gaps (device clock skew) are floored at 0.
+*   - "Active" time caps every inter-event gap at gapmins() (default 30) and
+*     zeroes Paused->next-event gaps, the standard SuSo paradata convention.
+*   - Timing metrics use Interviewer-role events when the role column identifies
+*     them (approve/reject traffic is excluded); event COUNTS (rejections etc.)
+*     always use all rows. Override with -allroles-.
+*===============================================================================
+program _suso_paradata, rclass
+    version 14.2
+    gettoken verb 0 : 0, parse(" ,")
+    local verb = strlower("`verb'")
+    if inlist("`verb'","fetch","download")                    local verb get
+    if inlist("`verb'","import","read")                       local verb load
+    if inlist("`verb'","time","timings","durations")          local verb timing
+    if inlist("`verb'","flag","check","quality","anomalies")  local verb flags
+    if inlist("`verb'","skip","skipcheck","gates","cascades") local verb skips
+    if inlist("`verb'","html","dashboard","qc")               local verb report
+
+    if "`verb'"=="get" {
+        _suso_para_get `macval(0)'
+        return add
+        exit
+    }
+    if "`verb'"=="load" {
+        _suso_para_load `macval(0)'
+        return add
+        exit
+    }
+    if "`verb'"=="timing" {
+        _suso_para_timing `macval(0)'
+        return add
+        exit
+    }
+    if "`verb'"=="flags" {
+        _suso_para_flags `macval(0)'
+        return add
+        exit
+    }
+    if "`verb'"=="skips" {
+        _suso_para_skips `macval(0)'
+        return add
+        exit
+    }
+    if "`verb'"=="report" {
+        _suso_para_report `macval(0)'
+        return add
+        exit
+    }
+    di as err "suso paradata: action must be get, load, timing, flags, skips or report.  See {help suso##paradata:help suso}."
+    exit 198
+end
+
+* ---- get: export type(Paradata) from the server, unzip, load ------------------
+program _suso_para_get, rclass
+    version 14.2
+    syntax [, SAVing(string) DIR(string) GUID(string) QVER(integer 0)          ///
+        ISTATUS(string) FROM(string) TO(string) REDUCED PWD(string)            ///
+        UNZIPW(string) POLLSecs(integer 10) JOBTimeout(integer 3600)           ///
+        replace VERBOSE ]
+    if `"`unzipw'"'!="" local pwd `"`unzipw'"'    // unzipw() = house synonym for pwd()
+    if `"`pwd'"'==""    local pwd `"$SUSO_EXPORTPWD"'   // default from suso config , exportpw()
+
+    if `"`saving'"'=="" {
+        local stamp : di %tcCCYYNNDD-HHMMSS ///
+            clock("`c(current_date)' `c(current_time)'", "DMYhms")
+        local stamp = trim("`stamp'")
+        local saving "suso_paradata_`stamp'.zip"
+    }
+    else if "`replace'"=="" {
+        capture confirm new file `"`saving'"'
+        if _rc {
+            di as err "suso: file already exists. Use -replace-."
+            exit 602
+        }
+    }
+    local redopt = cond("`reduced'"!="","reduced","")
+
+    di as txt "suso paradata: requesting a Paradata export (this can take a while on large surveys) ..."
+    _suso_export_get , type(Paradata) saving(`"`saving'"') guid(`guid')        ///
+        qver(`qver') istatus(`istatus') from(`from') to(`to') `redopt'         ///
+        pollsecs(`pollsecs') jobtimeout(`jobtimeout') replace `verbose'
+    if "`r(status)'"=="NoFile" {
+        di as txt "suso paradata: the server reports no paradata for this questionnaire/filter — nothing to load."
+        return local status "NoFile"
+        exit
+    }
+    local zip `"`r(saved)'"'
+    return local saved `"`zip'"'
+
+    capture noisily _suso_unzip , file(`"`zip'"') dir(`"`dir'"') pwd(`"`pwd'"')
+    if _rc {
+        local rc = _rc
+        di as err _n "suso paradata: could not extract the downloaded archive."
+        if `"`pwd'"'=="" {
+            di as err "  Your server may password-protect exports (Export Encryption). The"
+            di as err "  download itself succeeded and is kept — no need to re-export. Retry:"
+        }
+        else {
+            di as err "  A password was supplied but extraction still failed — wrong password,"
+            di as err "  or a corrupt download. The archive is kept; retry without re-exporting:"
+        }
+        di as err `"      suso paradata load , file("`zip'") unzipw("<export password>")"'
+        di as err `"  or set it once per session:   suso config , exportpw("<export password>")"'
+        exit `rc'
+    }
+    local xdir `"`r(unzipdir)'"'
+    return local unzipdir `"`xdir'"'
+
+    _suso_para_load , dir(`"`xdir'"')
+    return add
+    di as txt "suso paradata: archive kept at " as res `"`zip'"'
+    di as txt "               reload offline anytime:  {bf:suso paradata load , file(...)}"
+end
+
+* ---- load: local .tab / .zip / extracted folder --------------------------------
+program _suso_para_load, rclass
+    version 14.2
+    syntax [, FILE(string) DIR(string) PWD(string) UNZIPW(string) ]
+    if `"`unzipw'"'!="" local pwd `"`unzipw'"'    // unzipw() = house synonym for pwd()
+    if `"`pwd'"'==""    local pwd `"$SUSO_EXPORTPWD"'   // default from suso config , exportpw()
+
+    if `"`file'"'=="" & `"`dir'"'=="" {
+        di as err "suso paradata load: specify the downloaded export,  file(<paradata .zip or .tab>)."
+        exit 198
+    }
+
+    * a .zip is extracted first (Java backend: handles SuSo's ZipCrypto passwords)
+    if `"`file'"'!="" {
+        capture confirm file `"`file'"'
+        if _rc {
+            di as err `"suso paradata: file not found:  `file'"'
+            exit 601
+        }
+        local k = strrpos(`"`file'"', ".")
+        local ext = cond(`k'>0, lower(substr(`"`file'"', `k', .)), "")
+        if "`ext'"==".zip" {
+            capture noisily _suso_unzip , file(`"`file'"') pwd(`"`pwd'"')
+            if _rc {
+                local rc = _rc
+                di as err _n "suso paradata: could not extract the archive."
+                if `"`pwd'"'=="" di as err `"  If your server password-protects exports, add unzipw() or set:  suso config , exportpw("...")"'
+                else            di as err "  A password was supplied but extraction failed — check the password."
+                exit `rc'
+            }
+            local dir `"`r(unzipdir)'"'
+            local file ""
+        }
+        else if !inlist("`ext'",".tab",".txt",".tsv") {
+            di as err "suso paradata: expected a .zip (SuSo export) or the tab-delimited paradata file."
+            exit 198
+        }
+    }
+
+    * locate the paradata tab file inside an extracted folder
+    if `"`file'"'=="" {
+        local dnorm = subinstr(`"`dir'"', "\", "/", .)
+        if substr(`"`dnorm'"',-1,1)=="/" local dnorm = substr(`"`dnorm'"',1,length(`"`dnorm'"')-1)
+        local cands : dir `"`dnorm'"' files "*.tab"
+        local pick ""
+        foreach f of local cands {
+            if lower(`"`f'"')=="paradata.tab" local pick `"`f'"'
+        }
+        if `"`pick'"'=="" {
+            foreach f of local cands {
+                if `"`pick'"'=="" local pick `"`f'"'
+            }
+        }
+        if `"`pick'"'=="" {
+            di as err `"suso paradata: no .tab file found in  `dnorm'"'
+            di as err "               (a Paradata export contains paradata.tab — is this the right archive?)"
+            exit 601
+        }
+        local file `"`dnorm'/`pick'"'
+    }
+
+    di as txt "suso paradata: importing " as res `"`file'"' as txt " ..."
+    import delimited using `"`file'"', delimiter(tab) varnames(1)              ///
+        stringcols(_all) bindquote(nobind) encoding(utf-8) clear
+
+    _suso_para_prep
+
+    * summary (one sort; leaves the data ordered iid/event-order)
+    tempvar f1
+    quietly bysort interview__id (para_ord para_seq): gen byte `f1' = (_n==1)
+    quietly count if `f1'
+    local nint = r(N)
+    quietly summarize para_tsu
+    if r(N)>0 {
+        local d0 : di %tcCCYY-NN-DD r(min)
+        local d1 : di %tcCCYY-NN-DD r(max)
+        local period `", `d0' to `d1'"'
+    }
+    else local period ""
+
+    di as txt "suso paradata: loaded " as res "`=_N'" as txt " event(s) from " ///
+        as res "`nint'" as txt " interview(s)`period'."
+    di as txt _n "  what next:"
+    di as txt "    {bf:suso paradata report}   one-page QC report with figures (recommended first look)"
+    di as txt "    {bf:suso paradata flags}    behaviour red flags per interview + interviewer league"
+    di as txt "    {bf:suso paradata timing}   durations & answer speed (by interview / question / interviewer)"
+    di as txt "    {bf:suso paradata skips}    gate flips that wiped answers (skip abuse / bad filters)"
+    di as txt "  tip: timing/flags/skips replace the loaded events — {bf:save events.dta} first if you plan"
+    di as txt "       to iterate on thresholds; {bf:report} takes care of this by itself."
+    return scalar nevents = _N
+    return scalar nints   = `nint'
+    return local  tabfile `"`file'"'
+end
+
+* ---- prep: harmonise columns across SuSo versions, parse times, mark events ----
+program _suso_para_prep
+    version 14.2
+    if `"`: char _dta[suso_paradata]'"'=="events" exit    // already prepared
+
+    capture confirm variable interview__id
+    if _rc {
+        di as err "suso paradata: no interview__id column — this does not look like a Survey Solutions paradata file."
+        exit 459
+    }
+    * legacy column names
+    capture confirm variable event
+    if _rc {
+        capture confirm variable action
+        if !_rc rename action event
+    }
+    capture confirm string variable event
+    if _rc {
+        di as err "suso paradata: no (string) event/action column found."
+        exit 459
+    }
+
+    * numeric within-interview sequence (order), with file order as tiebreaker
+    quietly gen double para_seq = _n
+    capture confirm variable order
+    if !_rc {
+        capture confirm string variable order
+        if !_rc quietly gen double para_ord = real(order)
+        else    quietly gen double para_ord = order
+    }
+    else quietly gen double para_ord = _n
+    label variable para_seq "paradata: file row (tiebreak)"
+    label variable para_ord "paradata: event order within interview"
+
+    * timestamps: v21.01+ = timestamp_utc (+ tz_offset); legacy = timestamp local (+ offset)
+    local tsvar ""
+    capture confirm variable timestamp_utc
+    if !_rc local tsvar timestamp_utc
+    else {
+        capture confirm variable timestamp
+        if !_rc local tsvar timestamp
+    }
+    if "`tsvar'"=="" {
+        di as err "suso paradata: no timestamp_utc/timestamp column — cannot compute timings."
+        exit 459
+    }
+    capture confirm string variable `tsvar'
+    if !_rc {
+        quietly gen double para_ts = clock(subinstr(substr(`tsvar',1,19),"T"," ",1), "YMDhms")
+        quietly count if missing(para_ts) & `tsvar'!=""
+        if r(N)>0 di as txt "suso paradata: note — " as res "`=r(N)'" as txt " event(s) had unparseable timestamps (left missing)."
+    }
+    else quietly gen double para_ts = `tsvar'      // already numeric (%tc)
+
+    * timezone offset -> milliseconds (formats like +05:30:00 / -04:00:00 / 05:30:00)
+    local tzvar ""
+    capture confirm string variable tz_offset
+    if !_rc local tzvar tz_offset
+    else {
+        capture confirm string variable offset
+        if !_rc local tzvar offset
+    }
+    if "`tzvar'"!="" {
+        tempvar sgn body kp
+        quietly gen byte `sgn'  = 1 - 2*(substr(`tzvar',1,1)=="-")
+        quietly gen `body' = cond(inlist(substr(`tzvar',1,1),"+","-"), substr(`tzvar',2,.), `tzvar')
+        quietly gen long `kp'   = strpos(`body', ":")
+        quietly gen double para_off = `sgn' * (3600000*real(substr(`body',1,`kp'-1)) ///
+                                     +   60000*real(substr(`body',`kp'+1,2))) if `kp'>0
+        quietly replace para_off = 0 if missing(para_off)
+    }
+    else quietly gen double para_off = 0
+
+    * UTC clock for durations, device-local clock for time-of-day
+    if "`tsvar'"=="timestamp_utc" {
+        quietly gen double para_tsu = para_ts
+        quietly gen double para_tsl = para_ts + para_off
+    }
+    else {   // legacy: timestamp is device-local
+        quietly gen double para_tsl = para_ts
+        quietly gen double para_tsu = para_ts - para_off
+    }
+    format para_tsu para_tsl %tcCCYY-NN-DD_HH:MM:SS
+    label variable para_tsu "paradata: event time (UTC)"
+    label variable para_tsl "paradata: event time (device local)"
+    quietly drop para_ts
+
+    * normalised event name + indicators (names vary slightly across versions)
+    quietly gen para_ev = lower(strtrim(event))
+    quietly gen byte para_ans = (para_ev=="answerset")
+    quietly gen byte para_rem = (para_ev=="answerremoved")
+    quietly gen byte para_inv = (strpos(para_ev,"declaredinvalid")>0)
+    quietly gen byte para_cmp = (para_ev=="completed")
+    quietly gen byte para_rst = (para_ev=="restarted")
+    quietly gen byte para_rej = (strpos(para_ev,"rejectedby")==1)
+    quietly gen byte para_pau = (para_ev=="paused")
+    label variable para_ev  "paradata: event (lowercase)"
+    label variable para_ans "AnswerSet"
+    label variable para_rem "AnswerRemoved"
+    label variable para_inv "declared invalid"
+    label variable para_cmp "Completed"
+    label variable para_rst "Restarted"
+    label variable para_rej "Rejected (SV/HQ)"
+    label variable para_pau "Paused"
+
+    * question variable name = first ||-token of parameters (answers/comments only)
+    capture confirm string variable parameters
+    if !_rc {
+        tempvar pp
+        quietly gen long `pp' = strpos(parameters, "||")
+        quietly gen para_var = cond(`pp'>0, substr(parameters,1,`pp'-1), parameters) ///
+            if para_ans | para_rem | para_ev=="commentset"
+        * SuSo quotes the parameters field when answers contain special characters;
+        * with bindquote(nobind) the opening quote sticks to the variable name
+        quietly replace para_var = substr(para_var,2,.) if substr(para_var,1,1)==char(34)
+        label variable para_var "paradata: question variable"
+    }
+
+    char _dta[suso_paradata] events
+end
+
+* ---- guard: the current dataset must be prepared paradata of the given kind ----
+program _suso_para_need
+    version 14.2
+    args kind
+    if `"`: char _dta[suso_paradata]'"'!="`kind'" {
+        if "`kind'"=="events" {
+            di as err "suso paradata: no paradata events in memory."
+            di as err "      Load them first:   suso paradata get   |   suso paradata load , file(...)"
+        }
+        else {
+            di as err "suso paradata: no paradata `kind' table in memory."
+        }
+        exit 459
+    }
+end
+
+* ---- derive: shared event-level derivations (roles, gaps, sessions) ------------
+program _suso_para_derive, rclass
+    version 14.2
+    syntax [, GAPMins(real 30) FASTsecs(real 2) ALLRoles ]
+    if `gapmins'<=0 | `fastsecs'<=0 {
+        di as err "suso paradata: gapmins() and fastsecs() must be positive."
+        exit 198
+    }
+    local gapsecs = `gapmins'*60
+    capture drop para_role
+    * derived columns from a previous (possibly interrupted) run
+    capture drop para_ivw para_resp para_gap para_prevp para_brk para_act        ///
+        para_ansgap para_fast para_night para_tivw para_one
+
+    * Interviewer-role detection. SuSo writes role either as text ("Interviewer")
+    * or as a numeric code that varies by version. If no text match, infer the
+    * interviewer code empirically: interviews are Completed on the tablet, so
+    * the modal role on Completed events identifies the interviewer role.
+    local rolenote "all roles (no role column)"
+    quietly gen byte para_ivw = 1
+    capture confirm variable role
+    if !_rc & "`allroles'"=="" {
+        capture confirm string variable role
+        if !_rc quietly gen para_role = lower(strtrim(role))
+        else    quietly gen para_role = strofreal(role)
+        quietly count if para_role=="interviewer"
+        if r(N)>0 {
+            quietly replace para_ivw = (para_role=="interviewer")
+            local rolenote "Interviewer-role events"
+        }
+        else {
+            local rcode ""
+            quietly count if para_cmp
+            if r(N)>0 {
+                preserve
+                quietly keep if para_cmp & para_role!=""
+                if _N>0 {
+                    quietly contract para_role
+                    gsort -_freq para_role
+                    local rcode = para_role[1]
+                }
+                restore
+            }
+            quietly count if para_role!="" & para_role!="`rcode'"
+            if "`rcode'"!="" & r(N)>0 {
+                quietly replace para_ivw = (para_role=="`rcode'")
+                local rolenote `"interviewer role inferred as code `rcode' (modal role on Completed events)"'
+            }
+            else if "`rcode'"!="" local rolenote "all roles (role column has a single value)"
+            else local rolenote "all roles (no Completed events to infer the interviewer role)"
+        }
+    }
+    if "`allroles'"!="" local rolenote "all roles (allroles)"
+
+    * responsible: at the last answer event, else at the last event
+    quietly gen para_resp = ""
+    capture confirm string variable responsible
+    if !_rc {
+        tempvar isa
+        quietly gen byte `isa' = para_ans & para_ivw
+        quietly bysort interview__id (`isa' para_ord para_seq): replace para_resp = responsible[_N]
+    }
+
+    * gaps within the interviewer-role event stream of each interview
+    quietly bysort interview__id para_ivw (para_ord para_seq): ///
+        gen double para_gap = (para_tsu - para_tsu[_n-1])/1000 if para_ivw & _n>1
+    quietly replace para_gap = 0 if para_gap<0                       // clock skew
+    quietly bysort interview__id para_ivw (para_ord para_seq): ///
+        gen byte para_prevp = (para_pau[_n-1]==1) if para_ivw & _n>1
+    quietly replace para_prevp = 0 if missing(para_prevp)
+
+    quietly gen byte   para_brk = para_ivw & !missing(para_gap) & (para_prevp | para_gap>`gapsecs')
+    quietly gen double para_act = cond(para_ivw & !missing(para_gap), ///
+                                       cond(para_prevp, 0, min(para_gap,`gapsecs')), 0)
+    quietly gen double para_ansgap = para_gap if para_ans & para_ivw & !para_brk & !missing(para_gap)
+    quietly gen byte   para_fast   = (para_ansgap<`fastsecs') if !missing(para_ansgap)
+    quietly gen byte   para_night  = para_ans & para_ivw & !missing(para_tsl) & ///
+                                     (hh(para_tsl)>=22 | hh(para_tsl)<6)
+    quietly gen double para_tivw   = para_tsu if para_ivw
+    quietly gen byte   para_one    = 1
+    return local rolenote `"`rolenote'"'
+end
+
+* ---- timing: events in memory  ->  one row per interview / question / interviewer
+program _suso_para_timing, rclass
+    version 14.2
+    syntax [, BY(string) GAPMins(real 30) FASTsecs(real 2) ALLRoles ]
+    _suso_para_need events
+
+    if "`by'"=="" local by interview
+    if !inlist("`by'","interview","question","interviewer") {
+        di as err "suso paradata timing: by() must be interview, question or interviewer."
+        exit 198
+    }
+    if `gapmins'<=0 | `fastsecs'<=0 {
+        di as err "suso paradata timing: gapmins() and fastsecs() must be positive."
+        exit 198
+    }
+    _suso_para_derive , gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
+    local rolenote `"`r(rolenote)'"'
+
+
+    * ---------------- by(question): median seconds per question -----------------
+    if "`by'"=="question" {
+        capture confirm variable para_var
+        if _rc {
+            di as err "suso paradata timing: no parameters column in this paradata (reduced export?) — cannot time questions."
+            exit 459
+        }
+        quietly keep if para_ans & para_ivw & para_var!=""
+        if _N==0 {
+            di as err "suso paradata timing: no AnswerSet events to time."
+            exit 2000
+        }
+        tempvar tag
+        quietly bysort para_var interview__id: gen byte `tag' = (_n==1)
+        collapse (sum) n_set=para_one n_interviews=`tag' n_fast=para_fast          ///
+            (count) n_timed=para_ansgap                                            ///
+            (p50) med_s=para_ansgap (p90) p90_s=para_ansgap, by(para_var) fast
+        rename para_var variable
+        quietly gen double fast_share = n_fast/n_timed if n_timed>0
+        label variable variable     "question variable"
+        label variable n_set        "answers set"
+        label variable n_interviews "interviews answering"
+        label variable n_timed      "answers with a timed gap"
+        label variable med_s        "median sec to answer"
+        label variable p90_s        "p90 sec to answer"
+        label variable fast_share   "share answered < `fastsecs' sec"
+        format med_s p90_s %9.1f
+        format fast_share %5.2f
+        gsort -med_s
+        char _dta[suso_paradata] qtiming
+        di as txt "suso paradata: question timing for " as res "`=_N'" as txt ///
+            " variable(s) (`rolenote'); sorted slowest first."
+        return scalar nvars = _N
+        exit
+    }
+
+    * ---------------- by(interviewer): pooled per-interviewer -------------------
+    if "`by'"=="interviewer" {
+        quietly keep if para_ivw
+        if _N==0 {
+            di as err "suso paradata timing: no interviewer-role events found."
+            exit 2000
+        }
+        capture confirm variable responsible
+        if _rc {
+            di as err "suso paradata timing: no responsible column — cannot group by interviewer."
+            exit 459
+        }
+        tempvar tag
+        quietly bysort responsible interview__id: gen byte `tag' = (_n==1)
+        collapse (sum) n_interviews=`tag' n_events=para_one n_answers=para_ans       ///
+            n_removed=para_rem active_s=para_act n_fast=para_fast n_night=para_night ///
+            (count) n_timed=para_ansgap (p50) ans_med_s=para_ansgap                  ///
+            (p90) ans_p90_s=para_ansgap, by(responsible) fast
+        quietly gen double active_hr   = active_s/3600
+        quietly gen double fast_share  = n_fast/n_timed    if n_timed>0
+        quietly gen double night_share = n_night/n_answers if n_answers>0
+        quietly gen double churn       = n_removed/max(n_answers,1)
+        quietly drop active_s
+        label variable n_interviews "interviews worked"
+        label variable active_hr    "active hours (gap-capped)"
+        label variable ans_med_s    "median sec to answer"
+        label variable ans_p90_s    "p90 sec to answer"
+        label variable fast_share   "share answers < `fastsecs' sec"
+        label variable night_share  "share answers 22:00-05:59"
+        label variable churn        "AnswerRemoved / AnswerSet"
+        format active_hr ans_med_s ans_p90_s %9.1f
+        format fast_share night_share churn %5.2f
+        sort ans_med_s
+        char _dta[suso_paradata] ivtiming
+        di as txt "suso paradata: interviewer timing for " as res "`=_N'" as txt ///
+            " interviewer(s) (`rolenote'); sorted fastest first."
+        return scalar nivw = _N
+        exit
+    }
+
+    * ---------------- by(interview): the canonical QC table ---------------------
+    collapse (sum) n_events=para_one n_answers=para_ans n_removed=para_rem          ///
+        n_invalid=para_inv n_completed=para_cmp n_restarted=para_rst                ///
+        n_rejected=para_rej n_breaks=para_brk active_s=para_act                     ///
+        n_fast=para_fast n_night=para_night                                         ///
+        (count) n_timed=para_ansgap                                                 ///
+        (p50) ans_med_s=para_ansgap (p90) ans_p90_s=para_ansgap                     ///
+        (min) t_first=para_tsu ti0=para_tivw (max) t_last=para_tsu ti1=para_tivw    ///
+        (first) responsible=para_resp, by(interview__id) fast
+
+    quietly gen double active_min  = active_s/60
+    quietly gen double span_min    = cond(!missing(ti0), (ti1-ti0)/60000, (t_last-t_first)/60000)
+    quietly gen double sessions    = n_breaks + 1
+    quietly gen double fast_share  = n_fast/n_timed    if n_timed>0
+    quietly gen double night_share = n_night/n_answers if n_answers>0
+    quietly gen double churn       = n_removed/max(n_answers,1)
+    quietly gen double pace_apm    = n_answers/active_min if active_min>0
+    quietly gen byte   started     = (n_timed>0 | n_completed>0 | active_min>0)
+    quietly drop active_s ti0 ti1 n_breaks n_fast n_night
+
+    format t_first t_last %tcCCYY-NN-DD_HH:MM:SS
+    format active_min span_min ans_med_s ans_p90_s pace_apm %9.1f
+    format fast_share night_share churn %5.2f
+    label variable interview__id "interview id"
+    label variable responsible   "interviewer (at last answer)"
+    label variable n_events      "paradata events"
+    label variable n_answers     "AnswerSet events"
+    label variable n_removed     "AnswerRemoved events"
+    label variable n_invalid     "validation-error events"
+    label variable n_completed   "Completed events"
+    label variable n_restarted   "Restarted events"
+    label variable n_rejected    "rejections (SV+HQ)"
+    label variable n_timed       "answers with a timed gap"
+    label variable sessions      "work sessions"
+    label variable span_min      "first-to-last event, min"
+    label variable active_min    "active time, min (gap-capped)"
+    label variable ans_med_s     "median sec to answer"
+    label variable ans_p90_s     "p90 sec to answer"
+    label variable fast_share    "share answers < `fastsecs' sec"
+    label variable night_share   "share answers 22:00-05:59"
+    label variable churn         "AnswerRemoved / AnswerSet"
+    label variable pace_apm      "answers per active minute"
+    label variable started       "fieldwork started (any interviewer activity)"
+    order interview__id responsible started n_events n_answers n_removed n_invalid          ///
+        n_completed n_restarted n_rejected sessions span_min active_min             ///
+        ans_med_s ans_p90_s fast_share night_share churn pace_apm t_first t_last
+    sort interview__id
+
+    char _dta[suso_paradata]      timing
+    char _dta[suso_para_gapmins]  `gapmins'
+    char _dta[suso_para_fastsecs] `fastsecs'
+
+    quietly summarize active_min, detail
+    local medact : di %9.1f r(p50)
+    local tothr  : di %9.1f r(sum)/60
+    quietly summarize ans_med_s, detail
+    local medans : di %9.1f r(p50)
+    di as txt "suso paradata: timing built for " as res "`=_N'" as txt " interview(s)  (`rolenote')."
+    di as txt "  median active time " as res trim("`medact'") as txt " min   |   median sec/answer " ///
+        as res trim("`medans'") as txt "   |   total interviewer time " as res trim("`tothr'") as txt " hr"
+    di as txt "  gaps capped at " as res "`gapmins'" as txt " min; fast answer = < " ///
+        as res "`fastsecs'" as txt " sec.   Next:  {bf:suso paradata flags}"
+    di as txt "  how to read: {bf:active_min} = hands-on time; a median {bf:ans_med_s} under ~2s or"
+    di as txt "  {bf:fast_share} above ~0.3 in a completed interview suggests speeding — see {bf:flags}."
+    return scalar nints     = _N
+    return scalar medactive = real("`medact'")
+    return scalar medans    = real("`medans'")
+end
+
+* ---- flags: per-interview red flags + interviewer league table -----------------
+program _suso_para_flags, rclass
+    version 14.2
+    syntax [, GAPMins(real 30) FASTsecs(real 2) ALLRoles MINactive(real 10)     ///
+        BURSTshare(real 0.33) NIGHTshare(real 0.25) CHURN(real 0.20)            ///
+        Zcut(real 3.5) TOP(integer 15) SAVing(string) replace ]
+
+    local kind : char _dta[suso_paradata]
+    if "`kind'"=="events" {
+        quietly _suso_para_timing , by(interview) gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
+    }
+    else if "`kind'"!="timing" {
+        _suso_para_need events    // prints the friendly "load first" error
+    }
+    local gapused  : char _dta[suso_para_gapmins]
+    if "`gapused'"=="" local gapused `gapmins'
+
+    capture drop f_speed f_burst f_short f_night f_churn f_outlier n_flags z_active
+
+    * absolute-threshold flags (missing-safe: a missing metric never flags)
+    quietly gen byte f_speed = !missing(ans_med_s)  & ans_med_s  < `fastsecs'
+    quietly gen byte f_burst = !missing(fast_share) & fast_share > `burstshare'
+    quietly gen byte f_short = n_completed>0 & active_min < `minactive'
+    quietly gen byte f_night = !missing(night_share) & night_share > `nightshare' & n_timed>=10
+    quietly gen byte f_churn = !missing(churn) & churn > `churn' & n_timed>=10
+
+    * robust two-sided outlier on log active time (modified z, Iglewicz-Hoaglin)
+    quietly gen byte f_outlier = 0
+    quietly gen double z_active = .
+    tempvar lx dev
+    quietly gen double `lx' = ln(active_min) if active_min>0
+    quietly summarize `lx', detail
+    if r(N)>=10 {
+        local medlx = r(p50)
+        quietly gen double `dev' = abs(`lx'-`medlx')
+        quietly summarize `dev', detail
+        if r(p50)>0 {
+            quietly replace z_active  = 0.6745*(`lx'-`medlx')/r(p50)
+            quietly replace f_outlier = abs(z_active)>`zcut' & !missing(z_active)
+        }
+    }
+    label variable z_active "robust z of ln(active_min)"
+
+    quietly gen byte n_flags = f_speed+f_burst+f_short+f_night+f_churn+f_outlier
+    label variable f_speed   "median sec/answer < `fastsecs'"
+    label variable f_burst   "fast-answer share > `burstshare'"
+    label variable f_short   "completed with active < `minactive' min"
+    label variable f_night   "night share > `nightshare'"
+    label variable f_churn   "answer churn > `churn'"
+    label variable f_outlier "robust |z| active time > `zcut'"
+    label variable n_flags   "number of flags raised"
+    char _dta[suso_paradata] timing
+
+    * ---- summary ----
+    local nints = _N
+    quietly count if n_flags>0
+    local nflag = r(N)
+    local pflag : di %4.1f 100*`nflag'/max(`nints',1)
+    foreach f in speed burst short night churn outlier {
+        quietly count if f_`f'
+        local c_`f' = r(N)
+    }
+    di as txt _n "{hline 72}"
+    di as res "  suso paradata flags" as txt "   (`nints' interviews; gaps capped at `gapused' min)"
+    di as txt "{hline 72}"
+    di as txt "  flagged interviews : " as res "`nflag'" as txt "  (" as res trim("`pflag'") as txt "%)"
+    di as txt "    S  sustained speeding   median sec/answer < `fastsecs'        : " as res "`c_speed'"
+    di as txt "    B  answer bursts        fast-answer share > `burstshare'      : " as res "`c_burst'"
+    di as txt "    T  too short            completed, active < `minactive' min       : " as res "`c_short'"
+    di as txt "    N  night work           night share > `nightshare' (10+ timed ans): " as res "`c_night'"
+    di as txt "    C  answer churn         removed/set > `churn' (10+ timed ans)     : " as res "`c_churn'"
+    di as txt "    Z  duration outlier     robust |z| > `zcut'                   : " as res "`c_outlier'"
+
+    * ---- top flagged interviews ----
+    if `nflag'>0 {
+        gsort -n_flags ans_med_s interview__id
+        local k = min(`top', `nflag')
+        di as txt _n "  top `k' flagged interview(s):"
+        di as txt "  {ul:interview}  {ul:interviewer }  {ul:flags }  {ul: act.min}  {ul:sec/ans}  {ul:fast}  {ul:night}"
+        forvalues i = 1/`k' {
+            local id8 = substr(interview__id[`i'],1,8)
+            local rsp : di %-12s abbrev(responsible[`i'],12)
+            local pat = cond(f_speed[`i'],"S","-") + cond(f_burst[`i'],"B","-")   ///
+                      + cond(f_short[`i'],"T","-") + cond(f_night[`i'],"N","-")   ///
+                      + cond(f_churn[`i'],"C","-") + cond(f_outlier[`i'],"Z","-")
+            local am : di %8.1f active_min[`i']
+            local ms : di %7.1f ans_med_s[`i']
+            local fs : di %4.2f fast_share[`i']
+            local ns : di %5.2f night_share[`i']
+            di as txt "  " as res "`id8'" as txt "   `rsp'" as txt " " as res "`pat'" ///
+                as txt " `am'  `ms'  `fs'  `ns'"
+        }
+        sort interview__id
+    }
+
+    * ---- interviewer league table (share of their interviews flagged) ----
+    quietly count if responsible!=""
+    if r(N)>0 {
+        preserve
+        quietly gen byte __any = n_flags>0
+        collapse (count) n_ints=n_flags (sum) n_flagged=__any                    ///
+            (p50) ans_med_s active_min (mean) fast_share night_share, by(responsible) fast
+        quietly drop if responsible==""
+        quietly gen double flag_share = n_flagged/n_ints
+        gsort -flag_share -n_flagged responsible
+        local k = min(10, _N)
+        di as txt _n "  interviewers, by share of interviews flagged (top `k'):"
+        di as txt "  {ul:interviewer     }  {ul:ints}  {ul:flagged}  {ul:share}  {ul:med act.min}  {ul:med sec/ans}"
+        forvalues i = 1/`k' {
+            local rsp : di %-16s abbrev(responsible[`i'],16)
+            local ni  : di %4.0f n_ints[`i']
+            local nf  : di %5.0f n_flagged[`i']
+            local sh  : di %5.2f flag_share[`i']
+            local am  : di %9.1f active_min[`i']
+            local ms  : di %9.1f ans_med_s[`i']
+            di as txt "  `rsp'  `ni'   `nf'   " as res "`sh'" as txt "    `am'      `ms'"
+        }
+        restore
+    }
+    di as txt _n "  data in memory = one row per interview with f_* flags (see {bf:describe})."
+    di as txt "{hline 72}"
+
+    if `"`saving'"'!="" {
+        if "`replace'"=="" {
+            capture confirm new file `"`saving'"'
+            if _rc {
+                di as err "suso: file already exists. Use -replace-."
+                exit 602
+            }
+        }
+        quietly save `"`saving'"', `replace'
+        di as txt "suso paradata: flag table saved to " as res `"`saving'"'
+    }
+
+    return scalar nints    = `nints'
+    return scalar nflagged = `nflag'
+    foreach f in speed burst short night churn outlier {
+        return scalar n_`f' = `c_`f''
+    }
+end
+
+* ---- skips: gate flips & skip-triggered answer-removal cascades ----------------
+* A "cascade" = a run of >= cascade() consecutive AnswerRemoved events that
+* starts within window() seconds of an AnswerSet (the trigger). This is the
+* paradata signature of a skip flip: the interviewer changes a gate/filter
+* answer and Survey Solutions wipes the section it disables. The engine
+* enforces enablement at capture time, so this — not "answered while
+* disabled" — is the skip check that paradata supports.
+program _suso_para_skips, rclass
+    version 14.2
+    syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ]
+    _suso_para_need events
+    if `cascade'<2 {
+        di as err "suso paradata skips: cascade() is the minimum run of AnswerRemoved events; use 2 or more."
+        exit 198
+    }
+    if `window'<=0 {
+        di as err "suso paradata skips: window() must be positive (seconds)."
+        exit 198
+    }
+
+    local hasvar 0
+    capture confirm variable para_var
+    if !_rc local hasvar 1
+    if !`hasvar' di as txt "suso paradata skips: note — no parameters column (reduced export?); cascades are detected but trigger variables cannot be named."
+
+    capture drop sk_*
+
+    * responsible (same rule as timing: at the last answer, else at the last event)
+    quietly gen sk_resp = ""
+    capture confirm string variable responsible
+    if !_rc {
+        tempvar isa
+        quietly gen byte `isa' = para_ans
+        quietly bysort interview__id (`isa' para_ord para_seq): replace sk_resp = responsible[_N]
+    }
+
+    * carry the most recent AnswerSet (variable + time) forward through the stream
+    if `hasvar' quietly gen sk_lastvar = para_var if para_ans
+    else        quietly gen sk_lastvar = "(unnamed)" if para_ans
+    quietly gen double sk_lastts = para_tsu if para_ans
+    quietly bysort interview__id (para_ord para_seq): ///
+        replace sk_lastvar = sk_lastvar[_n-1] if sk_lastvar=="" & _n>1
+    quietly by interview__id: replace sk_lastts = sk_lastts[_n-1] if missing(sk_lastts) & _n>1
+
+    * runs of consecutive AnswerRemoved events
+    tempvar rise
+    quietly by interview__id: gen byte `rise' = para_rem & para_rem[_n-1]!=1
+    quietly by interview__id: gen double sk_run = sum(`rise')
+    quietly bysort interview__id sk_run para_rem (para_ord para_seq): ///
+        gen long sk_len = _N if para_rem
+    quietly by interview__id sk_run para_rem: gen byte sk_first = (_n==1) & para_rem
+
+    * cascade test on the first removal of each run (missing-safe: . <= x is false)
+    quietly gen byte sk_casc1 = sk_first & sk_len>=`cascade' & !missing(sk_len)   ///
+        & (para_tsu - sk_lastts) <= `window'*1000 & sk_lastvar!=""
+    quietly by interview__id sk_run para_rem: gen byte sk_casc = (sk_casc1[1]==1) if para_rem
+    quietly replace sk_casc = 0 if missing(sk_casc)
+    quietly gen sk_trig = sk_lastvar if sk_casc1
+    quietly by interview__id sk_run para_rem: replace sk_trig = sk_trig[1] if sk_casc & para_rem
+
+    quietly count if sk_casc1
+    local ncasc = r(N)
+    quietly count if sk_casc
+    local nwiped = r(N)
+
+    * ---- stage 1: collapse to (interview x trigger) — everything below is small,
+    *      so the multi-million-row events are copied/sorted exactly once ----
+    collapse (sum) n_answers=para_ans n_removed=para_rem n_cascades=sk_casc1     ///
+        casc_removed=sk_casc (first) responsible=sk_resp,                        ///
+        by(interview__id sk_trig) fast
+    tempfile sk1
+    quietly save `"`sk1'"'
+
+    di as txt _n "{hline 72}"
+    di as res "  suso paradata skips" as txt "   (cascade = >=`cascade' removals within `window's of an answer)"
+    di as txt "{hline 72}"
+
+    * ---- survey-level: which gate variables get flipped? ----
+    if `hasvar' & `ncasc'>0 {
+        quietly keep if sk_trig!=""
+        collapse (sum) n_flips=n_cascades wiped=casc_removed                     ///
+            (count) n_ints=n_cascades, by(sk_trig) fast
+        gsort -wiped -n_flips sk_trig
+        local k = min(10, _N)
+        tempname SKT
+        matrix `SKT' = J(`k', 3, 0)
+        local trigret ""
+        di as txt "  trigger variables wiping the most answers (top `k'):"
+        di as txt "  {ul:variable                }  {ul:flips}  {ul:interviews}  {ul:answers wiped}"
+        forvalues i = 1/`k' {
+            local vv : di %-24s abbrev(sk_trig[`i'],24)
+            local nf : di %5.0f n_flips[`i']
+            local ni : di %10.0f n_ints[`i']
+            local wp : di %13.0f wiped[`i']
+            di as txt "  " as res "`vv'" as txt "  `nf'  `ni'  `wp'"
+            local trigret `"`trigret' `=sk_trig[`i']'"'
+            matrix `SKT'[`i',1] = n_flips[`i']
+            matrix `SKT'[`i',2] = n_ints[`i']
+            matrix `SKT'[`i',3] = wiped[`i']
+        }
+        return local triggers `"`trigret'"'
+        return matrix triggers_stats = `SKT'
+        quietly use `"`sk1'"', clear
+    }
+
+    * ---- stage 2: one row per interview ----
+    quietly gen byte sk_tg = (sk_trig!="")
+    collapse (sum) n_answers n_removed n_cascades casc_removed n_triggers=sk_tg  ///
+        (first) responsible, by(interview__id) fast
+    quietly gen double wipe_share = casc_removed/max(n_answers,1)
+    label variable interview__id "interview id"
+    label variable responsible   "interviewer (at last answer)"
+    label variable n_answers     "AnswerSet events"
+    label variable n_removed     "AnswerRemoved events (all)"
+    label variable n_cascades    "skip cascades (gate flips)"
+    label variable casc_removed  "answers wiped by cascades"
+    label variable n_triggers    "distinct gate variables flipped"
+    label variable wipe_share    "wiped / answers set"
+    format wipe_share %5.2f
+    sort interview__id
+    char _dta[suso_paradata] skips
+
+    quietly count if n_cascades>0
+    local naff = r(N)
+    local nints = _N
+    di as txt "  cascades " as res "`ncasc'" as txt "  |  answers wiped " as res "`nwiped'" ///
+        as txt "  |  interviews affected " as res "`naff'" as txt " of " as res "`nints'"
+
+    * ---- top interviews ----
+    if `naff'>0 {
+        gsort -casc_removed -n_cascades interview__id
+        local k = min(`top', `naff')
+        di as txt _n "  interviews wiping the most answers (top `k'):"
+        di as txt "  {ul:interview}  {ul:interviewer }  {ul:cascades}  {ul:wiped}  {ul:gates}  {ul:wiped/set}"
+        forvalues i = 1/`k' {
+            local id8 = substr(interview__id[`i'],1,8)
+            local rsp : di %-12s abbrev(responsible[`i'],12)
+            local nc : di %8.0f n_cascades[`i']
+            local wp : di %5.0f casc_removed[`i']
+            local ng : di %5.0f n_triggers[`i']
+            local ws : di %9.2f wipe_share[`i']
+            di as txt "  " as res "`id8'" as txt "   `rsp'" as txt "`nc'  `wp'  `ng'  `ws'"
+        }
+        sort interview__id
+
+        * ---- interviewer league (share of interviews with any cascade) ----
+        quietly count if responsible!=""
+        if r(N)>0 {
+            preserve
+            tempvar anyc
+            quietly gen byte `anyc' = n_cascades>0
+            collapse (count) n_ints=n_cascades (sum) n_casc=`anyc'                ///
+                flips=n_cascades wiped=casc_removed, by(responsible) fast
+            quietly drop if responsible==""
+            quietly gen double casc_share = n_casc/n_ints
+            gsort -casc_share -wiped responsible
+            local k = min(10, _N)
+            di as txt _n "  interviewers, by share of interviews with a cascade (top `k'):"
+            di as txt "  {ul:interviewer     }  {ul:ints}  {ul:w/ cascade}  {ul:share}  {ul:flips}  {ul:wiped}"
+            forvalues i = 1/`k' {
+                local rsp : di %-16s abbrev(responsible[`i'],16)
+                local ni : di %4.0f n_ints[`i']
+                local nc : di %10.0f n_casc[`i']
+                local sh : di %5.2f casc_share[`i']
+                local nf : di %5.0f flips[`i']
+                local wp : di %5.0f wiped[`i']
+                di as txt "  `rsp'  `ni'  `nc'  " as res "`sh'" as txt "  `nf'  `wp'"
+            }
+            restore
+        }
+    }
+    di as txt _n "  A cascade can be a legitimate correction; systematic patterns by the"
+    di as txt "  same interviewer or the same gate variable are what warrant review."
+    di as txt "  data in memory = one row per interview; merge on interview__id with"
+    di as txt "  the {bf:suso paradata flags} table for a combined QC file."
+    di as txt "{hline 72}"
+
+    if `"`saving'"'!="" {
+        if "`replace'"=="" {
+            capture confirm new file `"`saving'"'
+            if _rc {
+                di as err "suso: file already exists. Use -replace-."
+                exit 602
+            }
+        }
+        quietly save `"`saving'"', `replace'
+        di as txt "suso paradata: skip table saved to " as res `"`saving'"'
+    }
+
+    return scalar nints     = `nints'
+    return scalar ncascades = `ncasc'
+    return scalar nwiped    = `nwiped'
+    return scalar naffected = `naff'
+end
+
+* ---- report: dynamic self-contained HTML QC report ------------------------------
+* All data is embedded as JSON; vanilla JS (no CDN, works offline) recomputes
+* every figure and table live as the user filters by enumerator, searches
+* questions, or moves the flag thresholds / night window.
+program _suso_para_report, rclass
+    version 14.2
+    syntax [, SAVing(string) replace TITle(string)                               ///
+        GAPMins(real 30) FASTsecs(real 2) ALLRoles                               ///
+        CASCade(integer 3) WINdow(real 60) LITEcap(integer 15000) ]
+    _suso_para_need events
+
+    if `"`saving'"'=="" local saving "suso_paradata_qc.html"
+    if "`replace'"=="" {
+        capture confirm new file `"`saving'"'
+        if _rc {
+            di as err "suso: file already exists. Use -replace-."
+            exit 602
+        }
+    }
+    if `"`title'"'=="" {
+        local title "Paradata QC report"
+        if "$SUSO_WS"!="" local title "Paradata QC report — $SUSO_WS"
+    }
+    _suso_para_hesc `"`title'"'
+    local htitle `"`r(out)'"'
+
+    di as txt "suso paradata: building the interactive QC report ..."
+    tempfile EV EVD SK QT DAILY HHF GGF MERGED
+    quietly save `"`EV'"'
+    local nevents = _N
+
+    _suso_para_derive , gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
+    local rolenote `"`r(rolenote)'"'
+    quietly save `"`EVD'"'
+
+    * ---- question timing table --------------------------------------------------
+    local hasq 0
+    capture confirm variable para_var
+    if !_rc {
+        quietly keep if para_ans & para_ivw & para_var!=""
+        if _N>0 {
+            local hasq 1
+            tempvar tag
+            quietly bysort para_var interview__id: gen byte `tag' = _n==1
+            collapse (sum) qn=para_one qni=`tag' qnf=para_fast (count) qnt=para_ansgap ///
+                (p50) qmed=para_ansgap (p90) qp90=para_ansgap, by(para_var) fast
+            quietly gen double qfsh = qnf/qnt if qnt>0
+            gsort -qmed para_var
+            quietly save `"`QT'"'
+        }
+    }
+
+    * ---- interviewer-day volume + lite decision ----------------------------------
+    quietly use `"`EVD'"', clear
+    quietly keep if para_ans & para_ivw & !missing(para_tsu)
+    if _N==0 {
+        di as err "suso paradata report: no interviewer answer events — nothing to report on."
+        exit 2000
+    }
+    tempvar f1
+    quietly bysort interview__id: gen byte `f1' = _n==1
+    quietly count if `f1'
+    local lite = cond(r(N)>`litecap', 1, 0)
+    capture confirm string variable responsible
+    if _rc quietly gen responsible = para_resp
+    tempvar ddv
+    quietly gen long `ddv' = dofc(para_tsu)
+    quietly contract responsible `ddv', freq(__pc)
+    quietly drop if missing(`ddv')
+    local dbucket 0
+    if _N>2500 {
+        local dbucket 1
+        quietly replace `ddv' = `ddv' - mod(`ddv', 7)
+        collapse (sum) __pc, by(responsible `ddv') fast
+    }
+    quietly gen long __dd = `ddv'
+    quietly save `"`DAILY'"'
+    local dnote = cond(`dbucket', "7-day blocks", "per day")
+
+    * ---- per-interview hour and answer-gap vectors (skipped for huge surveys) ----
+    if !`lite' {
+        quietly use `"`EVD'"', clear
+        quietly keep if para_ans & para_ivw & !missing(para_tsl)
+        quietly gen byte __hh = hh(para_tsl)
+        quietly contract interview__id __hh, freq(__pc)
+        forvalues h = 0/23 {
+            quietly gen long h`h' = cond(__hh==`h', __pc, 0)
+        }
+        collapse (sum) h0-h23, by(interview__id) fast
+        quietly save `"`HHF'"'
+        quietly use `"`EVD'"', clear
+        quietly keep if !missing(para_ansgap)
+        if _N>0 {
+            quietly gen byte __g = min(floor(para_ansgap), 20)
+            quietly contract interview__id __g, freq(__pc)
+            forvalues g = 0/20 {
+                quietly gen long g`g' = cond(__g==`g', __pc, 0)
+            }
+            collapse (sum) g0-g20, by(interview__id) fast
+            quietly save `"`GGF'"'
+        }
+        else local lite 1
+    }
+
+    * ---- skip cascades ------------------------------------------------------------
+    quietly use `"`EV'"', clear
+    quietly _suso_para_skips , cascade(`cascade') window(`window')
+    local ncasc = r(ncascades)
+    local nwiped = r(nwiped)
+    local trignames `"`r(triggers)'"'
+    tempname RT
+    capture matrix `RT' = r(triggers_stats)
+    quietly keep interview__id n_cascades casc_removed n_triggers
+    quietly save `"`SK'"'
+
+    * ---- timing + flags (defaults; live thresholds are client-side) ---------------
+    quietly use `"`EVD'"', clear
+    quietly _suso_para_timing , by(interview) gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
+    quietly _suso_para_flags
+    quietly merge 1:1 interview__id using `"`SK'"', nogenerate
+    foreach v in n_cascades casc_removed n_triggers {
+        quietly replace `v' = 0 if missing(`v')
+    }
+    if !`lite' {
+        quietly merge 1:1 interview__id using `"`HHF'"', nogenerate
+        quietly merge 1:1 interview__id using `"`GGF'"', nogenerate
+        forvalues h = 0/23 {
+            quietly replace h`h' = 0 if missing(h`h')
+        }
+        forvalues g = 0/20 {
+            quietly replace g`g' = 0 if missing(g`g')
+        }
+    }
+    char _dta[suso_paradata] timing
+    local nints = _N
+    quietly count if started
+    local nstarted = r(N)
+    quietly count if n_completed>0
+    local ncompleted = r(N)
+    local nuntouched = `nints' - `nstarted'
+    quietly summarize active_min
+    local tothrc : di %12.0fc r(sum)/60
+    local tothrc = trim("`tothrc'")
+    local nintsc : di %12.0fc `nints'
+    local nintsc = trim("`nintsc'")
+    local nstartedc : di %12.0fc `nstarted'
+    local nstartedc = trim("`nstartedc'")
+    local ncompletedc : di %12.0fc `ncompleted'
+    local ncompletedc = trim("`ncompletedc'")
+    local nuntouchedc : di %12.0fc `nuntouched'
+    local nuntouchedc = trim("`nuntouchedc'")
+    local warnc = cond(`ncasc'>0, "warn", "dim")
+    quietly save `"`MERGED'"'
+
+    * ---- write the HTML -----------------------------------------------------------
+    local now = trim("`c(current_date)' `c(current_time)'")
+    tempname fh
+    quietly file open `fh' using `"`saving'"', write replace text
+    file write `fh' `"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">"' _n
+    file write `fh' `"<title>`htitle'</title><style>"' _n
+    file write `fh' `"body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f4f5f7;color:#1a1a1a}"' _n
+    file write `fh' `".logobar{background:#fff;padding:10px 28px;border-bottom:1px solid #e0e0e0}"' _n
+    file write `fh' `".logobar .wbtxt{font-size:13px;letter-spacing:.06em;color:#002244;font-weight:600}"' _n
+    file write `fh' `".logobar .wbtxt span{color:#8a8a8a;font-weight:400}"' _n
+    file write `fh' `".mast{background:#002244;color:#fff;padding:18px 28px}"' _n
+    file write `fh' `".mast h1{margin:0;font-size:22px;font-weight:600}"' _n
+    file write `fh' `".mast .sub{color:#c9d4e0;font-size:12.5px;margin-top:5px}"' _n
+    file write `fh' `".wrap{max-width:1040px;margin:0 auto;padding:16px 28px 40px}"' _n
+    file write `fh' `".cards{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 4px}"' _n
+    file write `fh' `".card{flex:1 1 130px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 13px;border-top:3px solid #002244}"' _n
+    file write `fh' `".card.dim{border-top-color:#9aa7b5}.card.warn{border-top-color:#C9A227}"' _n
+    file write `fh' `".card .v{font-size:20px;font-weight:700;color:#002244}"' _n
+    file write `fh' `".card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
+    file write `fh' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;position:sticky;top:0;z-index:5;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
+    file write `fh' `".ctrl{display:flex;flex-direction:column;gap:3px}"' _n
+    file write `fh' `".ctrl label{font-size:10.5px;color:#555;text-transform:uppercase;letter-spacing:.03em}"' _n
+    file write `fh' `".ctrl input,.ctrl select{font-size:13px;padding:4px 6px;border:1px solid #c9cfd6;border-radius:5px;min-width:64px}"' _n
+    file write `fh' `"#c_resp{min-width:220px}"' _n
+    file write `fh' `"#c_reset{background:#002244;color:#fff;border:0;border-radius:5px;padding:7px 14px;font-size:12.5px;cursor:pointer}"' _n
+    file write `fh' `".verdict{margin:10px 0;padding:10px 14px;border-radius:8px;font-size:13.5px;font-weight:600}"' _n
+    file write `fh' `".verdict.ok{background:#eaf5ec;color:#1e6b34;border:1px solid #bfe0c8}"' _n
+    file write `fh' `".verdict.warn{background:#fdf6e3;color:#7a5b00;border:1px solid #ecd9a0}"' _n
+    file write `fh' `"h2{font-size:15px;color:#002244;border-bottom:2px solid #C9A227;padding-bottom:4px;margin:24px 0 4px}"' _n
+    file write `fh' `".note{font-size:12px;color:#555;margin:2px 0 8px}"' _n
+    file write `fh' `"section{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:8px 16px 14px;margin-top:8px}"' _n
+    file write `fh' `"table{border-collapse:collapse;width:100%;font-size:12.5px}"' _n
+    file write `fh' `"th{background:#002244;color:#fff;text-align:left;padding:6px 8px;font-weight:600}"' _n
+    file write `fh' `"th.srt{cursor:pointer}th.srt:hover{background:#0a3560}"' _n
+    file write `fh' `"td{padding:5px 8px;border-bottom:1px solid #eef0f2}tr:nth-child(even) td{background:#fafbfc}"' _n
+    file write `fh' `"td.r,th.r{text-align:right}tr.hot td{background:#fdf6e3}"' _n
+    file write `fh' `".mono{font-family:Consolas,monospace}"' _n
+    file write `fh' `".bar{display:inline-block;height:9px;background:#C9A227;border-radius:2px;vertical-align:middle}"' _n
+    file write `fh' `".nodata{color:#888;font-size:12px}"' _n
+    file write `fh' `".foot{font-size:11px;color:#777;margin-top:26px;line-height:1.5}"' _n
+    file write `fh' `"#lite_note,#q_more,#l_more,#w_none,#n_act{font-size:11.5px;color:#8a6d00}"' _n
+    file write `fh' `"</style></head><body>"' _n
+    file write `fh' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
+    file write `fh' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
+    file write `fh' `"<div class="mast"><h1>`htitle'</h1>"' _n
+    local sub "Generated `now'"
+    if "$SUSO_BASE"!="" local sub "`sub' &nbsp;-&nbsp; $SUSO_BASE"
+    if "$SUSO_GUID"!="" local sub "`sub' &nbsp;-&nbsp; questionnaire $SUSO_GUID v$SUSO_QVER"
+    file write `fh' `"<div class="sub">`sub' &nbsp;-&nbsp; `nevents' paradata events</div></div>"' _n
+    file write `fh' `"<div class="wrap">"' _n
+    file write `fh' `"<div class="cards">"' _n
+    file write `fh' `"<div class="card dim"><div class="v">`nintsc'</div><div class="k">records in paradata</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v">`nstartedc'</div><div class="k">fieldwork started</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v">`ncompletedc'</div><div class="k">completed</div></div>"' _n
+    file write `fh' `"<div class="card dim"><div class="v">`nuntouchedc'</div><div class="k">never started (preload only)</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v">`tothrc'</div><div class="k">interviewer hours</div></div>"' _n
+    file write `fh' `"<div class="card `warnc'"><div class="v">`ncasc'</div><div class="k">skip cascades (`nwiped' wiped)</div></div>"' _n
+    file write `fh' `"</div>"' _n
+    file write `fh' `"<div class="panel">"' _n
+    file write `fh' `"<div class="ctrl"><label>Enumerator</label><select id="c_resp"></select></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Fast answer &lt; sec</label><input id="c_fs" type="number" min="1" max="10" step="1"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Burst share %</label><input id="c_burst" type="number" min="5" max="90" step="1" value="33"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Min active min</label><input id="c_minact" type="number" min="1" max="240" step="1" value="10"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Night from</label><select id="c_n1"></select></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Night to</label><select id="c_n2"></select></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Night share %</label><input id="c_nshare" type="number" min="1" max="100" step="1" value="25"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Churn %</label><input id="c_churn" type="number" min="1" max="100" step="1" value="20"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Outlier z</label><input id="c_z" type="number" min="2" max="6" step="0.5" value="3.5"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Show top</label><input id="c_top" type="number" min="5" max="100" step="5" value="15"></div>"' _n
+    file write `fh' `"<button id="c_reset">Reset</button>"' _n
+    file write `fh' `"<span id="lite_note"></span>"' _n
+    file write `fh' `"</div>"' _n
+    file write `fh' `"<div class="cards">"' _n
+    file write `fh' `"<div class="card"><div class="v" id="k_started">-</div><div class="k">interviews in view</div></div>"' _n
+    file write `fh' `"<div class="card warn"><div class="v" id="k_flagged">-</div><div class="k">flagged</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v" id="k_medact">-</div><div class="k">median active min</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v" id="k_medans">-</div><div class="k">median sec / answer</div></div>"' _n
+    file write `fh' `"</div>"' _n
+    file write `fh' `"<div id="verdict" class="verdict"></div>"' _n
+    file write `fh' `"<h2>Behaviour flags</h2>"' _n
+    file write `fh' `"<div class="note">Screening signals, not proof. Adjust the thresholds in the panel above; everything on this page recomputes instantly. Only interviews with actual fieldwork are analysed; API-preloaded grid records are set aside.</div>"' _n
+    file write `fh' `"<section id="ch_flags"></section>"' _n
+    file write `fh' `"<h2>How long do interviews take?</h2>"' _n
+    file write `fh' `"<div class="note">Active interviewer time per interview: gaps over `gapmins' min and pauses excluded. <span id="n_act"></span></div>"' _n
+    file write `fh' `"<section id="ch_act"></section>"' _n
+    file write `fh' `"<h2>How fast are answers?</h2>"' _n
+    file write `fh' `"<div class="note">Median seconds per answer, one value per interview (1-second bins; last bin 20s+). Gold bins fall under the fast-answer threshold - sustained answering that fast is the classic fabrication signature.</div>"' _n
+    file write `fh' `"<section id="ch_med"></section>"' _n
+    file write `fh' `"<h2>When is the work happening?</h2>"' _n
+    file write `fh' `"<div class="note">Interviewer answers by hour of day (device-local time). Gold bars mark the night window set in the panel - night answering on establishment surveys usually means desk work, not fieldwork.</div>"' _n
+    file write `fh' `"<section id="ch_hour"></section>"' _n
+    file write `fh' `"<h2>Fieldwork over time</h2>"' _n
+    file write `fh' `"<div class="note">Interviewer answers recorded per day (`dnote'). Responds to the enumerator filter.</div>"' _n
+    file write `fh' `"<section id="ch_daily"></section>"' _n
+    file write `fh' `"<h2>Enumerators</h2>"' _n
+    file write `fh' `"<div class="note">Compare within the team: someone whose answer speed or night share stands well apart from colleagues on the same instrument is the one to review first. Gold rows have at least one flagged interview. <span id="l_more"></span></div>"' _n
+    file write `fh' `"<section><table id="t_league"></table></section>"' _n
+    file write `fh' `"<h2>Interviews to review first</h2>"' _n
+    file write `fh' `"<div class="note">Sorted by flags raised, then answers wiped, then speed. Flag pattern S B T N C Z as above. Interview ids are full and copyable for lookup in Headquarters. <span id="w_none"></span></div>"' _n
+    file write `fh' `"<section><table id="t_worst"></table></section>"' _n
+    file write `fh' `"<h2>Question timing</h2>"' _n
+    file write `fh' `"<div class="note">Median seconds to answer each question, across interviews with fieldwork. Type to filter; click a column header to sort. Slow questions are usually hard questions - candidates for rewording or interviewer training. <span id="q_more"></span></div>"' _n
+    file write `fh' `"<section><div class="ctrl" style="max-width:280px;margin-bottom:8px"><label>Filter questions</label><input id="c_q" type="text" placeholder="variable name contains..."></div><table id="t_q"></table></section>"' _n
+    * static skip-trigger table
+    if `ncasc'>0 & `"`trignames'"'!="" {
+        file write `fh' `"<h2>Gate variables wiping answers</h2>"' _n
+        file write `fh' `"<div class="note">A cascade is `cascade'+ consecutive answer removals within `window' seconds of an answer (a gate/filter flip). Occasional cascades are honest corrections; the same gate flipped across many interviews is skip abuse or a badly worded filter. These are computed at build time.</div>"' _n
+        file write `fh' `"<section><table><tr><th>variable</th><th class="r">flips</th><th class="r">interviews</th><th class="r">answers wiped</th></tr>"' _n
+        local i = 0
+        foreach t of local trignames {
+            local ++i
+            _suso_para_hesc `t'
+            file write `fh' `"<tr><td class="mono">`r(out)'</td><td class="r">`=`RT'[`i',1]'</td><td class="r">`=`RT'[`i',2]'</td><td class="r">`=`RT'[`i',3]'</td></tr>"' _n
+        }
+        file write `fh' `"</table></section>"' _n
+    }
+    _suso_para_hesc `"`rolenote'"'
+    local rnesc `"`r(out)'"'
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Active time sums inter-event gaps within each interview, capping every gap at `gapmins' minutes and zeroing Paused-to-Resumed intervals. Answer speed is the gap preceding each AnswerSet within a session. Night uses device-local time. Duration outliers use a robust (median/MAD) z on log active time. Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from all figures. Flags are screening signals for review, not evidence of fabrication.<br><b>Produced by</b> suso paradata report (suso v1.7.0) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"</div>"' _n
+
+    * ---- embedded data ------------------------------------------------------------
+    file write `fh' `"<script>"' _n
+    file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"lite":`lite'},"' _n
+    file write `fh' `""rows":["' _n
+    quietly use `"`MERGED'"', clear
+    quietly keep if started
+    forvalues i = 1/`=_N' {
+        _suso_jsonesc `"`=responsible[`i']'"'
+        local rj `"`r(js)'"'
+        local med = cond(missing(ans_med_s[`i']), "null", string(ans_med_s[`i'],"%12.2f"))
+        local fsh = cond(missing(fast_share[`i']), "null", string(fast_share[`i'],"%12.3f"))
+        local nsh = cond(missing(night_share[`i']), "null", string(night_share[`i'],"%12.3f"))
+        local vecs ""
+        if !`lite' {
+            local hv "`=h0[`i']'"
+            forvalues h = 1/23 {
+                local hv "`hv',`=h`h'[`i']'"
+            }
+            local gv "`=g0[`i']'"
+            forvalues g = 1/20 {
+                local gv "`gv',`=g`g'[`i']'"
+            }
+            local vecs `","h":[`hv'],"g":[`gv']"'
+        }
+        local sep = cond(`i'==1, "", ",")
+        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","r":"`rj'","nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']'`vecs'}"' _n
+    }
+    file write `fh' `"],"' _n
+    file write `fh' `""q":["' _n
+    if `hasq' {
+        quietly use `"`QT'"', clear
+        forvalues i = 1/`=_N' {
+            _suso_jsonesc `"`=para_var[`i']'"'
+            local vj `"`r(js)'"'
+            local med = cond(missing(qmed[`i']), "null", string(qmed[`i'],"%12.1f"))
+            local p90 = cond(missing(qp90[`i']), "null", string(qp90[`i'],"%12.1f"))
+            local fsh = cond(missing(qfsh[`i']), "null", string(qfsh[`i'],"%12.3f"))
+            local sep = cond(`i'==1, "", ",")
+            file write `fh' `"`sep'{"v":"`vj'","n":`=qn[`i']',"ni":`=qni[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
+        }
+    }
+    file write `fh' `"],"' _n
+    file write `fh' `""daily":["' _n
+    quietly use `"`DAILY'"', clear
+    forvalues i = 1/`=_N' {
+        _suso_jsonesc `"`=responsible[`i']'"'
+        local rj `"`r(js)'"'
+        local dl : di %tdCCYY-NN-DD __dd[`i']
+        local sep = cond(`i'==1, "", ",")
+        file write `fh' `"`sep'{"r":"`rj'","d":"`=trim("`dl'")'","c":`=__pc[`i']'}"' _n
+    }
+    file write `fh' `"]};"' _n
+    file write `fh' `"/* suso paradata report - dynamic engine. Pure compute core in P (node-testable), DOM layer below. */"' _n
+    file write `fh' `"var P = {"' _n
+    file write `fh' `"  sum: function(a){ var s=0,i; for(i=0;i<a.length;i++) s+=a[i]; return s; },"' _n
+    file write `fh' `"  inWindow: function(h,n1,n2){ if(n1===n2) return false; if(n1<n2) return h>=n1&&h<n2; return h>=n1||h<n2; },"' _n
+    file write `fh' `"  fastShare: function(row,fs){"' _n
+    file write `fh' `"    if(!row.g) return row.fsh;"' _n
+    file write `fh' `"    var t=P.sum(row.g); if(t<=0) return null;"' _n
+    file write `fh' `"    var f=0,i; for(i=0;i<row.g.length&&i<fs;i++) f+=row.g[i];"' _n
+    file write `fh' `"    return f/t;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  nightShare: function(row,n1,n2){"' _n
+    file write `fh' `"    if(!row.h) return row.nsh;"' _n
+    file write `fh' `"    var t=P.sum(row.h); if(t<=0) return null;"' _n
+    file write `fh' `"    var s=0,i; for(i=0;i<24;i++) if(P.inWindow(i,n1,n2)) s+=row.h[i];"' _n
+    file write `fh' `"    return s/t;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  median: function(a){"' _n
+    file write `fh' `"    if(!a.length) return null;"' _n
+    file write `fh' `"    var b=a.slice().sort(function(x,y){return x-y;});"' _n
+    file write `fh' `"    var m=Math.floor(b.length/2);"' _n
+    file write `fh' `"    return b.length%2 ? b[m] : (b[m-1]+b[m])/2;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  zctx: function(rows){"' _n
+    file write `fh' `"    var lx=[],i;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].act>0) lx.push(Math.log(rows[i].act));"' _n
+    file write `fh' `"    if(lx.length<10) return null;"' _n
+    file write `fh' `"    var med=P.median(lx), dev=[],j;"' _n
+    file write `fh' `"    for(j=0;j<lx.length;j++) dev.push(Math.abs(lx[j]-med));"' _n
+    file write `fh' `"    var mad=P.median(dev);"' _n
+    file write `fh' `"    if(!(mad>0)) return null;"' _n
+    file write `fh' `"    return {med:med, mad:mad};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  zval: function(row,ctx){"' _n
+    file write `fh' `"    if(!ctx||!(row.act>0)) return null;"' _n
+    file write `fh' `"    return 0.6745*(Math.log(row.act)-ctx.med)/ctx.mad;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  flagsFor: function(row,S,ctx){"' _n
+    file write `fh' `"    var fsh=P.fastShare(row,S.fs), nsh=P.nightShare(row,S.n1,S.n2), z=P.zval(row,ctx);"' _n
+    file write `fh' `"    return ["' _n
+    file write `fh' `"      row.med!==null && row.med<S.fs,"' _n
+    file write `fh' `"      fsh!==null && fsh>S.burst,"' _n
+    file write `fh' `"      row.nc>0 && row.act<S.minact,"' _n
+    file write `fh' `"      nsh!==null && nsh>S.nshare && row.nt>=10,"' _n
+    file write `fh' `"      row.ch!==null && row.ch>S.churn && row.nt>=10,"' _n
+    file write `fh' `"      z!==null && Math.abs(z)>S.z"' _n
+    file write `fh' `"    ];"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  filterRows: function(rows,resp){"' _n
+    file write `fh' `"    if(!resp) return rows.slice();"' _n
+    file write `fh' `"    var out=[],i;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].r===resp) out.push(rows[i]);"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  aggregate: function(rows,S){"' _n
+    file write `fh' `"    var ctx=P.zctx(rows), tot=[0,0,0,0,0,0], flagged=[], i,j;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      var f=P.flagsFor(rows[i],S,ctx), n=0;"' _n
+    file write `fh' `"      for(j=0;j<6;j++){ if(f[j]){tot[j]++;n++;} }"' _n
+    file write `fh' `"      rows[i]._f=f; rows[i]._n=n;"' _n
+    file write `fh' `"      if(n>0||rows[i].cas>0) flagged.push(rows[i]);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    flagged.sort(function(a,b){"' _n
+    file write `fh' `"      if(b._n!==a._n) return b._n-a._n;"' _n
+    file write `fh' `"      if(b.wip!==a.wip) return b.wip-a.wip;"' _n
+    file write `fh' `"      var am=a.med===null?1e9:a.med, bm=b.med===null?1e9:b.med;"' _n
+    file write `fh' `"      return am-bm;"' _n
+    file write `fh' `"    });"' _n
+    file write `fh' `"    var nfl=0;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i]._n>0) nfl++;"' _n
+    file write `fh' `"    return {tot:tot, flagged:flagged, nflagged:nfl, n:rows.length};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  niceBin: function(p99){"' _n
+    file write `fh' `"    var c=[1,2,5,10,15,30,60,120,240,480], i, b=1;"' _n
+    file write `fh' `"    for(i=0;i<c.length;i++){ b=c[i]; if(c[i]*20>=p99) break; }"' _n
+    file write `fh' `"    return b;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  binsActive: function(rows){"' _n
+    file write `fh' `"    var act=[],i;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) act.push(rows[i].act);"' _n
+    file write `fh' `"    if(!act.length) return {w:1,c:[]};"' _n
+    file write `fh' `"    var s=act.slice().sort(function(x,y){return x-y;});"' _n
+    file write `fh' `"    var p99=Math.max(s[Math.min(s.length-1,Math.floor(0.99*s.length))],1);"' _n
+    file write `fh' `"    var w=P.niceBin(p99), c=[],k;"' _n
+    file write `fh' `"    for(k=0;k<20;k++) c.push(0);"' _n
+    file write `fh' `"    for(i=0;i<act.length;i++) c[Math.min(Math.floor(act[i]/w),19)]++;"' _n
+    file write `fh' `"    return {w:w,c:c};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  binsMed: function(rows){"' _n
+    file write `fh' `"    var c=[],k,i;"' _n
+    file write `fh' `"    for(k=0;k<21;k++) c.push(0);"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].med!==null) c[Math.min(Math.floor(rows[i].med),20)]++;"' _n
+    file write `fh' `"    return c;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  hourTotals: function(rows){"' _n
+    file write `fh' `"    var t=[],k,i,j;"' _n
+    file write `fh' `"    for(k=0;k<24;k++) t.push(0);"' _n
+    file write `fh' `"    var any=false;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      if(!rows[i].h) continue;"' _n
+    file write `fh' `"      any=true;"' _n
+    file write `fh' `"      for(j=0;j<24;j++) t[j]+=rows[i].h[j];"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return any?t:null;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  dailyTotals: function(daily,resp){"' _n
+    file write `fh' `"    var m={},i,k;"' _n
+    file write `fh' `"    for(i=0;i<daily.length;i++){"' _n
+    file write `fh' `"      if(resp&&daily[i].r!==resp) continue;"' _n
+    file write `fh' `"      k=daily[i].d;"' _n
+    file write `fh' `"      m[k]=(m[k]||0)+daily[i].c;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    var keys=Object.keys(m).sort(), out=[];"' _n
+    file write `fh' `"    for(i=0;i<keys.length;i++) out.push({d:keys[i],c:m[keys[i]]});"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  league: function(rows,S){"' _n
+    file write `fh' `"    var ctx=P.zctx(rows), m={}, i, r;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      r=rows[i];"' _n
+    file write `fh' `"      if(!m[r.r]) m[r.r]={r:r.r,n:0,fl:0,act:[],med:[],fsh:[],nsh:[]};"' _n
+    file write `fh' `"      var g=m[r.r], f=P.flagsFor(r,S,ctx), any=false, j;"' _n
+    file write `fh' `"      for(j=0;j<6;j++) if(f[j]) any=true;"' _n
+    file write `fh' `"      g.n++; if(any||r.cas>0) g.fl++;"' _n
+    file write `fh' `"      g.act.push(r.act);"' _n
+    file write `fh' `"      if(r.med!==null) g.med.push(r.med);"' _n
+    file write `fh' `"      var fs=P.fastShare(r,S.fs); if(fs!==null) g.fsh.push(fs);"' _n
+    file write `fh' `"      var ns=P.nightShare(r,S.n1,S.n2); if(ns!==null) g.nsh.push(ns);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    var out=[],k;"' _n
+    file write `fh' `"    for(k in m){ if(m.hasOwnProperty(k)) out.push(m[k]); }"' _n
+    file write `fh' `"    for(i=0;i<out.length;i++){"' _n
+    file write `fh' `"      out[i].medact=P.median(out[i].act);"' _n
+    file write `fh' `"      out[i].medmed=P.median(out[i].med);"' _n
+    file write `fh' `"      out[i].mfsh=out[i].fsh.length?P.sum(out[i].fsh)/out[i].fsh.length:null;"' _n
+    file write `fh' `"      out[i].mnsh=out[i].nsh.length?P.sum(out[i].nsh)/out[i].nsh.length:null;"' _n
+    file write `fh' `"      out[i].share=out[i].fl/out[i].n;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    out.sort(function(a,b){ return b.n-a.n; });"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"};"' _n
+    file write `fh' `"if (typeof module!=='undefined' && module.exports) module.exports=P;"' _n
+    file write `fh' _n
+    file write `fh' `"/* ---------------- DOM layer (browser only) ---------------- */"' _n
+    file write `fh' `"if (typeof document!=='undefined') {"' _n
+    file write `fh' _n
+    file write `fh' `"function el(id){ return document.getElementById(id); }"' _n
+    file write `fh' `"function fmt(x,d){"' _n
+    file write `fh' `"  if(x===null||x===undefined||isNaN(x)) return '.';"' _n
+    file write `fh' `"  var s=x.toFixed(d===undefined?1:d);"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function fmtc(x){"' _n
+    file write `fh' `"  if(x===null||x===undefined) return '.';"' _n
+    file write `fh' `"  var s=String(Math.round(x)), out='', c=0, i;"' _n
+    file write `fh' `"  for(i=s.length-1;i>=0;i--){ out=s.charAt(i)+out; c++; if(c%3===0&&i>0) out=','+out; }"' _n
+    file write `fh' `"  return out;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function esc(s){"' _n
+    file write `fh' `"  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function svgBars(counts,labels,hi,opts){"' _n
+    file write `fh' `"  opts=opts||{};"' _n
+    file write `fh' `"  var Q=String.fromCharCode(34);"' _n
+    file write `fh' `"  function at(n,v){ return ' '+n+'='+Q+v+Q; }"' _n
+    file write `fh' `"  var w=opts.w||940, hgt=opts.hgt||170, lstep=opts.lstep||1, showv=opts.vals||false;"' _n
+    file write `fh' `"  var k=counts.length, maxc=0, i;"' _n
+    file write `fh' `"  for(i=0;i<k;i++) if(counts[i]>maxc) maxc=counts[i];"' _n
+    file write `fh' `"  if(maxc<=0||k===0) return '<p class="nodata">Nothing to plot for this selection.</p>';"' _n
+    file write `fh' `"  var plotw=w-16, ploth=hgt-34, step=plotw/k, barw=Math.max(Math.floor(step)-2,1);"' _n
+    file write `fh' `"  var s='<svg'+at('viewBox','0 0 '+w+' '+hgt)+at('width','100%')+at('xmlns','http://www.w3.org/2000/svg')+'>';"' _n
+    file write `fh' `"  s+='<text'+at('x',8)+at('y',12)+at('font-size',10)+at('fill','#888')+'>max '+fmtc(maxc)+'</text>';"' _n
+    file write `fh' `"  s+='<line'+at('x1',8)+at('y1',hgt-22)+at('x2',w-8)+at('y2',hgt-22)+at('stroke','#d5d9de')+'></line>';"' _n
+    file write `fh' `"  for(i=0;i<k;i++){"' _n
+    file write `fh' `"    var c=counts[i], hb=Math.round(c/maxc*(ploth-16));"' _n
+    file write `fh' `"    if(c>0&&hb<2) hb=2;"' _n
+    file write `fh' `"    var x=Math.round(8+i*step), y=hgt-22-hb;"' _n
+    file write `fh' `"    var col=(hi&&hi.indexOf(i)>=0)?'#C9A227':'#002244';"' _n
+    file write `fh' `"    if(c>0) s+='<rect'+at('x',x)+at('y',y)+at('width',barw)+at('height',hb)+at('fill',col)+'><title>'+fmtc(c)+'</title></rect>';"' _n
+    file write `fh' `"    if(showv&&c>0) s+='<text'+at('x',x+Math.floor(barw/2))+at('y',y-4)+at('font-size',10)+at('fill','#333')+at('text-anchor','middle')+'>'+fmtc(c)+'</text>';"' _n
+    file write `fh' `"    if(i%lstep===0&&labels[i]) s+='<text'+at('x',x+Math.floor(barw/2))+at('y',hgt-9)+at('font-size',9.5)+at('fill','#666')+at('text-anchor','middle')+'>'+esc(labels[i])+'</text>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  s+='</svg>';"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function settings(){"' _n
+    file write `fh' `"  return {"' _n
+    file write `fh' `"    resp: el('c_resp').value,"' _n
+    file write `fh' `"    fs:   Math.max(1,parseInt(el('c_fs').value,10)||2),"' _n
+    file write `fh' `"    burst:(parseFloat(el('c_burst').value)||33)/100,"' _n
+    file write `fh' `"    minact:parseFloat(el('c_minact').value)||10,"' _n
+    file write `fh' `"    n1:   parseInt(el('c_n1').value,10),"' _n
+    file write `fh' `"    n2:   parseInt(el('c_n2').value,10),"' _n
+    file write `fh' `"    nshare:(parseFloat(el('c_nshare').value)||25)/100,"' _n
+    file write `fh' `"    churn:(parseFloat(el('c_churn').value)||20)/100,"' _n
+    file write `fh' `"    z:    parseFloat(el('c_z').value)||3.5,"' _n
+    file write `fh' `"    top:  Math.max(1,parseInt(el('c_top').value,10)||15)"' _n
+    file write `fh' `"  };"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function resetSettings(){"' _n
+    file write `fh' `"  el('c_resp').value='';"' _n
+    file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
+    file write `fh' `"  el('c_burst').value=33; el('c_minact').value=10;"' _n
+    file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
+    file write `fh' `"  el('c_nshare').value=25; el('c_churn').value=20;"' _n
+    file write `fh' `"  el('c_z').value=3.5; el('c_top').value=15;"' _n
+    file write `fh' `"  renderAll();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"var qSortKey='med', qSortDir=-1;"' _n
+    file write `fh' `"function qSort(k){"' _n
+    file write `fh' `"  if(qSortKey===k) qSortDir=-qSortDir; else { qSortKey=k; qSortDir=-1; }"' _n
+    file write `fh' `"  renderQuestions();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function renderQuestions(){"' _n
+    file write `fh' `"  var filt=(el('c_q').value||'').toLowerCase();"' _n
+    file write `fh' `"  var rows=[],i;"' _n
+    file write `fh' `"  for(i=0;i<D.q.length;i++) if(!filt||D.q[i].v.toLowerCase().indexOf(filt)>=0) rows.push(D.q[i]);"' _n
+    file write `fh' `"  rows.sort(function(a,b){"' _n
+    file write `fh' `"    var av=a[qSortKey], bv=b[qSortKey];"' _n
+    file write `fh' `"    if(av===null) av=-1; if(bv===null) bv=-1;"' _n
+    file write `fh' `"    if(av===bv) return a.v<b.v?-1:1;"' _n
+    file write `fh' `"    return (av<bv?-1:1)*(-qSortDir);"' _n
+    file write `fh' `"  });"' _n
+    file write `fh' `"  var s='<tr><th class="srt" onclick="qSort(String.fromCharCode(118))">question</th>'+"' _n
+    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(110))">answers</th>'+"' _n
+    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(110,105))">interviews</th>'+"' _n
+    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(109,101,100))">median s</th>'+"' _n
+    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(112,57,48))">p90 s</th>'+"' _n
+    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(102,115,104))">fast share</th></tr>';"' _n
+    file write `fh' `"  var k=Math.min(rows.length,40);"' _n
+    file write `fh' `"  for(i=0;i<k;i++){"' _n
+    file write `fh' `"    var q=rows[i];"' _n
+    file write `fh' `"    s+='<tr><td class="mono">'+esc(q.v)+'</td><td class="r">'+fmtc(q.n)+'</td><td class="r">'+fmtc(q.ni)+"' _n
+    file write `fh' `"       '</td><td class="r">'+fmt(q.med)+'</td><td class="r">'+fmt(q.p90)+'</td><td class="r">'+fmt(q.fsh,2)+'</td></tr>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('t_q').innerHTML=s;"' _n
+    file write `fh' `"  el('q_more').textContent = rows.length>k ? ('Showing '+k+' of '+rows.length+' questions - refine the search to see others.') : '';"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function renderAll(){"' _n
+    file write `fh' `"  var S=settings();"' _n
+    file write `fh' `"  var rows=P.filterRows(D.rows,S.resp);"' _n
+    file write `fh' `"  var A=P.aggregate(rows,S);"' _n
+    file write `fh' `"  var scope=S.resp?('enumerator '+S.resp):'all enumerators';"' _n
+    file write `fh' _n
+    file write `fh' `"  el('k_started').textContent=fmtc(A.n);"' _n
+    file write `fh' `"  el('k_flagged').textContent=fmtc(A.nflagged)+' ('+fmt(100*A.nflagged/Math.max(A.n,1))+'%)';"' _n
+    file write `fh' `"  var acts=[],i;"' _n
+    file write `fh' `"  for(i=0;i<rows.length;i++) acts.push(rows[i].act);"' _n
+    file write `fh' `"  el('k_medact').textContent=fmt(P.median(acts));"' _n
+    file write `fh' `"  var meds=[];"' _n
+    file write `fh' `"  for(i=0;i<rows.length;i++) if(rows[i].med!==null) meds.push(rows[i].med);"' _n
+    file write `fh' `"  el('k_medans').textContent=fmt(P.median(meds));"' _n
+    file write `fh' _n
+    file write `fh' `"  var verdict, vc;"' _n
+    file write `fh' `"  if(A.nflagged===0){ verdict='No behaviour flags raised for '+scope+' at the current thresholds.'; vc='ok'; }"' _n
+    file write `fh' `"  else { verdict=fmtc(A.nflagged)+' of '+fmtc(A.n)+' interviews raise at least one flag for '+scope+' - review the tables below.'; vc='warn'; }"' _n
+    file write `fh' `"  el('verdict').textContent=verdict;"' _n
+    file write `fh' `"  el('verdict').className='verdict '+vc;"' _n
+    file write `fh' _n
+    file write `fh' `"  el('ch_flags').innerHTML=svgBars(A.tot,"' _n
+    file write `fh' `"    ['S speeding','B bursts','T too short','N night','C churn','Z outlier'],[],"' _n
+    file write `fh' `"    {hgt:150,vals:true});"' _n
+    file write `fh' _n
+    file write `fh' `"  var BA=P.binsActive(rows), labA=[], hiA=[];"' _n
+    file write `fh' `"  for(i=0;i<20;i++){ labA.push(String(i*BA.w)); if((i+1)*BA.w<=S.minact) hiA.push(i); }"' _n
+    file write `fh' `"  el('ch_act').innerHTML=svgBars(BA.c,labA,hiA,{lstep:2});"' _n
+    file write `fh' `"  el('n_act').textContent='Bins of '+BA.w+' min; gold bins fall under the '+S.minact+'-minute floor.';"' _n
+    file write `fh' _n
+    file write `fh' `"  var BM=P.binsMed(rows), labM=[], hiM=[];"' _n
+    file write `fh' `"  for(i=0;i<21;i++){ labM.push(i<20?String(i):'20+'); if(i<S.fs) hiM.push(i); }"' _n
+    file write `fh' `"  el('ch_med').innerHTML=svgBars(BM,labM,hiM,{lstep:2});"' _n
+    file write `fh' _n
+    file write `fh' `"  var HT=P.hourTotals(rows), labH=[], hiH=[];"' _n
+    file write `fh' `"  for(i=0;i<24;i++){ labH.push(String(i)); if(P.inWindow(i,S.n1,S.n2)) hiH.push(i); }"' _n
+    file write `fh' `"  if(HT) el('ch_hour').innerHTML=svgBars(HT,labH,hiH,{lstep:2});"' _n
+    file write `fh' `"  else el('ch_hour').innerHTML='<p class="nodata">Hour detail not embedded for this survey size.</p>';"' _n
+    file write `fh' _n
+    file write `fh' `"  var DT=P.dailyTotals(D.daily,S.resp), dc=[], dl=[], dstep=Math.max(1,Math.floor(DT.length/8));"' _n
+    file write `fh' `"  for(i=0;i<DT.length;i++){ dc.push(DT[i].c); dl.push(i%dstep===0?DT[i].d.substring(5):''); }"' _n
+    file write `fh' `"  el('ch_daily').innerHTML=svgBars(dc,dl,[],{lstep:1});"' _n
+    file write `fh' _n
+    file write `fh' `"  var L=P.league(rows,S), s='<tr><th>enumerator</th><th class="r">interviews</th><th class="r">med active min</th><th class="r">med sec/ans</th><th class="r">fast share</th><th class="r">night share</th><th class="r">flagged</th><th style="width:110px">flag share</th></tr>';"' _n
+    file write `fh' `"  var k=Math.min(L.length,30);"' _n
+    file write `fh' `"  for(i=0;i<k;i++){"' _n
+    file write `fh' `"    var g=L[i];"' _n
+    file write `fh' `"    s+=(g.fl>0?'<tr class="hot">':'<tr>')+'<td>'+esc(g.r)+'</td><td class="r">'+fmtc(g.n)+'</td><td class="r">'+fmt(g.medact)+"' _n
+    file write `fh' `"       '</td><td class="r">'+fmt(g.medmed)+'</td><td class="r">'+fmt(g.mfsh,2)+'</td><td class="r">'+fmt(g.mnsh,2)+"' _n
+    file write `fh' `"       '</td><td class="r">'+fmtc(g.fl)+'</td><td><span class="bar" style="width:'+Math.round(100*g.share)+'px"></span> '+fmt(100*g.share)+'%</td></tr>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('t_league').innerHTML=s;"' _n
+    file write `fh' `"  el('l_more').textContent = L.length>k ? ('Top '+k+' of '+L.length+' enumerators by workload.') : '';"' _n
+    file write `fh' _n
+    file write `fh' `"  s='<tr><th>interview id</th><th>enumerator</th><th>flags</th><th class="r">active min</th><th class="r">sec/ans</th><th class="r">fast</th><th class="r">night</th><th class="r">cascades</th><th class="r">wiped</th></tr>';"' _n
+    file write `fh' `"  var F=A.flagged, kk=Math.min(F.length,S.top), letters=['S','B','T','N','C','Z'];"' _n
+    file write `fh' `"  for(i=0;i<kk;i++){"' _n
+    file write `fh' `"    var r=F[i], pat='', j;"' _n
+    file write `fh' `"    for(j=0;j<6;j++) pat+=r._f[j]?letters[j]:'-';"' _n
+    file write `fh' `"    s+='<tr><td class="mono">'+esc(r.id)+'</td><td>'+esc(r.r)+'</td><td class="mono" style="letter-spacing:2px">'+pat+"' _n
+    file write `fh' `"       '</td><td class="r">'+fmt(r.act)+'</td><td class="r">'+fmt(r.med)+'</td><td class="r">'+fmt(P.fastShare(r,S.fs),2)+"' _n
+    file write `fh' `"       '</td><td class="r">'+fmt(P.nightShare(r,S.n1,S.n2),2)+'</td><td class="r">'+r.cas+'</td><td class="r">'+r.wip+'</td></tr>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('t_worst').innerHTML=s;"' _n
+    file write `fh' `"  el('w_none').textContent = F.length===0 ? 'Nothing to review for this selection - no flags and no cascades.' : '';"' _n
+    file write `fh' _n
+    file write `fh' `"  renderQuestions();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function initControls(){"' _n
+    file write `fh' `"  var rs={}, i, names=[];"' _n
+    file write `fh' `"  for(i=0;i<D.rows.length;i++) rs[D.rows[i].r]=1;"' _n
+    file write `fh' `"  for(var k in rs){ if(rs.hasOwnProperty(k)&&k!=='') names.push(k); }"' _n
+    file write `fh' `"  names.sort();"' _n
+    file write `fh' `"  var s='<option value="">All enumerators ('+names.length+')</option>';"' _n
+    file write `fh' `"  for(i=0;i<names.length;i++) s+='<option>'+esc(names[i])+'</option>';"' _n
+    file write `fh' `"  el('c_resp').innerHTML=s;"' _n
+    file write `fh' `"  var hsel='';"' _n
+    file write `fh' `"  for(i=0;i<24;i++) hsel+='<option>'+i+'</option>';"' _n
+    file write `fh' `"  el('c_n1').innerHTML=hsel; el('c_n2').innerHTML=hsel;"' _n
+    file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
+    file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
+    file write `fh' `"  var ids=['c_resp','c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_top'];"' _n
+    file write `fh' `"  for(i=0;i<ids.length;i++) el(ids[i]).addEventListener('change',renderAll);"' _n
+    file write `fh' `"  el('c_q').addEventListener('input',renderQuestions);"' _n
+    file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
+    file write `fh' `"  if(D.meta.lite===1){"' _n
+    file write `fh' `"    el('c_n1').disabled=true; el('c_n2').disabled=true; el('c_fs').disabled=true;"' _n
+    file write `fh' `"    el('lite_note').textContent='Large survey: per-interview hour/gap detail was not embedded, so the night window and fast-seconds controls use the values fixed at build time.';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"initControls();"' _n
+    file write `fh' `"renderAll();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"</script></body></html>"' _n
+    file close `fh'
+
+    * ---- finish: leave the combined table in memory --------------------------------
+    quietly use `"`MERGED'"', clear
+    sort interview__id
+    local fullp `"`saving'"'
+    if strpos(`"`saving'"',"/")==0 & strpos(`"`saving'"',"\")==0 local fullp `"`c(pwd)'/`saving'"'
+    di as txt "suso paradata: interactive report written to " as res `"`fullp'"'
+    di as txt `"               {browse "`fullp'":Click to open in your browser}"'
+    di as txt "  `nstartedc' of `nintsc' records have fieldwork; `nuntouchedc' are untouched (preload-only) and shown separately."
+    di as txt "  timing basis: `rolenote'."
+    di as txt "  in memory: one row per record (timing + flags at defaults + cascades + started marker)."
+    return local  report `"`fullp'"'
+    return scalar nints    = `nints'
+    return scalar nstarted = `nstarted'
+    return scalar ncascades = `ncasc'
+end
+
+* ---- helper: escape text for HTML ----------------------------------------------
+program _suso_para_hesc, rclass
+    version 14.2
+    gettoken s : 0
+    return local out = subinstr(subinstr(subinstr(`"`s'"', "&", "&amp;", .), "<", "&lt;", .), ">", "&gt;", .)
+end
+
+*===============================================================================
 * examples — copy/paste recipes printed in the Results window
 *===============================================================================
 program _suso_examples
@@ -2243,14 +3857,23 @@ program _suso_examples
     local eq = char(39)
     di as txt    "     suso export status , id(`bq'=r(jobid)`eq')     {txt}// repeat until status=Completed"
     di as txt    `"     suso export download , id(`bq'=r(jobid)`eq') saving("ises.zip") replace"'
+    di as txt    `"     suso export get , type(STATA) saving("ises.zip") unzipw("pw") unzipto("data") replace   {txt}// all of the above in one"'
 
-    di as res _n "  5) TEAM"
+    di as res _n "  5) PARADATA  (timing + behaviour QC: speeding, night work, churn)"
+    di as txt    "     suso paradata get                        {txt}// export -> download -> load events"
+    di as txt    `"     suso paradata load , file("para.zip")    {txt}// or reload a saved export offline"'
+    di as txt    "     suso paradata flags                      {txt}// red-flag report; data = 1 row/interview"
+    di as txt    "     suso paradata timing , by(question)      {txt}// slowest questions first"
+    di as txt    "     suso paradata skips                      {txt}// gate flips wiping answers (skip abuse)"
+    di as txt    `"     suso paradata report , saving("qc.html") replace {txt}// one-page HTML QC report"'
+
+    di as res _n "  6) TEAM"
     di as txt    "     suso supervisor list , all"
     di as txt    "     suso supervisor interviewers , id(<supervisor-uuid>)"
     di as txt    "     suso interviewer actionslog , id(<interviewer-uuid>) start(2026-06-01) end(2026-06-17)"
     di as txt    "     suso assignment assign , id(<assignment-id>) responsible(<interviewer-login>)"
 
-    di as res _n "  6) DANGER  (need confirmation; written to the audit log)"
+    di as res _n "  7) DANGER  (need confirmation; written to the audit log)"
     di as txt    "     suso interview delete , id(<uuid>) confirm"
     di as txt    "     suso export cancel    , id(<jobid>) confirm"
     di as txt    "     suso workspace status , name(<ws>)"
@@ -2275,6 +3898,7 @@ program _suso_endpoints
     di as txt    "             comment  commentbyvar  delete"
     di as res _n "  questionnaire" as txt " list  get  document  interviews  audio  criticality"
     di as res _n "  export    " as txt " list  start  status  download  get  cancel"
+    di as res _n "  paradata  " as txt " get  load  timing  flags  skips  report   (timing + behaviour QC)"
     di as res _n "  maps      " as txt " list  upload  delete  deleteall  assign  unassign"
     di as res _n "  user      " as txt " get  create  archive  unarchive"
     di as res    "  supervisor" as txt " list  get  interviewers"
