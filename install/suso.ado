@@ -3366,7 +3366,7 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="note">Active interviewer time per interview: gaps over `gapmins' min and pauses excluded. <span id="n_act"></span></div>"' _n
     file write `fh' `"<section id="ch_act"></section>"' _n
     file write `fh' `"<h2>How fast are answers?</h2>"' _n
-    file write `fh' `"<div class="note">Median seconds per answer, one value per interview (1-second bins; last bin 20s+). Gold bins fall under the fast-answer threshold - sustained answering that fast is the classic fabrication signature.</div>"' _n
+    file write `fh' `"<div class="note">Each interview gets one number: the typical (median) time the interviewer took to answer one question. The bar above 5 counts interviews where a typical question took about 5 seconds; the last bar groups 20 seconds or more. A real interview needs time to ask, listen and type - so an interview answered at a sustained 1-2 seconds per question was probably filled in without talking to anyone. <span id="n_med"></span></div>"' _n
     file write `fh' `"<section id="ch_med"></section>"' _n
     file write `fh' `"<h2>When is the work happening?</h2>"' _n
     file write `fh' `"<div class="note">Interviewer answers by hour of day (device-local time). Gold bars mark the night window set in the panel - night answering on establishment surveys usually means desk work, not fieldwork.</div>"' _n
@@ -3729,6 +3729,7 @@ program _suso_para_report, rclass
     file write `fh' `"  var BM=P.binsMed(rows), labM=[], hiM=[];"' _n
     file write `fh' `"  for(i=0;i<21;i++){ labM.push(i<20?String(i):'20+'); if(i<S.fs) hiM.push(i); }"' _n
     file write `fh' `"  el('ch_med').innerHTML=svgBars(BM,labM,hiM,{lstep:2});"' _n
+    file write `fh' `"  el('n_med').textContent='Gold bars: interviews where a typical question was answered in under '+S.fs+' seconds - too fast for a real conversation.';"' _n
     file write `fh' _n
     file write `fh' `"  var HT=P.hourTotals(rows), labH=[], hiH=[];"' _n
     file write `fh' `"  for(i=0;i<24;i++){ labH.push(String(i)); if(P.inWindow(i,S.n1,S.n2)) hiH.push(i); }"' _n

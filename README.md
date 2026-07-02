@@ -31,9 +31,22 @@ build.bat     Rebuild the jar       (Windows)
 
 ## Install
 
+The easy way, straight from GitHub inside Stata:
+
+```stata
+net install suso, from("https://raw.githubusercontent.com/arehman10/survey_solutions_api/main/install") replace
+```
+
+This installs `suso.ado`, `suso.sthlp` and `suso.jar` in one step. If you are upgrading and Stata
+complains or keeps running the old version, run `ado uninstall suso` and `discard` first.
+
+Alternatively, install by hand: copy the three files to your Stata `PLUS` or `PERSONAL` folder (find them in Stata with
+`display c(sysdir_plus)` and `display c(sysdir_personal)`):
 
 ```
-net install suso, from("https://raw.githubusercontent.com/arehman10/survey_solutions_api/main/install") replace
+suso.ado    -> e.g.  .../ado/plus/s/suso.ado
+suso.sthlp  -> e.g.  .../ado/plus/s/suso.sthlp
+suso.jar    -> same folder, OR anywhere, then:  suso config , jar("C:/path/suso.jar")
 ```
 
 Then in Stata:
