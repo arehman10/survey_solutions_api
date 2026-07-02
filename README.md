@@ -94,6 +94,8 @@ suso config , exportpw("...")              // set the export-archive password on
 suso paradata report , saving("qc.html")  // interactive one-page QC report: filter by enumerator,
                                            //   search questions, adjust night window + all flag thresholds live
 suso paradata flags                        // per-interview red flags + interviewer league table
+suso paradata skips , qx("qx.html") messages("review.txt")  // supervisor action list: which gate
+                                           //   was flipped, what it erased, what to do - email-ready
 suso paradata timing , by(question)        // slowest questions first (instrument diagnostics)
 suso paradata skips                        // gate flips: skip-triggered answer-removal cascades
 ```

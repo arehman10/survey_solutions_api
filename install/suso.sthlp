@@ -261,8 +261,9 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:load} {opt file()}}load a previously downloaded paradata {cmd:.zip}/{cmd:.tab} offline ({opt unzipw()}){p_end}
 {synopt :{cmd:timing}}collapse events to one row per {opt by(interview)} (default), {opt by(question)} or {opt by(interviewer)} ({opt gapmins()} {opt fastsecs()} {opt allroles}){p_end}
 {synopt :{cmd:flags}}per-interview red flags + interviewer league table ({opt minactive()} {opt burstshare()} {opt nightshare()} {opt churn()} {opt zcut()} {opt top()} {opt saving()}){p_end}
-{synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}){p_end}
-{synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report with figures (all thresholds accepted; runs timing+flags+skips itself){p_end}
+{synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions and {opt messages(file.txt)} writes an email-ready action list for the vendor/field supervisor{p_end}
+{synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report with figures (all thresholds accepted; runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
+{synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
 {synoptline}
 
 {pstd}{bf:maps} {it:(uploads/deletes via the GraphQL endpoint; see {help suso##maps:Maps})}{p_end}
@@ -454,6 +455,17 @@ started interviews) the per-interview hour/gap detail is omitted and the night-w
 and fast-seconds controls fall back to build-time values.
 
 {pstd}
+{cmd:skips} ends with a supervisor action list: one message per violation stating
+the interview, the enumerator, when it happened, which gate variable was changed
+(and to what value), how many later answers the skip logic erased, and what to do
+about it. Point {opt qx()} at the questionnaire HTML that Survey Solutions includes
+with every data export and each message also carries the question wording, its
+section, and its own enabling condition; {opt messages()} writes the list to a plain
+text file ready to paste into an email to the vendor. {cmd:report , qx()} shows the
+same action list in the interactive report. {cmd:qx} on its own loads the parsed
+questionnaire as a dataset for browsing.
+
+{pstd}
 Thresholds are deliberately conservative defaults for face-to-face firm surveys;
 tune them to your instrument. Flags are screening signals for review, not proof of
 fabrication. {cmd:timing}/{cmd:flags} replace the event data in memory (like other
@@ -548,7 +560,8 @@ in {cmd:r()}.
 
 {pstd}Paradata QC: pull the event log, flag suspicious interviews, keep the tables:{p_end}
 {p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
-{p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
+{p 8 12 2}{cmd:. suso paradata skips , qx("English_Global_informal2026.html") messages("skip_review.txt") replace}{p_end}
 {p 8 12 2}{cmd:. save para_events, replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata flags , saving("para_flags.dta") replace}{p_end}
 {p 8 12 2}{cmd:. use para_events, clear}{p_end}

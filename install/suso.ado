@@ -2193,6 +2193,7 @@ end
 *   suso paradata flags    per-interview red flags + interviewer league table
 *   suso paradata skips    gate flips: skip-triggered answer-removal cascades
 *   suso paradata report   one-page self-contained HTML QC report with figures
+*   suso paradata qx       parse the exported questionnaire HTML (text, skips, validations)
 *
 * Design notes (kept deliberately vectorised: one import, 2 sorts, 1 collapse):
 *   - Works with both paradata layouts: v21.01+ (event, timestamp_utc, tz_offset)
@@ -2215,6 +2216,7 @@ program _suso_paradata, rclass
     if inlist("`verb'","flag","check","quality","anomalies")  local verb flags
     if inlist("`verb'","skip","skipcheck","gates","cascades") local verb skips
     if inlist("`verb'","html","dashboard","qc")               local verb report
+    if inlist("`verb'","questionnaire","instrument")           local verb qx
 
     if "`verb'"=="get" {
         _suso_para_get `macval(0)'
@@ -2246,7 +2248,12 @@ program _suso_paradata, rclass
         return add
         exit
     }
-    di as err "suso paradata: action must be get, load, timing, flags, skips or report.  See {help suso##paradata:help suso}."
+    if "`verb'"=="qx" {
+        _suso_para_qxload `macval(0)'
+        return add
+        exit
+    }
+    di as err "suso paradata: action must be get, load, timing, flags, skips, report or qx.  See {help suso##paradata:help suso}."
     exit 198
 end
 
@@ -2940,7 +2947,8 @@ end
 * disabled" — is the skip check that paradata supports.
 program _suso_para_skips, rclass
     version 14.2
-    syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ]
+    syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ///
+        QX(string) MESSages(string) DETail(string) ]
     _suso_para_need events
     if `cascade'<2 {
         di as err "suso paradata skips: cascade() is the minimum run of AnswerRemoved events; use 2 or more."
@@ -2949,6 +2957,20 @@ program _suso_para_skips, rclass
     if `window'<=0 {
         di as err "suso paradata skips: window() must be positive (seconds)."
         exit 198
+    }
+
+    * parse the questionnaire HTML first (question wording for the messages)
+    local hasqx 0
+    tempfile QXT
+    if `"`qx'"'!="" {
+        preserve
+        _suso_para_qxload , file(`"`qx'"')
+        quietly keep qx_var qx_text qx_section qx_enable
+        quietly rename qx_var trigger
+        quietly bysort trigger: keep if _n==1
+        quietly save `"`QXT'"'
+        restore
+        local hasqx 1
     }
 
     local hasvar 0
@@ -2967,13 +2989,28 @@ program _suso_para_skips, rclass
         quietly bysort interview__id (`isa' para_ord para_seq): replace sk_resp = responsible[_N]
     }
 
-    * carry the most recent AnswerSet (variable + time) forward through the stream
+    * carry the most recent AnswerSet (variable + time + value) forward through the stream
     if `hasvar' quietly gen sk_lastvar = para_var if para_ans
     else        quietly gen sk_lastvar = "(unnamed)" if para_ans
     quietly gen double sk_lastts = para_tsu if para_ans
+    quietly gen sk_lastval = ""
+    if `hasvar' {
+        capture confirm variable parameters
+        if !_rc {
+            tempvar pr p2
+            quietly gen strL `pr' = substr(parameters, strpos(parameters,"||")+2, .) ///
+                if para_ans & strpos(parameters,"||")>0
+            quietly gen long `p2' = strpos(`pr',"||")
+            quietly replace sk_lastval = substr(cond(`p2'>0, substr(`pr',1,`p2'-1), `pr'), 1, 60) if para_ans
+        }
+    }
+    quietly gen sk_actor = ""
+    capture confirm string variable responsible
+    if !_rc quietly replace sk_actor = responsible
     quietly bysort interview__id (para_ord para_seq): ///
         replace sk_lastvar = sk_lastvar[_n-1] if sk_lastvar=="" & _n>1
     quietly by interview__id: replace sk_lastts = sk_lastts[_n-1] if missing(sk_lastts) & _n>1
+    quietly by interview__id: replace sk_lastval = sk_lastval[_n-1] if sk_lastval=="" & _n>1
 
     * runs of consecutive AnswerRemoved events
     tempvar rise
@@ -2995,6 +3032,32 @@ program _suso_para_skips, rclass
     local ncasc = r(N)
     quietly count if sk_casc
     local nwiped = r(N)
+
+    * ---- cascade-level detail: who, when, trigger value, and the erased variables --
+    local hasdet 0
+    tempfile skdet
+    if `ncasc'>0 {
+        local hasdet 1
+        preserve
+        quietly keep if sk_casc
+        quietly gen sk_val = sk_lastval
+        sort interview__id sk_run para_ord para_seq
+        quietly by interview__id sk_run: gen long sk_k = _n
+        quietly gen strL sk_wl = ""
+        if `hasvar' {
+            quietly by interview__id sk_run: replace sk_wl =                     ///
+                cond(sk_k==1, para_var, cond(sk_k<=8, sk_wl[_n-1]+", "+para_var, sk_wl[_n-1]))
+        }
+        collapse (last) wl=sk_wl (count) nrem=sk_k (min) ts0=para_tsu            ///
+            (first) trigger=sk_trig trigval=sk_val actor=sk_actor resp=sk_resp,  ///
+            by(interview__id sk_run) fast
+        if `hasqx' {
+            quietly merge m:1 trigger using `"`QXT'"', keep(master match) nogenerate
+        }
+        quietly save `"`skdet'"'
+        if `"`detail'"'!="" quietly copy `"`skdet'"' `"`detail'"', replace
+        restore
+    }
 
     * ---- stage 1: collapse to (interview x trigger) — everything below is small,
     *      so the multi-million-row events are copied/sorted exactly once ----
@@ -3108,6 +3171,97 @@ program _suso_para_skips, rclass
     di as txt "  the {bf:suso paradata flags} table for a combined QC file."
     di as txt "{hline 72}"
 
+    * ---- supervisor action list: one clear message per cascade -------------------
+    if `hasdet' {
+        preserve
+        quietly use `"`skdet'"', clear
+        gsort -nrem interview__id sk_run
+        local k = min(`top', _N)
+        local mh 0
+        if `"`messages'"'!="" {
+            if "`replace'"=="" {
+                capture confirm new file `"`messages'"'
+                if _rc {
+                    di as err "suso: messages() file already exists. Use -replace-."
+                    exit 602
+                }
+            }
+            tempname mf
+            quietly file open `mf' using `"`messages'"', write replace text
+            local mh 1
+            file write `mf' "PARADATA SKIP-VIOLATION REVIEW" _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.0)" _n
+            file write `mf' "Definition: a case is `cascade' or more answers erased by the skip logic within `window' seconds of an answer being changed." _n
+            file write `mf' "`ncasc' case(s) found, `nwiped' answers erased in total. The `k' largest are listed below." _n
+        }
+        di as txt _n "  {hline 70}"
+        di as res "  ACTION LIST — what to tell the field supervisor (top `k' of `ncasc')"
+        di as txt "  {hline 70}"
+        if !`hasqx' di as txt "  tip: add qx(questionnaire.html) to include the question wording below."
+        forvalues i = 1/`k' {
+            local id  = interview__id[`i']
+            local tg  = trigger[`i']
+            local tv  = trigval[`i']
+            local ac  = cond(actor[`i']!="", actor[`i'], resp[`i'])
+            local nr  = nrem[`i']
+            local wls = wl[`i']
+            if `nr'>8 & "`wls'"!="" local wls "`wls' ... and `=`nr'-8' more"
+            local wh : di %tdDD_Mon_CCYY ts0[`i']/86400000
+            local wt : di %tcHH:MM ts0[`i']
+            local L1 "CASE `i' of `ncasc'.  Interview `id'.  Enumerator: `ac'.  On `=trim("`wh'")' at `=trim("`wt'")' UTC."
+            local L2 "WHAT HAPPENED: the answer to [`tg'] was changed"
+            if `"`tv'"'!="" local L2 `"`L2' to "`tv'""'
+            local L2 "`L2' after `nr' later answer(s) had already been recorded. The skip logic then ERASED those `nr' answer(s)."
+            di as txt ""
+            di as res "  `L1'"
+            di as txt "  `L2'"
+            if `mh' {
+                file write `mf' _n "----------------------------------------------------------------------" _n
+                file write `mf' "`L1'" _n
+                file write `mf' "`L2'" _n
+            }
+            if `hasqx' {
+                capture confirm variable qx_text
+                if !_rc {
+                    local qt = substr(qx_text[`i'], 1, 160)
+                    local qs = substr(qx_section[`i'], 1, 60)
+                    local qe = substr(qx_enable[`i'], 1, 120)
+                    if `"`qt'"'!="" {
+                        di as txt `"  QUESTION [`tg']: "`qt'""'
+                        if `mh' file write `mf' `"QUESTION [`tg']: "`qt'""' _n
+                    }
+                    if `"`qs'"'!="" {
+                        di as txt "  SECTION: `qs'"
+                        if `mh' file write `mf' "SECTION: `qs'" _n
+                    }
+                    if `"`qe'"'!="" {
+                        di as txt "  This question is itself asked only when: `qe'"
+                        if `mh' file write `mf' "This question is itself asked only when: `qe'" _n
+                    }
+                }
+            }
+            if `"`wls'"'!="" {
+                di as txt "  ERASED ANSWERS: `wls'"
+                if `mh' file write `mf' "ERASED ANSWERS: `wls'" _n
+            }
+            local A1 "ACTION: 1. Open this interview in Headquarters and check [`tg']."
+            local A2 "        2. Ask the enumerator why it changed after the later questions were done."
+            local A3 "        3. If the NEW value is correct: REJECT the interview so the erased questions are asked again — they are empty now."
+            local A4 "        4. If the OLD value was correct: restore it and verify the answers below it."
+            foreach a in A1 A2 A3 A4 {
+                di as txt "  ``a''"
+                if `mh' file write `mf' "``a''" _n
+            }
+        }
+        if `mh' {
+            file write `mf' _n "----------------------------------------------------------------------" _n
+            file write `mf' "General note: occasional cases are honest corrections. The pattern to challenge is the same gate variable erased across many interviews, or one enumerator producing many cases." _n
+            file close `mf'
+            di as txt _n "  vendor/supervisor message file written: " as res `"`messages'"'
+        }
+        restore
+    }
+
     if `"`saving'"'!="" {
         if "`replace'"=="" {
             capture confirm new file `"`saving'"'
@@ -3132,7 +3286,7 @@ end
 * questions, or moves the flag thresholds / night window.
 program _suso_para_report, rclass
     version 14.2
-    syntax [, SAVing(string) replace TITle(string)                               ///
+    syntax [, SAVing(string) replace TITle(string) QX(string)                    ///
         GAPMins(real 30) FASTsecs(real 2) ALLRoles                               ///
         CASCade(integer 3) WINdow(real 60) LITEcap(integer 15000) ]
     _suso_para_need events
@@ -3153,7 +3307,7 @@ program _suso_para_report, rclass
     local htitle `"`r(out)'"'
 
     di as txt "suso paradata: building the interactive QC report ..."
-    tempfile EV EVD SK QT DAILY HHF GGF MERGED
+    tempfile EV EVD SK QT DAILY HHF GGF MERGED RSD
     quietly save `"`EV'"'
     local nevents = _N
 
@@ -3232,7 +3386,7 @@ program _suso_para_report, rclass
 
     * ---- skip cascades ------------------------------------------------------------
     quietly use `"`EV'"', clear
-    quietly _suso_para_skips , cascade(`cascade') window(`window')
+    quietly _suso_para_skips , cascade(`cascade') window(`window') qx(`"`qx'"') detail(`"`RSD'"')
     local ncasc = r(ncascades)
     local nwiped = r(nwiped)
     local trignames `"`r(triggers)'"'
@@ -3395,6 +3549,50 @@ program _suso_para_report, rclass
             file write `fh' `"<tr><td class="mono">`r(out)'</td><td class="r">`=`RT'[`i',1]'</td><td class="r">`=`RT'[`i',2]'</td><td class="r">`=`RT'[`i',3]'</td></tr>"' _n
         }
         file write `fh' `"</table></section>"' _n
+    }
+    capture confirm file `"`RSD'"'
+    if !_rc & `ncasc'>0 {
+        preserve
+        quietly use `"`RSD'"', clear
+        gsort -nrem interview__id sk_run
+        local hasqxt 0
+        capture confirm variable qx_text
+        if !_rc local hasqxt 1
+        file write `fh' `"<h2>Actions for the field supervisor</h2>"' _n
+        file write `fh' `"<div class="note">One entry per skip violation, largest first. If the new gate value is right, the interview should be rejected so the erased questions are re-asked; if the old value was right, restore it and verify the section. For an email-ready version run: suso paradata skips , qx(questionnaire.html) messages(review.txt)</div>"' _n
+        file write `fh' `"<section>"' _n
+        local kk = min(15, _N)
+        forvalues i = 1/`kk' {
+            _suso_para_hesc `=trigger[`i']'
+            local tg `"`r(out)'"'
+            local ac = cond(actor[`i']!="", actor[`i'], resp[`i'])
+            _suso_para_hesc `"`ac'"'
+            local ac `"`r(out)'"'
+            local nr = nrem[`i']
+            local wh : di %tdDD_Mon_CCYY ts0[`i']/86400000
+            local tvt ""
+            if trigval[`i']!="" {
+                _suso_para_hesc `"`=trigval[`i']'"'
+                local tvt `" to &quot;`r(out)'&quot;"'
+            }
+            file write `fh' `"<div style="border-bottom:1px solid #eef0f2;padding:9px 0">"' _n
+            file write `fh' `"<div style="font-size:13px"><span class="mono"><b>`=interview__id[`i']'</b></span> &nbsp; enumerator <b>`ac'</b> &nbsp; `=trim("`wh'")'</div>"' _n
+            file write `fh' `"<div style="font-size:12.5px;margin-top:3px">The answer to <b class="mono">`tg'</b> was changed`tvt' after <b>`nr'</b> later answers were recorded - the skip logic erased them.</div>"' _n
+            if `hasqxt' {
+                _suso_para_hesc `"`=substr(qx_text[`i'],1,160)'"'
+                local qt `"`r(out)'"'
+                if `"`qt'"'!="" file write `fh' `"<div class="note" style="margin:2px 0 0">`tg': &quot;`qt'&quot;</div>"' _n
+            }
+            if wl[`i']!="" {
+                _suso_para_hesc `"`=substr(wl[`i'],1,300)'"'
+                local wle `"`r(out)'"'
+                local mr = cond(`nr'>8, " ... and `=`nr'-8' more", "")
+                file write `fh' `"<div class="note" style="margin:2px 0 0">Erased: <span class="mono">`wle'`mr'</span></div>"' _n
+            }
+            file write `fh' `"</div>"' _n
+        }
+        file write `fh' `"</section>"' _n
+        restore
     }
     _suso_para_hesc `"`rolenote'"'
     local rnesc `"`r(out)'"'
@@ -3818,6 +4016,50 @@ program _suso_para_hesc, rclass
     return local out = subinstr(subinstr(subinstr(`"`s'"', "&", "&amp;", .), "<", "&lt;", .), ">", "&gt;", .)
 end
 
+* ---- qx: parse the questionnaire HTML that ships with every data export --------
+* Extracts variable name, section, type, question text, enabling condition (the
+* skip logic), validation counts/messages and answer options into a dataset.
+program _suso_para_qxload, rclass
+    version 14.2
+    syntax , FILE(string) [ SAVing(string) replace ]
+    confirm file `"`file'"'
+    di as txt "suso paradata: parsing questionnaire HTML ..."
+    clear
+    mata: _suso_qx_parse(st_local("file"))
+    if _N==0 {
+        di as err "suso paradata qx: no questions found — expected the questionnaire HTML that Survey Solutions includes with every data export."
+        exit 459
+    }
+    label variable qx_var     "variable name"
+    label variable qx_section "section"
+    label variable qx_type    "question type"
+    label variable qx_text    "question text"
+    label variable qx_enable  "enabling condition (skip logic)"
+    label variable qx_nval    "number of validation rules"
+    label variable qx_valmsg  "first validation message"
+    label variable qx_opts    "answer options (first 8)"
+    char _dta[suso_paradata] qx
+    quietly count if qx_enable!=""
+    local ne = r(N)
+    quietly count if qx_nval>0
+    local nv = r(N)
+    di as txt "suso paradata: parsed " as res _N as txt " questions ("             ///
+        as res "`ne'" as txt " with skip logic, " as res "`nv'" as txt " with validations)."
+    di as txt "  use it: {bf:suso paradata skips , qx(file.html)} names the questions in every violation message."
+    if `"`saving'"'!="" {
+        if "`replace'"=="" {
+            capture confirm new file `"`saving'"'
+            if _rc {
+                di as err "suso: file already exists. Use -replace-."
+                exit 602
+            }
+        }
+        quietly save `"`saving'"', `replace'
+        di as txt "  saved: " as res `"`saving'"'
+    }
+    return scalar nq = _N
+end
+
 *===============================================================================
 * examples — copy/paste recipes printed in the Results window
 *===============================================================================
@@ -3899,7 +4141,7 @@ program _suso_endpoints
     di as txt    "             comment  commentbyvar  delete"
     di as res _n "  questionnaire" as txt " list  get  document  interviews  audio  criticality"
     di as res _n "  export    " as txt " list  start  status  download  get  cancel"
-    di as res _n "  paradata  " as txt " get  load  timing  flags  skips  report   (timing + behaviour QC)"
+    di as res _n "  paradata  " as txt " get  load  timing  flags  skips  report  qx   (timing + behaviour QC)"
     di as res _n "  maps      " as txt " list  upload  delete  deleteall  assign  unassign"
     di as res _n "  user      " as txt " get  create  archive  unarchive"
     di as res    "  supervisor" as txt " list  get  interviewers"
@@ -3910,4 +4152,171 @@ program _suso_endpoints
     di as res _n "  backup    " as txt " full-workspace archive (questionnaires + exports + assignments/users)"
     di as txt _n "  Recipes you can copy: {stata suso examples:suso examples}     Help: {help suso}"
     di as txt    "{hline 72}" _n
+end
+
+
+*===============================================================================
+* Mata: questionnaire HTML parser (used by suso paradata qx / skips qx() / report qx())
+*===============================================================================
+version 14.2
+mata:
+
+string scalar _suso_qx_clean(string scalar t0)
+{
+    string scalar t
+    t = ustrregexra(t0, "<[^>]*>", " ")
+    t = subinstr(t, "&quot;", char(34))
+    t = subinstr(t, "&#39;", "'")
+    t = subinstr(t, "&#xD;", " ")
+    t = subinstr(t, "&#xA;", " ")
+    t = subinstr(t, "&nbsp;", " ")
+    t = subinstr(t, "&lt;", "<")
+    t = subinstr(t, "&gt;", ">")
+    t = subinstr(t, "&amp;", "&")
+    return(strtrim(stritrim(t)))
+}
+
+string colvector _suso_qx_split(string scalar s, string scalar sep)
+{
+    string colvector out
+    string scalar rest
+    real scalar j, L
+    out = J(0,1,"")
+    rest = s
+    L = strlen(sep)
+    while ((j = strpos(rest, sep)) > 0) {
+        out = out \ substr(rest, 1, j-1)
+        rest = substr(rest, j+L, .)
+    }
+    out = out \ rest
+    return(out)
+}
+
+string scalar _suso_qx_lastsec(string scalar t)
+{
+    string scalar pat, out, rest
+    pat = `"(?s)<h2[^>]*id="[0-9a-f]{32}">(.*?)</h2>"'
+    out = ""
+    rest = t
+    while (ustrregexm(rest, pat)) {
+        out = _suso_qx_clean(ustrregexs(1))
+        rest = ustrregexrf(rest, pat, "")
+    }
+    return(out)
+}
+
+string scalar _suso_qx_resolve(string scalar t, string colvector anum, string colvector atxt)
+{
+    real scalar i
+    string scalar num
+    if (ustrregexm(strtrim(t), "^\[([0-9]+)\]$")) {
+        num = ustrregexs(1)
+        for (i=1; i<=rows(anum); i++) {
+            if (anum[i]==num) return(atxt[i])
+        }
+    }
+    return(t)
+}
+
+void _suso_qx_parse(string scalar fn)
+{
+    real scalar fh, n, k, p, nvv, nq
+    string scalar s, tail, ch, cursec, v, ti, ty, en, ms, op, rest, pat
+    string colvector Cvar, Csec, Cty, Cti, Cen, Cms, Cop, chunks, anum, atxt, ovals, olabs
+    real colvector Cnv
+
+    fh = fopen(fn, "r")
+    fseek(fh, 0, 1)
+    n = ftell(fh)
+    fseek(fh, 0, -1)
+    s = fread(fh, n)
+    fclose(fh)
+    s = subinstr(s, char(13), "")
+
+    anum = J(0,1,""); atxt = J(0,1,"")
+    n = strpos(s, `"<span class="number">["')
+    if (n > 0) {
+        tail = substr(s, n, .)
+        pat = `"(?s)<span class="number">\[([0-9]+)\]</span>\s*<div class="appendix_detail">(.*?)</div>"'
+        while (ustrregexm(tail, pat)) {
+            anum = anum \ ustrregexs(1)
+            atxt = atxt \ substr(_suso_qx_clean(ustrregexs(2)), 1, 500)
+            tail = ustrregexrf(tail, pat, "")
+        }
+    }
+
+    Cvar = Csec = Cty = Cti = Cen = Cms = Cop = J(0,1,"")
+    Cnv = J(0,1,.)
+    chunks = _suso_qx_split(s, `"<div class="question-container">"')
+    cursec = _suso_qx_lastsec(chunks[1])
+    for (k=2; k<=rows(chunks); k++) {
+        ch = chunks[k]
+        v = ""
+        if (ustrregexm(ch, `"(?s)class="variable_name">\s*(.*?)\s*</div>"')) v = strtrim(ustrregexs(1))
+        if (v != "") {
+            ti = ""
+            if (ustrregexm(ch, `"(?s)class="question-title"[^>]*>(.*?)</div>"')) ti = substr(_suso_qx_clean(ustrregexs(1)), 1, 800)
+            ty = ""
+            if (ustrregexm(ch, `"(?s)class="type">\s*(.*?)\s*</div>"')) ty = substr(_suso_qx_clean(ustrregexs(1)), 1, 60)
+            en = ""
+            if (ustrregexm(ch, `"(?s)class="condition"><span>E</span>(.*?)</div>"')) en = substr(_suso_qx_resolve(_suso_qx_clean(ustrregexs(1)), anum, atxt), 1, 800)
+            nvv = 0
+            rest = ch
+            while (strpos(rest, `"class="validation-expression""') > 0) {
+                nvv = nvv + 1
+                rest = subinstr(rest, `"class="validation-expression""', "", 1)
+            }
+            ms = ""
+            if (ustrregexm(ch, `"(?s)class="validation-message"><span>M[0-9]+</span>(.*?)</div>"')) ms = substr(_suso_qx_clean(ustrregexs(1)), 1, 500)
+            ovals = J(0,1,""); olabs = J(0,1,"")
+            rest = ch
+            pat = `"(?s)class="option-value"><span ?>(.*?)</span>"'
+            while (rows(ovals)<8 & ustrregexm(rest, pat)) {
+                ovals = ovals \ _suso_qx_clean(ustrregexs(1))
+                rest = ustrregexrf(rest, pat, "")
+            }
+            rest = ch
+            pat = `"(?s)<label[^>]*>(.*?)</label>"'
+            while (rows(olabs)<8 & ustrregexm(rest, pat)) {
+                olabs = olabs \ _suso_qx_clean(ustrregexs(1))
+                rest = ustrregexrf(rest, pat, "")
+            }
+            op = ""
+            for (p=1; p<=min((rows(ovals), rows(olabs))); p++) {
+                op = op + (p>1 ? " | " : "") + ovals[p] + " " + olabs[p]
+            }
+            Cvar = Cvar \ substr(v,1,80)
+            Csec = Csec \ substr(cursec,1,200)
+            Cty  = Cty  \ ty
+            Cti  = Cti  \ ti
+            Cen  = Cen  \ en
+            Cms  = Cms  \ ms
+            Cop  = Cop  \ substr(op,1,800)
+            Cnv  = Cnv  \ nvv
+        }
+        rest = _suso_qx_lastsec(ch)
+        if (rest != "") cursec = rest
+    }
+
+    nq = rows(Cvar)
+    if (nq == 0) return
+    st_addobs(nq)
+    (void) st_addvar("str80",  "qx_var")
+    (void) st_addvar("str200", "qx_section")
+    (void) st_addvar("str60",  "qx_type")
+    (void) st_addvar("strL",   "qx_text")
+    (void) st_addvar("strL",   "qx_enable")
+    (void) st_addvar("int",    "qx_nval")
+    (void) st_addvar("strL",   "qx_valmsg")
+    (void) st_addvar("strL",   "qx_opts")
+    st_sstore(., "qx_var", Cvar)
+    st_sstore(., "qx_section", Csec)
+    st_sstore(., "qx_type", Cty)
+    st_sstore(., "qx_text", Cti)
+    st_sstore(., "qx_enable", Cen)
+    st_sstore(., "qx_valmsg", Cms)
+    st_sstore(., "qx_opts", Cop)
+    st_store(., "qx_nval", Cnv)
+}
+
 end

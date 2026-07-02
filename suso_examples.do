@@ -48,6 +48,7 @@ suso export download , id(`job') saving("ises_data.zip") replace
 *--- 5) PARADATA QC (timing + behaviour flags) --------------------------------
 * suso paradata get , saving("para_ises.zip")     // export -> download -> load events
 * suso paradata report , saving("qc.html") replace // one-page QC report with figures
+* suso paradata skips , qx("qx.html") messages("review.txt") replace  // vendor action list
 * save para_events, replace                       // keep the raw events to iterate
 * suso paradata flags , saving("para_flags.dta") replace
 *                                                 // -> memory: 1 row/interview, f_* flags
