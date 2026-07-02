@@ -2194,6 +2194,7 @@ end
 *   suso paradata skips    gate flips: skip-triggered answer-removal cascades
 *   suso paradata report   one-page self-contained HTML QC report with figures
 *   suso paradata qx       parse the exported questionnaire HTML (text, skips, validations)
+*   suso paradata check    evaluate the skip logic + option values against exported data
 *
 * Design notes (kept deliberately vectorised: one import, 2 sorts, 1 collapse):
 *   - Works with both paradata layouts: v21.01+ (event, timestamp_utc, tz_offset)
@@ -2217,6 +2218,7 @@ program _suso_paradata, rclass
     if inlist("`verb'","skip","skipcheck","gates","cascades") local verb skips
     if inlist("`verb'","html","dashboard","qc")               local verb report
     if inlist("`verb'","questionnaire","instrument")           local verb qx
+    if inlist("`verb'","skiplogic","datacheck","codebook")      local verb check
 
     if "`verb'"=="get" {
         _suso_para_get `macval(0)'
@@ -2253,7 +2255,12 @@ program _suso_paradata, rclass
         return add
         exit
     }
-    di as err "suso paradata: action must be get, load, timing, flags, skips, report or qx.  See {help suso##paradata:help suso}."
+    if "`verb'"=="check" {
+        _suso_para_check `macval(0)'
+        return add
+        exit
+    }
+    di as err "suso paradata: action must be get, load, timing, flags, skips, report, qx or check.  See {help suso##paradata:help suso}."
     exit 198
 end
 
@@ -4163,6 +4170,8 @@ program _suso_para_qxload, rclass
     label variable qx_nval    "number of validation rules"
     label variable qx_valmsg  "first validation message"
     label variable qx_opts    "answer options (first 8)"
+    label variable qx_optvals "answer option values (first 60)"
+    label variable qx_nopts   "number of answer options"
     char _dta[suso_paradata] qx
     quietly count if qx_enable!=""
     local ne = r(N)
@@ -4183,6 +4192,224 @@ program _suso_para_qxload, rclass
         di as txt "  saved: " as res `"`saving'"'
     }
     return scalar nq = _N
+end
+
+* ---- check: evaluate skip logic and option values against the exported data ----
+* Builds a codebook from the questionnaire HTML (enabling conditions, types,
+* option values), translates the C# conditions to Stata where possible, and
+* audits the exported microdata: answers present on disabled questions (hard
+* skip violations), enabled questions left unanswered (item nonresponse), and
+* single-select values outside the option list. Conditions that cannot be
+* translated are reported, never guessed. C# treats a null referent as false;
+* Stata treats missing as +infinity, so any condition whose numeric referents
+* are unanswered is scored "cannot determine" and excluded from both counts.
+program _suso_para_check, rclass
+    version 14.2
+    syntax , QX(string) DATA(string) [ SAVing(string) replace MISScodes(numlist) TOP(integer 10) ]
+    confirm file `"`qx'"'
+    confirm file `"`data'"'
+    if "`misscodes'"=="" local misscodes "-999999999"
+
+    * ---- codebook: parse questionnaire, translate conditions in expression-land --
+    _suso_para_qxload , file(`"`qx'"')
+    quietly gen strL c_tr = ustrregexra(qx_enable, "//[^\n]*", "")
+    quietly replace c_tr = subinstr(c_tr, "&&", " & ", .)
+    quietly replace c_tr = subinstr(c_tr, "||", " | ", .)
+    quietly replace c_tr = ustrregexra(c_tr, "\btrue\b", "1")
+    quietly replace c_tr = ustrregexra(c_tr, "\bfalse\b", "0")
+    quietly replace c_tr = ustrregexra(c_tr, "\bself\b", qx_var)
+    quietly replace c_tr = ustrregexra(c_tr, "!IsAnswered\(([^)]*)\)", "missing(" + char(36) + "1)")
+    quietly replace c_tr = ustrregexra(c_tr, "IsAnswered\(([^)]*)\)", "!missing(" + char(36) + "1)")
+    quietly replace c_tr = ustrregexra(c_tr, "([A-Za-z_][A-Za-z0-9_]*)\.Contains\(([0-9-]+)\)", ///
+        char(36) + "1__" + char(36) + "2==1")
+    quietly replace c_tr = strtrim(stritrim(c_tr))
+    local ncb = _N
+    forvalues i = 1/`ncb' {
+        local v_`i'  = qx_var[`i']
+        local c_`i'  = c_tr[`i']
+        local t_`i'  = qx_type[`i']
+        local ov_`i' = qx_optvals[`i']
+        local no_`i' = qx_nopts[`i']
+    }
+
+    * ---- data: normalise SuSo sentinels so missing() means unanswered ------------
+    di as txt "suso paradata: loading exported data and normalising missing codes ..."
+    quietly use `"`data'"', clear
+    capture confirm variable interview__id
+    if _rc {
+        di as err "suso paradata check: data() must be a Survey Solutions main export file (interview__id not found)."
+        exit 459
+    }
+    local nobs = _N
+    quietly ds, has(type numeric)
+    foreach v of varlist `r(varlist)' {
+        foreach mc of numlist `misscodes' {
+            quietly replace `v' = . if `v'==`mc'
+        }
+    }
+    quietly ds, has(type string)
+    foreach v of varlist `r(varlist)' {
+        quietly replace `v' = "" if `v'=="##N/A##"
+    }
+
+    * ---- audit every codebook question present in the data -----------------------
+    tempname P
+    tempfile RES
+    postfile `P' str80 qvar str16 qstatus                                        ///
+        long n_on long n_off long n_und long n_viol long n_imiss long n_bad using `"`RES'"'
+    local k_eval 0
+    local k_noev 0
+    local k_absent 0
+    local k_nocond 0
+    local badlist ""
+    tempvar en
+    forvalues i = 1/`ncb' {
+        capture confirm variable `v_`i''
+        if _rc {
+            local ++k_absent
+            post `P' ("`v_`i''") ("not in file") (.) (.) (.) (.) (.) (.)
+            continue
+        }
+        local isnum 1
+        capture confirm numeric variable `v_`i''
+        if _rc local isnum 0
+        local anse = cond(`isnum', "(!missing(`v_`i''))", `"(`v_`i''!="")"')
+        local nund 0
+        if `"`c_`i''"'=="" {
+            local ++k_nocond
+            local st "always on"
+            quietly count if !`anse'
+            local nim = r(N)
+            local non = `nobs'
+            local nof 0
+            local nvl 0
+        }
+        else {
+            capture drop `en'
+            capture quietly gen byte `en' = (`c_`i'')
+            if _rc {
+                local ++k_noev
+                if `:list sizeof badlist' < 12 local badlist "`badlist' `v_`i''"
+                post `P' ("`v_`i''") ("not evaluable") (.) (.) (.) (.) (.) (.)
+                continue
+            }
+            * C#/Stata null gap: if any numeric variable the condition refers to is
+            * unanswered, the condition cannot be scored - mark it undetermined
+            local guard ""
+            local rest `"`c_`i''"'
+            local nids 0
+            while (ustrregexm(`"`rest'"', "([A-Za-z_][A-Za-z0-9_]*)") & `nids'<25) {
+                local id = ustrregexs(1)
+                local rest = ustrregexrf(`"`rest'"', "([A-Za-z_][A-Za-z0-9_]*)", "")
+                if inlist("`id'", "missing", "inlist", "inrange", "abs", "int", "floor", "ceil") continue
+                if strpos(" `guard' ", " `id' ")>0 continue
+                capture confirm numeric variable `id'
+                if !_rc {
+                    local ++nids
+                    local guard "`guard' `id'"
+                }
+            }
+            foreach g of local guard {
+                quietly replace `en' = . if missing(`g')
+            }
+            local ++k_eval
+            local st "evaluated"
+            quietly count if missing(`en')
+            local nund = r(N)
+            quietly count if `en'==1
+            local non = r(N)
+            quietly count if `en'==0
+            local nof = r(N)
+            quietly count if `en'==0 & `anse'
+            local nvl = r(N)
+            quietly count if `en'==1 & !`anse'
+            local nim = r(N)
+        }
+        local nbd 0
+        if `isnum' & `no_`i''>0 & `no_`i''<=60 & strpos(lower("`t_`i''"),"single-select")>0 {
+            local vl : subinstr local ov_`i' " " ",", all
+            if "`vl'"!="" {
+                capture quietly count if !missing(`v_`i'') & !inlist(`v_`i'', `vl')
+                if !_rc local nbd = r(N)
+            }
+        }
+        post `P' ("`v_`i''") ("`st'") (`non') (`nof') (`nund') (`nvl') (`nim') (`nbd')
+    }
+    postclose `P'
+    quietly use `"`RES'"', clear
+    quietly gen double imiss_share = n_imiss/n_on if n_on>0
+
+    * ---- report -------------------------------------------------------------------
+    quietly summarize n_viol
+    local tviol = r(sum)
+    quietly summarize n_imiss
+    local timiss = r(sum)
+    quietly summarize n_bad
+    local tbad = r(sum)
+    di as txt _n "{hline 72}"
+    di as res "  suso paradata check" as txt "   (`nobs' records against `ncb' codebook questions)"
+    di as txt "{hline 72}"
+    di as txt "  conditions evaluated " as res "`k_eval'" as txt "   always-on " as res "`k_nocond'" ///
+        as txt "   not evaluable " as res "`k_noev'" as txt "   not in this file " as res "`k_absent'"
+    di as txt "  answers on DISABLED questions (hard skip violations) : " as res "`tviol'"
+    di as txt "  enabled questions left unanswered (item nonresponse) : " as res "`timiss'"
+    di as txt "  single-select values outside the option list         : " as res "`tbad'"
+    tempvar sk
+    if `tviol'>0 {
+        quietly gen double `sk' = cond(missing(n_viol), -1, n_viol)
+        gsort -`sk' qvar
+        di as txt _n "  hard skip violations by question (top `top'):"
+        di as txt "  {ul:variable                }  {ul:answered while off}  {ul:enabled}  {ul:disabled}"
+        forvalues i = 1/`=min(`top',_N)' {
+            if n_viol[`i']>0 & !missing(n_viol[`i']) {
+                local vv : di %-24s abbrev(qvar[`i'],24)
+                di as txt "  " as res "`vv'" as txt "  " %18.0f `=n_viol[`i']' "  " %7.0f `=n_on[`i']' "  " %8.0f `=n_off[`i']'
+            }
+        }
+        di as txt "  these answers survived despite the skip logic (preloads, API writes,"
+        di as txt "  or a questionnaire version change) - review before analysis."
+        quietly drop `sk'
+    }
+    else di as txt _n "  no hard skip violations: the exported data respects every evaluated condition."
+    quietly count if n_imiss>0 & !missing(n_imiss)
+    if r(N)>0 {
+        quietly gen double `sk' = cond(missing(imiss_share), -1, imiss_share)
+        gsort -`sk' -n_imiss qvar
+        di as txt _n "  item nonresponse where the question was enabled (top `top' by share):"
+        di as txt "  {ul:variable                }  {ul:unanswered}  {ul:enabled}  {ul:share}"
+        forvalues i = 1/`=min(`top',_N)' {
+            if n_imiss[`i']>0 & !missing(n_imiss[`i']) {
+                local vv : di %-24s abbrev(qvar[`i'],24)
+                local sh : di %5.2f imiss_share[`i']
+                di as txt "  " as res "`vv'" as txt "  " %10.0f `=n_imiss[`i']' "  " %7.0f `=n_on[`i']' "  `sh'"
+            }
+        }
+        quietly drop `sk'
+    }
+    if `k_noev'>0 di as txt _n "  not evaluable (C# beyond the translator):`badlist'"
+    di as txt _n "  complements {bf:suso paradata skips} - skips catches mid-interview gate"
+    di as txt "  flips from the paradata; check audits the final exported data state."
+    di as txt "  n_und = records where the condition could not be scored because a"
+    di as txt "  referenced numeric question was itself unanswered (excluded from counts)."
+    di as txt "  data in memory = one row per codebook question (merge/save as needed)."
+    di as txt "{hline 72}"
+    sort qvar
+    if `"`saving'"'!="" {
+        if "`replace'"=="" {
+            capture confirm new file `"`saving'"'
+            if _rc {
+                di as err "suso: file already exists. Use -replace-."
+                exit 602
+            }
+        }
+        quietly save `"`saving'"', `replace'
+        di as txt "  saved: " as res `"`saving'"'
+    }
+    return scalar nviol   = `tviol'
+    return scalar nimiss  = `timiss'
+    return scalar nbadval = `tbad'
+    return scalar nevaluated = `k_eval'
+    return scalar nnoteval   = `k_noev'
 end
 
 *===============================================================================
@@ -4266,7 +4493,7 @@ program _suso_endpoints
     di as txt    "             comment  commentbyvar  delete"
     di as res _n "  questionnaire" as txt " list  get  document  interviews  audio  criticality"
     di as res _n "  export    " as txt " list  start  status  download  get  cancel"
-    di as res _n "  paradata  " as txt " get  load  timing  flags  skips  report  qx   (timing + behaviour QC)"
+    di as res _n "  paradata  " as txt " get  load  timing  flags  skips  report  qx  check"
     di as res _n "  maps      " as txt " list  upload  delete  deleteall  assign  unassign"
     di as res _n "  user      " as txt " get  create  archive  unarchive"
     di as res    "  supervisor" as txt " list  get  interviewers"
@@ -4347,10 +4574,10 @@ string scalar _suso_qx_resolve(string scalar t, string colvector anum, string co
 
 void _suso_qx_parse(string scalar fn)
 {
-    real scalar fh, n, k, p, nvv, nq
+    real scalar fh, n, k, p, nvv, nq, nopt
     string scalar s, tail, ch, cursec, v, ti, ty, en, ms, op, rest, pat
-    string colvector Cvar, Csec, Cty, Cti, Cen, Cms, Cop, chunks, anum, atxt, ovals, olabs
-    real colvector Cnv
+    string colvector Cvar, Csec, Cty, Cti, Cen, Cms, Cop, Cov, chunks, anum, atxt, ovals, olabs
+    real colvector Cnv, Cno
 
     fh = fopen(fn, "r")
     fseek(fh, 0, 1)
@@ -4372,8 +4599,8 @@ void _suso_qx_parse(string scalar fn)
         }
     }
 
-    Cvar = Csec = Cty = Cti = Cen = Cms = Cop = J(0,1,"")
-    Cnv = J(0,1,.)
+    Cvar = Csec = Cty = Cti = Cen = Cms = Cop = Cov = J(0,1,"")
+    Cnv = Cno = J(0,1,.)
     chunks = _suso_qx_split(s, `"<div class="question-container">"')
     cursec = _suso_qx_lastsec(chunks[1])
     for (k=2; k<=rows(chunks); k++) {
@@ -4398,9 +4625,14 @@ void _suso_qx_parse(string scalar fn)
             ovals = J(0,1,""); olabs = J(0,1,"")
             rest = ch
             pat = `"(?s)class="option-value"><span ?>(.*?)</span>"'
-            while (rows(ovals)<8 & ustrregexm(rest, pat)) {
+            while (rows(ovals)<60 & ustrregexm(rest, pat)) {
                 ovals = ovals \ _suso_qx_clean(ustrregexs(1))
                 rest = ustrregexrf(rest, pat, "")
+            }
+            nopt = rows(ovals)
+            while (strpos(rest, `"class="option-value""') > 0) {
+                nopt = nopt + 1
+                rest = subinstr(rest, `"class="option-value""', "", 1)
             }
             rest = ch
             pat = `"(?s)<label[^>]*>(.*?)</label>"'
@@ -4409,7 +4641,7 @@ void _suso_qx_parse(string scalar fn)
                 rest = ustrregexrf(rest, pat, "")
             }
             op = ""
-            for (p=1; p<=min((rows(ovals), rows(olabs))); p++) {
+            for (p=1; p<=min((rows(ovals), rows(olabs), 8)); p++) {
                 op = op + (p>1 ? " | " : "") + ovals[p] + " " + olabs[p]
             }
             Cvar = Cvar \ substr(v,1,80)
@@ -4419,6 +4651,8 @@ void _suso_qx_parse(string scalar fn)
             Cen  = Cen  \ en
             Cms  = Cms  \ ms
             Cop  = Cop  \ substr(op,1,800)
+            Cov  = Cov  \ substr(invtokens(ovals'), 1, 800)
+            Cno  = Cno  \ nopt
             Cnv  = Cnv  \ nvv
         }
         rest = _suso_qx_lastsec(ch)
@@ -4436,6 +4670,8 @@ void _suso_qx_parse(string scalar fn)
     (void) st_addvar("int",    "qx_nval")
     (void) st_addvar("strL",   "qx_valmsg")
     (void) st_addvar("strL",   "qx_opts")
+    (void) st_addvar("strL",   "qx_optvals")
+    (void) st_addvar("int",    "qx_nopts")
     st_sstore(., "qx_var", Cvar)
     st_sstore(., "qx_section", Csec)
     st_sstore(., "qx_type", Cty)
@@ -4443,6 +4679,8 @@ void _suso_qx_parse(string scalar fn)
     st_sstore(., "qx_enable", Cen)
     st_sstore(., "qx_valmsg", Cms)
     st_sstore(., "qx_opts", Cop)
+    st_sstore(., "qx_optvals", Cov)
+    st_store(., "qx_nopts", Cno)
     st_store(., "qx_nval", Cnv)
 }
 

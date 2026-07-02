@@ -264,6 +264,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions, {opt messages(file.txt)} writes an email-ready action list, and {opt html(file.html)} writes a shareable, printable Skip Violation Review page for the vendor/field supervisor{p_end}
 {synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report with figures (all thresholds accepted; runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
+{synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}){p_end}
 {synoptline}
 
 {pstd}{bf:maps} {it:(uploads/deletes via the GraphQL endpoint; see {help suso##maps:Maps})}{p_end}
@@ -463,7 +464,15 @@ with every data export and each message also carries the question wording, its
 section, and its own enabling condition; {opt messages()} writes the list to a plain
 text file ready to paste into an email to the vendor. {cmd:report , qx()} shows the
 same action list in the interactive report. {cmd:qx} on its own loads the parsed
-questionnaire as a dataset for browsing.
+questionnaire as a dataset for browsing. {cmd:check} closes the loop on the data
+side: it translates the questionnaire{c 39}s C# enabling conditions to Stata (the
+common patterns; untranslatable ones are listed, never guessed), normalises the
+Survey Solutions missing sentinels, and audits the exported main file record by
+record. Conditions whose numeric referents are themselves unanswered are scored
+undetermined and excluded from both counts, matching C# null semantics rather
+than Stata{c 39}s missing-is-infinity rule. skips watches the paradata stream for
+mid-interview gate flips; check audits the final exported state that analysts
+actually receive.
 
 {pstd}
 Thresholds are deliberately conservative defaults for face-to-face firm surveys;
@@ -562,6 +571,7 @@ in {cmd:r()}.
 {p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
 {p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
 {p 8 12 2}{cmd:. suso paradata skips , qx("English_Global_informal2026.html") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata check , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_codebook.dta") replace}{p_end}
 {p 8 12 2}{cmd:. save para_events, replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata flags , saving("para_flags.dta") replace}{p_end}
 {p 8 12 2}{cmd:. use para_events, clear}{p_end}
