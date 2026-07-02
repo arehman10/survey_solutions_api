@@ -4205,7 +4205,7 @@ end
 * are unanswered is scored "cannot determine" and excluded from both counts.
 program _suso_para_check, rclass
     version 14.2
-    syntax , QX(string) DATA(string) [ SAVing(string) replace MISScodes(numlist) TOP(integer 10) HTML(string) ]
+    syntax , QX(string) DATA(string) [ SAVing(string) replace MISScodes(numlist) TOP(integer 10) HTML(string) STatus(string) ]
     confirm file `"`qx'"'
     confirm file `"`data'"'
     if "`misscodes'"=="" local misscodes "-999999999"
@@ -4246,7 +4246,47 @@ program _suso_para_check, rclass
         di as err "suso paradata check: data() must be a Survey Solutions main export file (interview__id not found)."
         exit 459
     }
+    * optional restriction by interview status; status(approved) = 120 + 130
+    if `"`status'"'!="" {
+        capture confirm numeric variable interview__status
+        if _rc {
+            di as err "suso paradata check: status() given but interview__status is not in the data."
+            exit 111
+        }
+        local stnums `"`status'"'
+        if lower(strtrim(`"`status'"'))=="approved" local stnums "120 130"
+        capture numlist "`stnums'"
+        if _rc {
+            di as err "suso paradata check: status() takes a list of status codes or the word approved."
+            exit 198
+        }
+        tempvar kp
+        quietly gen byte `kp' = 0
+        foreach s of numlist `stnums' {
+            quietly replace `kp' = 1 if interview__status==`s'
+        }
+        quietly keep if `kp'
+        if _N==0 {
+            di as err "suso paradata check: no records match status(`status')."
+            exit 2000
+        }
+        di as txt "  restricted to interview__status in {" as res "`stnums'" as txt "}: " as res _N as txt " records."
+    }
     local nobs = _N
+    * status inventory for the dashboard (per-status count vectors)
+    local slist ""
+    local jmeta ""
+    capture confirm numeric variable interview__status
+    if !_rc {
+        quietly levelsof interview__status, local(slist)
+        if `:word count `slist'' > 12 local slist ""
+        foreach s of local slist {
+            local lb : label (interview__status) `s'
+            local lb = subinstr(subinstr(`"`lb'"', char(34), "", .), char(92), "", .)
+            quietly count if interview__status==`s'
+            local jmeta `"`jmeta'`=cond(`"`jmeta'"'=="","",",")'{"c":`s',"l":"`lb'","n":`r(N)'}"'
+        }
+    }
     quietly ds, has(type numeric)
     foreach v of varlist `r(varlist)' {
         foreach mc of numlist `misscodes' {
@@ -4263,7 +4303,7 @@ program _suso_para_check, rclass
     tempfile RES
     postfile `P' str80 qvar str16 qstatus                                        ///
         long n_on long n_off long n_und long n_viol long n_imiss long n_bad       ///
-        str244 badv using `"`RES'"'
+        str244 badv str2000 jstat using `"`RES'"'
     local k_eval 0
     local k_noev 0
     local k_absent 0
@@ -4274,7 +4314,7 @@ program _suso_para_check, rclass
         capture confirm variable `v_`i''
         if _rc {
             local ++k_absent
-            post `P' ("`v_`i''") ("not in file") (.) (.) (.) (.) (.) (.) ("")
+            post `P' ("`v_`i''") ("not in file") (.) (.) (.) (.) (.) (.) ("") ("")
             continue
         }
         local isnum 1
@@ -4282,6 +4322,10 @@ program _suso_para_check, rclass
         if _rc local isnum 0
         local anse = cond(`isnum', "(!missing(`v_`i''))", `"(`v_`i''!="")"')
         local nund 0
+        local f_on ""
+        local f_un ""
+        local f_vi ""
+        local f_im ""
         if `"`c_`i''"'=="" {
             local ++k_nocond
             local st "always on"
@@ -4290,6 +4334,14 @@ program _suso_para_check, rclass
             local non = `nobs'
             local nof 0
             local nvl 0
+            foreach s of local slist {
+                quietly count if interview__status==`s'
+                local f_on "`f_on',`r(N)'"
+                local f_un "`f_un',0"
+                local f_vi "`f_vi',0"
+                quietly count if !`anse' & interview__status==`s'
+                local f_im "`f_im',`r(N)'"
+            }
         }
         else {
             capture drop `en'
@@ -4297,7 +4349,7 @@ program _suso_para_check, rclass
             if _rc {
                 local ++k_noev
                 if `:list sizeof badlist' < 12 local badlist "`badlist' `v_`i''"
-                post `P' ("`v_`i''") ("not evaluable") (.) (.) (.) (.) (.) (.) ("")
+                post `P' ("`v_`i''") ("not evaluable") (.) (.) (.) (.) (.) (.) ("") ("")
                 continue
             }
             * C#/Stata null gap: if any numeric variable the condition refers to is
@@ -4331,6 +4383,16 @@ program _suso_para_check, rclass
             local nvl = r(N)
             quietly count if `en'==1 & !`anse'
             local nim = r(N)
+            foreach s of local slist {
+                quietly count if `en'==1 & interview__status==`s'
+                local f_on "`f_on',`r(N)'"
+                quietly count if missing(`en') & interview__status==`s'
+                local f_un "`f_un',`r(N)'"
+                quietly count if `en'==0 & `anse' & interview__status==`s'
+                local f_vi "`f_vi',`r(N)'"
+                quietly count if `en'==1 & !`anse' & interview__status==`s'
+                local f_im "`f_im',`r(N)'"
+            }
         }
         local nbd 0
         local bvs ""
@@ -4351,7 +4413,20 @@ program _suso_para_check, rclass
                 }
             }
         }
-        post `P' ("`v_`i''") ("`st'") (`non') (`nof') (`nund') (`nvl') (`nim') (`nbd') (strtrim("`bvs'"))
+        local f_bd ""
+        foreach s of local slist {
+            local bs 0
+            if `nbd'>0 {
+                capture quietly count if !missing(`v_`i'') & !inlist(`v_`i'', `vl') & interview__status==`s'
+                if !_rc local bs = r(N)
+            }
+            local f_bd "`f_bd',`bs'"
+        }
+        local jfrag ""
+        if "`slist'"!="" {
+            local jfrag `","ons":[`=substr("`f_on'",2,.)'],"uns":[`=substr("`f_un'",2,.)'],"vis":[`=substr("`f_vi'",2,.)'],"ims":[`=substr("`f_im'",2,.)'],"bds":[`=substr("`f_bd'",2,.)']"'
+        }
+        post `P' ("`v_`i''") ("`st'") (`non') (`nof') (`nund') (`nvl') (`nim') (`nbd') (strtrim("`bvs'")) (`"`jfrag'"')
     }
     postclose `P'
     quietly use `"`RES'"', clear
@@ -4441,7 +4516,7 @@ program _suso_para_check, rclass
             + "," + char(34)+"sh"+char(34) + ":" + cond(missing(imiss_share), "null", strtrim(string(imiss_share, "%9.4f"))) ///
             + "," + char(34)+"q"+char(34)  + ":" + char(34) + substr(e_qx_text,1,400) + char(34)    ///
             + "," + char(34)+"e"+char(34)  + ":" + char(34) + substr(e_qx_enable,1,300) + char(34)  ///
-            + "," + char(34)+"bv"+char(34) + ":" + char(34) + e_badv + char(34) + "}"
+            + "," + char(34)+"bv"+char(34) + ":" + char(34) + e_badv + char(34) + jstat + "}"
         _suso_para_hesc `"`data'"'
         local dsrc `"`r(out)'"'
         local nobsc : di %12.0fc `nobs'
@@ -4506,7 +4581,8 @@ program _suso_para_check, rclass
     file write `hf' `"<div class="panel">"' _n
     file write `hf' `"<div class="ctrl"><label>Search variable or text</label><input id="c_q" type="text" placeholder="e.g. a3 or sales"></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Section</label><select id="c_sec"></select></div>"' _n
-    file write `hf' `"<div class="ctrl"><label>Status</label><select id="c_st"><option value="">All</option><option>evaluated</option><option>always on</option><option>not evaluable</option><option>not in file</option></select></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Check status</label><select id="c_st"><option value="">All</option><option>evaluated</option><option>always on</option><option>not evaluable</option><option>not in file</option></select></div>"' _n
+    file write `hf' `"<div class="ctrl" id="ctl_ist"><label>Interview status</label><select id="c_ist"></select></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Min share % (chart)</label><input id="c_minsh" type="number" min="0" max="100" step="1" value="0"></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Sort questions by</label><select id="c_sort"><option value="sh">worst nonresponse share</option><option value="im">most unanswered</option><option value="vi">most violations</option><option value="bd">most out-of-list</option><option value="v">variable name</option></select></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Problems only</label><input id="c_prob" type="checkbox" style="width:20px;height:20px"></div>"' _n
@@ -4535,13 +4611,34 @@ program _suso_para_check, rclass
     file write `hf' `"<div id="list"></div>"' _n
     file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML were translated from C# to Stata; conditions whose numeric referents are unanswered are scored undetermined and excluded from both counts (C# treats null as false, Stata treats missing as infinity). Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Untranslatable conditions are labelled, never guessed. Produced by suso paradata check (suso v1.7.0) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
-    file write `hf' `"var D={"rows":["' _n
+    file write `hf' `"var D={"meta":{"statuses":[`jmeta']},"rows":["' _n
     forvalues i = 1/`=_N' {
         file write `hf' (j_row[`i']) _n
     }
     file write `hf' `"]};"' _n
     file write `hf' `"/* suso paradata check - dynamic dashboard engine */"' _n
     file write `hf' `"var C = {"' _n
+    file write `hf' `"  derive: function(rows, meta, sel){"' _n
+    file write `hf' `"    if(sel==='' || !meta || !meta.statuses || !meta.statuses.length) return rows;"' _n
+    file write `hf' `"    var idxs=[], i, j;"' _n
+    file write `hf' `"    if(sel==='APP'){"' _n
+    file write `hf' `"      for(i=0;i<meta.statuses.length;i++) if(meta.statuses[i].c===120||meta.statuses[i].c===130) idxs.push(i);"' _n
+    file write `hf' `"    } else idxs.push(parseInt(sel,10));"' _n
+    file write `hf' `"    var out=[];"' _n
+    file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `hf' `"      var r=rows[i];"' _n
+    file write `hf' `"      if(!r.ons){ out.push(r); continue; }"' _n
+    file write `hf' `"      var d={v:r.v, st:r.st, s:r.s, t:r.t, q:r.q, e:r.e, bv:r.bv, on:0, und:0, vi:0, im:0, bd:0, sh:null};"' _n
+    file write `hf' `"      for(j=0;j<idxs.length;j++){"' _n
+    file write `hf' `"        var k=idxs[j];"' _n
+    file write `hf' `"        d.on+=r.ons[k]||0; d.und+=(r.uns?r.uns[k]:0)||0; d.vi+=(r.vis?r.vis[k]:0)||0;"' _n
+    file write `hf' `"        d.im+=(r.ims?r.ims[k]:0)||0; d.bd+=(r.bds?r.bds[k]:0)||0;"' _n
+    file write `hf' `"      }"' _n
+    file write `hf' `"      d.sh = d.on>0 ? d.im/d.on : null;"' _n
+    file write `hf' `"      out.push(d);"' _n
+    file write `hf' `"    }"' _n
+    file write `hf' `"    return out;"' _n
+    file write `hf' `"  },"' _n
     file write `hf' `"  filt: function(rows, S){"' _n
     file write `hf' `"    var out=[], i, r, q;"' _n
     file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
@@ -4610,6 +4707,7 @@ program _suso_para_check, rclass
     file write `hf' `"    sec: el('c_sec').value,"' _n
     file write `hf' `"    st: el('c_st').value,"' _n
     file write `hf' `"    prob: el('c_prob').checked,"' _n
+    file write `hf' `"    ist: el('c_ist').value,"' _n
     file write `hf' `"    minsh: (parseFloat(el('c_minsh').value)||0)/100,"' _n
     file write `hf' `"    sort: el('c_sort').value"' _n
     file write `hf' `"  };"' _n
@@ -4663,7 +4761,7 @@ program _suso_para_check, rclass
     file write `hf' _n
     file write `hf' `"function renderAll(){"' _n
     file write `hf' `"  var S=settings();"' _n
-    file write `hf' `"  var rows=C.filt(D.rows,S);"' _n
+    file write `hf' `"  var rows=C.filt(C.derive(D.rows, D.meta, S.ist), S);"' _n
     file write `hf' `"  var K=C.kpis(rows);"' _n
     file write `hf' `"  el('k_shown').textContent=fc(K.n);"' _n
     file write `hf' `"  el('k_imiss').textContent=fc(K.im);"' _n
@@ -4680,7 +4778,18 @@ program _suso_para_check, rclass
     file write `hf' `"}"' _n
     file write `hf' _n
     file write `hf' `"function init(){"' _n
-    file write `hf' `"  var secs={}, i;"' _n
+    file write `hf' `"  var i;"' _n
+    file write `hf' `"  var sts=(D.meta&&D.meta.statuses)?D.meta.statuses:[];"' _n
+    file write `hf' `"  if(sts.length){"' _n
+    file write `hf' `"    var hasApp=false, o='<option value='+Q+Q+'>All statuses</option>';"' _n
+    file write `hf' `"    for(i=0;i<sts.length;i++) if(sts[i].c===120||sts[i].c===130) hasApp=true;"' _n
+    file write `hf' `"    if(hasApp) o+='<option value='+Q+'APP'+Q+'>Approved only (Sup + HQ)</option>';"' _n
+    file write `hf' `"    for(i=0;i<sts.length;i++) o+='<option value='+Q+i+Q+'>'+esc(sts[i].l||String(sts[i].c))+' ('+fc(sts[i].n)+')</option>';"' _n
+    file write `hf' `"    el('c_ist').innerHTML=o;"' _n
+    file write `hf' `"  } else {"' _n
+    file write `hf' `"    el('ctl_ist').style.display='none';"' _n
+    file write `hf' `"  }"' _n
+    file write `hf' `"  var secs={};"' _n
     file write `hf' `"  for(i=0;i<D.rows.length;i++) if(D.rows[i].s) secs[D.rows[i].s]=1;"' _n
     file write `hf' `"  var names=Object.keys(secs).sort(), s='<option value='+Q+Q+'>All sections</option>';"' _n
     file write `hf' `"  for(i=0;i<names.length;i++) s+='<option>'+esc(names[i])+'</option>';"' _n
