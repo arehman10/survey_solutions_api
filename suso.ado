@@ -1,4 +1,4 @@
-*! suso v1.7.0 build 2026-07-02-CAUSAL  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.0 build 2026-07-02-VARS  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0 (build 2026-07-02-CAUSAL)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0 (build 2026-07-02-VARS)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -2564,6 +2564,32 @@ program _suso_para_need
     }
 end
 
+* ---- varsel: restrict answer-level events to selected variables ---------------
+* Keeps structural events (sessions, completions, workflow) so timing and status
+* derivation stay intact; answer/removal/comment events survive only when the
+* variable matches one of the (wildcard-capable) patterns in vars().
+program _suso_para_varsel, rclass
+    version 14.2
+    syntax [, VARS(string) ]
+    if `"`vars'"'=="" exit
+    capture confirm variable para_var
+    if _rc {
+        di as txt "  vars(): the paradata has no variable names (parameters column absent) - option ignored."
+        exit
+    }
+    tempvar kev
+    quietly gen byte `kev' = !(para_ans | para_rem | para_ev=="commentset")
+    foreach p of local vars {
+        quietly replace `kev' = 1 if (para_ans | para_rem | para_ev=="commentset") & strmatch(para_var, "`p'")
+    }
+    quietly count if `kev' & para_ans
+    local na = r(N)
+    quietly keep if `kev'
+    di as txt "  vars(): analysis restricted to " as res "`na'" as txt " answer events on the selected variables (`vars')."
+    di as txt "  structural events kept; interviews with no selected-variable activity may drop from the started count."
+    return scalar nanskept = `na'
+end
+
 * ---- derive: shared event-level derivations (roles, gaps, sessions) ------------
 program _suso_para_derive, rclass
     version 14.2
@@ -2650,8 +2676,9 @@ end
 * ---- timing: events in memory  ->  one row per interview / question / interviewer
 program _suso_para_timing, rclass
     version 14.2
-    syntax [, BY(string) GAPMins(real 30) FASTsecs(real 2) ALLRoles ]
+    syntax [, BY(string) GAPMins(real 30) FASTsecs(real 2) ALLRoles VARS(string) ]
     _suso_para_need events
+    _suso_para_varsel , vars(`"`vars'"')
 
     if "`by'"=="" local by interview
     if !inlist("`by'","interview","question","interviewer") {
@@ -2962,8 +2989,9 @@ end
 program _suso_para_skips, rclass
     version 14.2
     syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ///
-        QX(string) MESSages(string) HTML(string) DETail(string) ]
+        QX(string) MESSages(string) HTML(string) DETail(string) VARS(string) ]
     _suso_para_need events
+    _suso_para_varsel , vars(`"`vars'"')
     if `cascade'<2 {
         di as err "suso paradata skips: cascade() is the minimum run of AnswerRemoved events; use 2 or more."
         exit 198
@@ -3487,10 +3515,11 @@ end
 program _suso_para_report, rclass
     version 14.2
     syntax [, SAVing(string) replace TITle(string) QX(string)                    ///
-        DATA(string) FILTERS(string)                                             ///
+        DATA(string) FILTERS(string) VARS(string)                                ///
         GAPMins(real 30) FASTsecs(real 2) ALLRoles                               ///
         CASCade(integer 3) WINdow(real 60) LITEcap(integer 15000) ]
     _suso_para_need events
+    _suso_para_varsel , vars(`"`vars'"')
 
     if `"`saving'"'=="" local saving "suso_paradata_qc.html"
     if "`replace'"=="" {
@@ -4655,6 +4684,9 @@ program _suso_para_check, rclass
             local nim = r(N)
             quietly count if missing(`en') & `anse'
             local nvu = r(N)
+            if `non' + `nof' + `nund' != _N {
+                di as err "suso paradata check: internal partition failure on `v_`i'' (`non'+`nof'+`nund' != `=_N') - please report this."
+            }
             foreach s of local slist {
                 quietly count if `en'==1 & interview__status==`s'
                 local f_on "`f_on',`r(N)'"
@@ -4771,7 +4803,29 @@ program _suso_para_check, rclass
         di as txt "  or a questionnaire version change) - review before analysis."
         quietly drop `sk'
     }
-    else di as txt _n "  no hard skip violations: the exported data respects every evaluated condition."
+    else {
+        quietly summarize n_off
+        di as txt _n "  no hard skip violations: " as res %12.0fc r(sum) as txt " disabled question-cases were"
+        di as txt "  checked and none carries an answer. SuSo deletes answers when questions are"
+        di as txt "  disabled, so violations here mean version changes or API writes - the practical"
+        di as txt "  signal is the answered-while-gate-unanswered count above."
+    }
+    quietly count if n_vund>0 & !missing(n_vund)
+    if r(N)>0 {
+        tempvar sk2
+        quietly gen double `sk2' = cond(missing(n_vund), -1, n_vund)
+        gsort -`sk2' qvar
+        di as txt _n "  answered while the gate itself is unanswered (top `top'):"
+        di as txt "  {ul:variable                }  {ul:answered}  {ul:undetermined}"
+        forvalues i = 1/`=min(`top',_N)' {
+            if n_vund[`i']>0 & !missing(n_vund[`i']) {
+                local vv : di %-24s abbrev(qvar[`i'],24)
+                di as txt "  " as res "`vv'" as txt "  " %8.0f `=n_vund[`i']' "  " %12.0f `=n_und[`i']'
+            }
+        }
+        di as txt "  a clean interview flow cannot produce these - preloads or version changes."
+        quietly drop `sk2'
+    }
     quietly count if n_imiss>0 & !missing(n_imiss)
     if r(N)>0 {
         quietly gen double `sk' = cond(missing(imiss_share), -1, imiss_share)
@@ -4909,6 +4963,7 @@ program _suso_para_check, rclass
     file write `hf' `"<div class="card warn"><div class="v" id="k_imiss">-</div><div class="k">unanswered when enabled</div></div>"' _n
     file write `hf' `"<div class="card warn"><div class="v" id="k_viol">-</div><div class="k">answers on disabled qs</div></div>"' _n
     file write `hf' `"<div class="card warn"><div class="v" id="k_bad">-</div><div class="k">out-of-list values</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_vund">-</div><div class="k">answered, gate unanswered</div></div>"' _n
     file write `hf' `"</div>"' _n
     file write `hf' `"<h2>Item nonresponse (enabled but unanswered)</h2>"' _n
     file write `hf' `"<div class="note">Top questions by unanswered share among records where the question was enabled (10+ enabled records). Service and desk questions often sit at 100% - use the filters or search to focus on interview content, and raise Min share to cut noise.</div>"' _n
@@ -4917,6 +4972,11 @@ program _suso_para_check, rclass
     file write `hf' `"<h2>Answers on disabled questions</h2>"' _n
     file write `hf' `"<div class="note">Hard skip violations: an answer is present although the skip logic disables the question. These enter via preloading, API writes, or questionnaire version changes.</div>"' _n
     file write `hf' `"<section id="ch_viol"></section>"' _n
+    file write `hf' `"</div>"' _n
+    file write `hf' `"<div id="sec_vund">"' _n
+    file write `hf' `"<h2>Answered while the gate is unanswered</h2>"' _n
+    file write `hf' `"<div class="note">An answer exists although the question controlling it was never answered - impossible in a clean interview flow. These come from preloading or questionnaire version changes and are the practical skip-violation signal in Survey Solutions exports.</div>"' _n
+    file write `hf' `"<section id="ch_vund"></section>"' _n
     file write `hf' `"</div>"' _n
     file write `hf' `"<div id="sec_bad">"' _n
     file write `hf' `"<h2>Single-select values outside the option list</h2>"' _n
@@ -5017,9 +5077,9 @@ program _suso_para_check, rclass
     file write `hf' `"    return out;"' _n
     file write `hf' `"  },"' _n
     file write `hf' `"  kpis: function(rows){"' _n
-    file write `hf' `"    var t={n:rows.length, im:0, vi:0, bd:0}, i;"' _n
+    file write `hf' `"    var t={n:rows.length, im:0, vi:0, bd:0, vu:0}, i;"' _n
     file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
-    file write `hf' `"      t.im+=rows[i].im||0; t.vi+=rows[i].vi||0; t.bd+=rows[i].bd||0;"' _n
+    file write `hf' `"      t.im+=rows[i].im||0; t.vi+=rows[i].vi||0; t.bd+=rows[i].bd||0; t.vu+=rows[i].vu||0;"' _n
     file write `hf' `"    }"' _n
     file write `hf' `"    return t;"' _n
     file write `hf' `"  },"' _n
@@ -5138,6 +5198,7 @@ program _suso_para_check, rclass
     file write `hf' `"  el('k_imiss').textContent=fc(K.im);"' _n
     file write `hf' `"  el('k_viol').textContent=fc(K.vi);"' _n
     file write `hf' `"  el('k_bad').textContent=fc(K.bd);"' _n
+    file write `hf' `"  el('k_vund').textContent=fc(K.vu);"' _n
     file write `hf' `"  hbars('ch_imiss', C.topBy(rows,'im',10,S.minsh,15), 'im');"' _n
     file write `hf' `"  var tv=C.topBy(rows,'vi',0,0,15);"' _n
     file write `hf' `"  el('sec_viol').style.display = tv.length ? '' : 'none';"' _n
@@ -5145,6 +5206,9 @@ program _suso_para_check, rclass
     file write `hf' `"  var tb=C.topBy(rows,'bd',0,0,15);"' _n
     file write `hf' `"  el('sec_bad').style.display = tb.length ? '' : 'none';"' _n
     file write `hf' `"  if(tb.length) hbars('ch_bad', tb, 'bd');"' _n
+    file write `hf' `"  var tu=C.topBy(rows,'vu',0,0,15);"' _n
+    file write `hf' `"  el('sec_vund').style.display = tu.length ? '' : 'none';"' _n
+    file write `hf' `"  if(tu.length) hbars('ch_vund', tu, 'vu');"' _n
     file write `hf' `"  renderList(C.srt(rows, S.sort), S);"' _n
     file write `hf' `"}"' _n
     file write `hf' _n
@@ -5225,8 +5289,9 @@ program _suso_para_suite, rclass
     syntax [if] [, SAVing(string) replace TITle(string) QX(string) DATA(string)  ///
         GAPMins(real 30) FASTsecs(real 2) ALLRoles LITEcap(integer 15000)         ///
         CASCade(integer 3) WINdow(real 60) TOP(integer 15)                         ///
-        MISScodes(numlist) STatus(string) FILTERS(string) ]
+        MISScodes(numlist) STatus(string) FILTERS(string) VARS(string) ]
     _suso_para_need events
+    _suso_para_varsel , vars(`"`vars'"')
     if `"`saving'"'=="" local saving "suso_qc_suite.html"
     if "`replace'"=="" {
         capture confirm new file `"`saving'"'
