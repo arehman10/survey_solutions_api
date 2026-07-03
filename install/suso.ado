@@ -1,4 +1,4 @@
-*! suso v1.7.0 build 2026-07-02-TRIAGE  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.0 build 2026-07-02-TRIAGE2  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0 (build 2026-07-02-TRIAGE)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0 (build 2026-07-02-TRIAGE2)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -3360,7 +3360,7 @@ program _suso_para_skips, rclass
             if r(N)>0 local clrline "`clrline'`=cond("`clrline'"=="","",", ")'`w' x`r(N)'"
         }
         gsort -nrem interview__id sk_run
- = "CASE " + strofreal(_n) + " of `ncasc'.  Interview " ///
+        quietly gen strL m_head = "CASE " + strofreal(_n) + " of `ncasc'.  Interview " ///
             + interview__id + ".  Enumerator: " + cond(actor!="", actor, resp)          ///
             + ".  On " + string(ts0/86400000, "%tdDD_Mon_CCYY") + " at "                ///
             + string(ts0, "%tcHH:MM") + " UTC."
