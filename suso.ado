@@ -1,4 +1,4 @@
-*! suso v1.7.0 build 2026-07-02-VARS  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.0 build 2026-07-02-TRIAGE  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0 (build 2026-07-02-VARS)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0 (build 2026-07-02-TRIAGE)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -2989,7 +2989,7 @@ end
 program _suso_para_skips, rclass
     version 14.2
     syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ///
-        QX(string) MESSages(string) HTML(string) DETail(string) VARS(string) ]
+        QX(string) MESSages(string) HTML(string) DETail(string) VARS(string) FULL ]
     _suso_para_need events
     _suso_para_varsel , vars(`"`vars'"')
     if `cascade'<2 {
@@ -3011,6 +3011,7 @@ program _suso_para_skips, rclass
         quietly bysort qx_var: keep if _n==1
         forvalues j = 1/`=_N' {
             local en_`=qx_var[`j']' = substr(qx_enable[`j'], 1, 300)
+            local sec_`=qx_var[`j']' = substr(qx_section[`j'], 1, 40)
         }
         quietly rename qx_var trigger
         quietly save `"`QXT'"'
@@ -3270,7 +3271,96 @@ program _suso_para_skips, rclass
         local hasqxt 0
         capture confirm variable qx_text
         if !_rc local hasqxt 1
-        quietly gen strL m_head = "CASE " + strofreal(_n) + " of `ncasc'.  Interview " ///
+
+        * ---- automatic triage: classify every case, roll up to findings -------------
+        quietly gen byte nsecs = 1
+        quietly gen strL wlc = wl
+        forvalues r = 1/`=_N' {
+            local wlw = subinstr(wl[`r'], ",", " ", .)
+            local seen ""
+            local out ""
+            local secs ""
+            foreach w of local wlw {
+                if strpos(" `seen' ", " `w' ")>0 continue
+                local seen "`seen' `w'"
+                local k 0
+                foreach w2 of local wlw {
+                    if "`w2'"=="`w'" local ++k
+                }
+                local out "`out'`=cond("`out'"=="","",", ")'`w'`=cond(`k'>1," x`k'","")'"
+                if `hasqxt' {
+                    local ss `"`sec_`w''"'
+                    if `"`ss'"'!="" & strpos(`"|`secs'|"', `"|`ss'|"')==0 local secs `"`secs'|`ss'"'
+                }
+            }
+            quietly replace wlc = "`out'" in `r'
+            local nsc = length(`"`secs'"') - length(subinstr(`"`secs'"', "|", "", .))
+            if `nsc'>0 quietly replace nsecs = `nsc' in `r'
+        }
+        tempvar ti tr sameA
+        quietly bysort interview__id: gen long __ncint = _N
+        quietly egen long __wint = total(nrem), by(interview__id)
+        quietly egen byte __smax = max(nsecs), by(interview__id)
+        quietly bysort trigger interview__id: gen byte `ti' = _n==1
+        quietly bysort trigger resp: gen byte `tr' = _n==1
+        quietly egen long __sint = total(`ti'), by(trigger)
+        quietly egen long __sres = total(`tr'), by(trigger)
+        quietly bysort interview__id trigger: gen long __same = _N
+        quietly gen str1 tier = "C"
+        quietly gen strL why = "confirmed honest gate correction"
+        quietly replace why = "review/approval reset" if conf==0 & allsvc==1
+        quietly replace tier = "V" if conf==0 & allsvc==0
+        quietly replace why = "unconfirmed - check the interview history" if conf==0 & allsvc==0
+        quietly replace tier = "V" if allsvc==1 & nrem>=20
+        quietly replace why = "large service-field wipe - confirm the final log" if allsvc==1 & nrem>=20
+        quietly replace tier = "V" if __same>=2
+        quietly replace why = "repeated flips of the same code - confirm the final value" if __same>=2
+        quietly replace tier = "C" if __sint>=3 & __sres>=2
+        quietly replace why = "systemic workflow churn" if __sint>=3 & __sres>=2
+        quietly replace tier = "A" if __ncint>=3 | __wint>=50 | nsecs>=3
+        quietly replace why = "restructured after completion" if tier=="A"
+        quietly egen byte `sameA' = max(tier=="A"), by(resp)
+        quietly replace why = "same enumerator - review together" if `sameA' & tier=="V"
+        quietly replace tier = "A" if `sameA' & tier=="V"
+        quietly save `"`skdet'"', replace
+        if `"`detail'"'!="" quietly copy `"`skdet'"' `"`detail'"', replace
+        * findings roll-up into locals
+        local invresps ""
+        local nver 0
+        local seenv ""
+        sort resp interview__id sk_run
+        forvalues r = 1/`=_N' {
+            if tier[`r']=="A" {
+                local rr = resp[`r']
+                if strpos(" `invresps' ", " `rr' ")==0 local invresps "`invresps' `rr'"
+                local __i8 = substr(interview__id[`r'],1,8)
+                if strpos(`"`inv_ids_`rr''"', "`__i8'")==0 {
+                    local inv_ids_`rr' "`inv_ids_`rr'' `__i8'"
+                }
+                local inv_w_`rr' = `inv_w_`rr'' + nrem[`r']
+            }
+            if tier[`r']=="V" {
+                local __i8 = substr(interview__id[`r'],1,8)
+                if strpos(" `seenv' ", " `__i8' ")==0 {
+                    local seenv "`seenv' `__i8'"
+                    local ++nver
+                    local ver_i_`nver' "`__i8'"
+                    local ver_r_`nver' = resp[`r']
+                    local ver_w_`nver' = why[`r']
+                }
+            }
+        }
+        local invresps = strtrim("`invresps'")
+        local ninv : word count `invresps'
+        quietly count if tier=="C"
+        local nclr = r(N)
+        local clrline ""
+        foreach w in "confirmed honest gate correction" "review/approval reset" "systemic workflow churn" {
+            quietly count if tier=="C" & why=="`w'"
+            if r(N)>0 local clrline "`clrline'`=cond("`clrline'"=="","",", ")'`w' x`r(N)'"
+        }
+        gsort -nrem interview__id sk_run
+ = "CASE " + strofreal(_n) + " of `ncasc'.  Interview " ///
             + interview__id + ".  Enumerator: " + cond(actor!="", actor, resp)          ///
             + ".  On " + string(ts0/86400000, "%tdDD_Mon_CCYY") + " at "                ///
             + string(ts0, "%tcHH:MM") + " UTC."
@@ -3314,12 +3404,38 @@ program _suso_para_skips, rclass
             file write `mf' "PARADATA SKIP-VIOLATION REVIEW" _n
             file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.0)" _n
             file write `mf' "Definition: a case is `cascade' or more answers erased by the skip logic within `window' seconds of an answer being changed." _n
-            file write `mf' "`ncasc' case(s) found, `nwiped' answers erased in total. The `k' largest are listed below." _n
+            file write `mf' "`ncasc' case(s) found, `nwiped' answers erased in total." _n
+            file write `mf' _n "BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention - `nclr' cases are routine and were auto-cleared." _n
+            foreach rr of local invresps {
+                local nids : word count `inv_ids_`rr''
+                file write `mf' _n "INVESTIGATE `rr': `nids' interview(s) heavily restructured, `inv_w_`rr'' answers erased across sections." _n
+                file write `mf' "  interviews:`inv_ids_`rr''" _n
+                file write `mf' "  do: open each in Headquarters. If there is no rejection immediately before the erasures, escalate." _n
+            }
+            forvalues v = 1/`nver' {
+                file write `mf' _n "VERIFY `ver_i_`v'' (`ver_r_`v''): `ver_w_`v''." _n
+            }
+            if `nclr'>0 file write `mf' _n "Auto-cleared as routine: `clrline'." _n
+            file write `mf' _n "Case-by-case detail below is for reference only." _n
         }
         di as txt _n "  {hline 70}"
-        di as res "  ACTION LIST — what to tell the field supervisor (top `k' of `ncasc')"
+        di as res "  BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention — `nclr' of `ncasc' cases are routine (auto-cleared)."
         di as txt "  {hline 70}"
-        if !`hasqxt' di as txt "  tip: add qx(questionnaire.html) to include the question wording below."
+        foreach rr of local invresps {
+            local nids : word count `inv_ids_`rr''
+            di as res "  INVESTIGATE  `rr'" as txt ": `nids' interview(s) heavily restructured, `inv_w_`rr'' answers erased."
+            di as txt "               ids:`inv_ids_`rr''"
+            di as txt "               do: open each in Headquarters — if no rejection immediately before the erasures, escalate."
+        }
+        forvalues v = 1/`nver' {
+            di as res "  VERIFY       `ver_i_`v''" as txt "  `ver_r_`v'' — `ver_w_`v''"
+        }
+        if `nclr'>0 di as txt "  cleared      `clrline'"
+        if !`hasqxt' di as txt "  tip: add qx(questionnaire.html) for question wording and stronger triage."
+        if "`full'"=="" {
+            di as txt "  (add the {bf:full} option for the complete case-by-case list)"
+            local k 0
+        }
         forvalues i = 1/`k' {
             di as txt ""
             di as res "  " m_head[`i']
@@ -3392,7 +3508,7 @@ program _suso_para_skips, rclass
                 quietly replace h_sc = substr(qx_section,1,80)
                 quietly replace h_en = substr(qx_enable,1,200)
             }
-            quietly gen strL h_wl = substr(wl,1,400)
+            quietly gen strL h_wl = substr(wlc,1,400)
             foreach v in h_ac h_tg h_tv0 h_qt h_sc h_en h_wl {
                 quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
             }
@@ -3468,7 +3584,22 @@ program _suso_para_skips, rclass
             }
             file write `hf' `"</table>"' _n
             quietly use `"`DET2'"', clear
-            file write `hf' `"<h2>Cases, largest first</h2>"' _n
+            file write `hf' `"<h2>Action needed</h2>"' _n
+            local nact 0
+            forvalues i = 1/`=_N' {
+                if tier[`i']=="C" continue
+                local ++nact
+                file write `hf' (h_open[`i']) _n
+                file write `hf' (h_chip[`i']) _n
+                file write `hf' (h_l1[`i']) _n
+                file write `hf' `"<div class="c2" style="font-weight:700;color:#7a5b00">"' (why[`i']) `"</div>"' _n
+                file write `hf' (h_l2[`i']) _n
+                if h_l5[`i']!="" file write `hf' (h_l5[`i']) _n
+                file write `hf' `"</div>"' _n
+            }
+            if `nact'==0 file write `hf' `"<div class="meta">Nothing needs action - every case was auto-cleared as routine.</div>"' _n
+            file write `hf' `"<h2>Routine cases (auto-cleared)</h2>"' _n
+            file write `hf' `"<details><summary style="cursor:pointer;font-size:13px;color:#555;padding:6px 0">Show `nclr' routine case(s) - confirmed corrections, workflow resets and systemic churn</summary>"' _n
             local kk = min(_N, 200)
             forvalues i = 1/`kk' {
                 file write `hf' (h_open[`i']) _n
@@ -3481,6 +3612,7 @@ program _suso_para_skips, rclass
                 if h_l6[`i']!="" file write `hf' (h_l6[`i']) _n
                 file write `hf' `"</div>"' _n
             }
+            file write `hf' `"</details>"' _n
             if _N>`kk' file write `hf' `"<div class="meta">Showing the `kk' largest of `ncasc' cases.</div>"' _n
             file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.0). Cases are screening signals from the paradata event stream, not proof of misconduct.</div>"' _n
             file write `hf' `"</div></body></html>"' _n
@@ -3878,7 +4010,12 @@ program _suso_para_report, rclass
         quietly gen strL e_tv0 = trigval
         quietly gen strL e_qt = ""
         if `hasqxt' quietly replace e_qt = substr(qx_text,1,160)
-        quietly gen strL e_wl = substr(wl,1,300)
+        quietly gen strL e_wl = substr(wlc,1,300)
+        capture confirm variable tier
+        if _rc {
+            quietly gen str1 tier = "V"
+            quietly gen strL why = ""
+        }
         foreach v in e_ac e_tg e_tv0 e_qt e_wl {
             quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
         }
@@ -3896,8 +4033,13 @@ program _suso_para_report, rclass
         file write `fh' `"<h2>Actions for the field supervisor</h2>"' _n
         file write `fh' `"<div class="note">One entry per skip violation, largest first. If the new gate value is right, the interview should be rejected so the erased questions are re-asked; if the old value was right, restore it and verify the section. For an email-ready version run: suso paradata skips , qx(questionnaire.html) messages(review.txt)</div>"' _n
         file write `fh' `"<section>"' _n
+        quietly count if tier!="C"
+        file write `fh' `"<div class="note"><b>"' (strofreal(r(N))) `"</b> case(s) need attention; the rest were auto-cleared as routine (confirmed corrections, workflow resets, systemic churn).</div>"' _n
         local kk = min(15, _N)
+        local shown 0
         forvalues i = 1/`kk' {
+            if tier[`i']=="C" continue
+            local ++shown
             file write `fh' `"<div style="border-bottom:1px solid #eef0f2;padding:9px 0">"' _n
             file write `fh' `"<div style="font-size:13px"><span class="mono"><b>"' (interview__id[`i']) `"</b></span> &nbsp; enumerator <b>"' (e_ac[`i']) `"</b> &nbsp; "' (e_dt[`i']) `"</div>"' _n
             file write `fh' `"<div style="font-size:12.5px;margin-top:3px">The answer to <b class="mono">"' (e_tg[`i']) `"</b> was changed"' (e_tv[`i']) `" after <b>"' (strofreal(nrem[`i'])) `"</b> later answers were recorded - the skip logic erased them.</div>"' _n
@@ -3910,6 +4052,7 @@ program _suso_para_report, rclass
             if e_cf[`i']!="" file write `fh' (e_cf[`i']) _n
             file write `fh' `"</div>"' _n
         }
+        if `shown'==0 file write `fh' `"<div class="note">Nothing needs action - every skip case was auto-cleared as routine.</div>"' _n
         file write `fh' `"</section>"' _n
         restore
     }
