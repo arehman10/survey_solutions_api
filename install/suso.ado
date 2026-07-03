@@ -1,4 +1,4 @@
-*! suso v1.7.0 build 2026-07-02-TRIAGE2  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.0 build 2026-07-02-TRIAGE3  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0 (build 2026-07-02-TRIAGE2)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0 (build 2026-07-02-TRIAGE3)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -2585,6 +2585,7 @@ program _suso_para_varsel, rclass
     quietly count if `kev' & para_ans
     local na = r(N)
     quietly keep if `kev'
+    quietly drop `kev'
     di as txt "  vars(): analysis restricted to " as res "`na'" as txt " answer events on the selected variables (`vars')."
     di as txt "  structural events kept; interviews with no selected-variable activity may drop from the started count."
     return scalar nanskept = `na'
@@ -4670,6 +4671,7 @@ program _suso_para_check, rclass
             quietly replace `kp' = 1 if interview__status==`s'
         }
         quietly keep if `kp'
+        quietly drop `kp'
         if _N==0 {
             di as err "suso paradata check: no records match status(`status')."
             exit 2000
