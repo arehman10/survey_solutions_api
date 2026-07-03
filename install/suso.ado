@@ -1,4 +1,4 @@
-*! suso v1.7.0 build 2026-07-02-TRIAGE3  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.0 build 2026-07-02-SCRUB  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0 (build 2026-07-02-TRIAGE3)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.0 (build 2026-07-02-SCRUB)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -2562,6 +2562,12 @@ program _suso_para_need
         }
         exit 459
     }
+    * self-heal: a crashed earlier run can leave temp-named columns behind; a later
+    * -tempvar- may be issued the same name and its -gen- would then fail with r(110)
+    capture quietly ds __0*
+    if !_rc {
+        if "`r(varlist)'"!="" quietly drop `r(varlist)'
+    }
 end
 
 * ---- varsel: restrict answer-level events to selected variables ---------------
@@ -3322,7 +3328,8 @@ program _suso_para_skips, rclass
         quietly replace why = "restructured after completion" if tier=="A"
         quietly egen byte `sameA' = max(tier=="A"), by(resp)
         quietly replace why = "same enumerator - review together" if `sameA' & tier=="V"
-        quietly replace tier = "A" if `sameA' & tier=="V"
+        quietly replace tier = "A" if `sameA' & why=="same enumerator - review together"
+        capture quietly drop `ti' `tr' `sameA' __ncint __wint __smax __sint __sres __same
         quietly save `"`skdet'"', replace
         if `"`detail'"'!="" quietly copy `"`skdet'"' `"`detail'"', replace
         * findings roll-up into locals
