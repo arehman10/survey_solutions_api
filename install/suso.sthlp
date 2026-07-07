@@ -549,26 +549,149 @@ For a single-object response (for example {cmd:export status} or
 {cmd:r(progress)}). Rows are loaded as the current dataset and are not duplicated
 in {cmd:r()}.
 
+
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Set up and test:{p_end}
-{p 8 12 2}{cmd:. suso config , server("https://demo.mysurvey.solutions") workspace("primary") user("API_USER") password("pw")}{p_end}
-{p 8 12 2}{cmd:. suso ping}{p_end}
+{pstd}
+Every example below is a real command. {it:guid} is a questionnaire id and {it:qver}
+its version; set them once with {cmd:suso config , guid() qver()} or pass them per
+command. List/browse verbs replace the data in memory; single-record verbs fill {cmd:r()}.
 
-{pstd}List all completed interviews:{p_end}
+{dlgtab:1. Set up and test the connection}
+
+{pstd}
+You only need {opt server()} and {opt workspace()}. {opt user()} and {opt password()}
+are {bf:optional}: if you omit them, {cmd:suso} asks for the user name and a masked
+password the first time a command contacts the server (or run {cmd:suso login} to enter
+them up front). So the minimal setup is just:{p_end}
+{p 8 12 2}{cmd:. suso config , server("https://demo.mysurvey.solutions") workspace("primary")}{p_end}
+{p 8 12 2}{cmd:. suso ping}{space 6}{it:// prompts for user + password (masked), then checks auth}{p_end}
+
+{pstd}
+You may still supply them non-interactively with {opt user()} / {opt password()}, or
+{hline 1} safer, keeping the password out of your command history {hline 1} set the
+{cmd:SUSO_PASSWORD} environment variable before launching Stata:{p_end}
+{p 8 12 2}{cmd:. suso config , server("https://demo.mysurvey.solutions") workspace("primary") user("API_USER")}{p_end}
+{p 8 12 2}{cmd:. suso login}{space 5}{it:// enter / replace credentials at a masked prompt anytime}{p_end}
+{p 8 12 2}{cmd:. suso doctor}{space 4}{it:// Java/JVM check + which suso.jar is in use}{p_end}
+{p 8 12 2}{cmd:. suso config , show}{space 1}{it:// review current settings (password masked)}{p_end}
+
+{dlgtab:2. Pull lists into a Stata dataset}
+
+{pstd}Add {opt all} to fetch every page (auto-paginated):{p_end}
+{p 8 12 2}{cmd:. suso assignment list , all}{p_end}
+{p 8 12 2}{cmd:. suso assignment list , responsible("FieldInt01") guid(<guid>) qver(11)}{p_end}
 {p 8 12 2}{cmd:. suso interview list , status(Completed) all}{p_end}
+{p 8 12 2}{cmd:. suso questionnaire list , all}{p_end}
+{p 8 12 2}{cmd:. suso supervisor list , all}{p_end}
+{p 8 12 2}{cmd:. suso supervisor interviewers , id(<supervisor-id>) all}{p_end}
+{p 8 12 2}{cmd:. suso export list}{p_end}
 
-{pstd}Approve, then reject, an interview with a comment:{p_end}
-{p 8 12 2}{cmd:. suso interview approve , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457) comment("looks good")}{p_end}
-{p 8 12 2}{cmd:. suso interview reject  , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457) comment("please revisit the GPS point")}{p_end}
+{dlgtab:3. Inspect one record (values land in r())}
 
-{pstd}Export STATA data and download it:{p_end}
-{p 8 12 2}{cmd:. suso config , guid("76732117-1b19-4c82-bd39-1e34a781a2e9") qver(11)}{p_end}
-{p 8 12 2}{cmd:. suso export start , type(STATA) istatus(ApprovedBySupervisor)}{p_end}
-{p 8 12 2}{cmd:. suso export status , id(`=r(jobid)')}{p_end}
-{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("ses_v11.zip") replace}{p_end}
+{p 8 12 2}{cmd:. suso assignment get , id(123)}{p_end}
+{p 8 12 2}{cmd:. suso interview get   , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457)}{p_end}
+{p 8 12 2}{cmd:. suso interview stats , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457)}{p_end}
+{p 8 12 2}{cmd:. return list}{space 2}{it:// see everything the call returned}{p_end}
 
+{dlgtab:4. Interview QC workflow}
+
+{pstd}Approve / reject (HQ variants escalate to headquarters):{p_end}
+{p 8 12 2}{cmd:. suso interview approve   , id(<uuid>) comment("looks good")}{p_end}
+{p 8 12 2}{cmd:. suso interview reject    , id(<uuid>) comment("GPS off-square; please revisit")}{p_end}
+{p 8 12 2}{cmd:. suso interview hqapprove , id(<uuid>)}{p_end}
+{p 8 12 2}{cmd:. suso interview hqreject  , id(<uuid>) comment("inconsistent roster")}{p_end}
+
+{pstd}Comment on a specific question, by question id or by variable name:{p_end}
+{p 8 12 2}{cmd:. suso interview comment      , id(<uuid>) question(<question-id>) comment("verify units")}{p_end}
+{p 8 12 2}{cmd:. suso interview commentbyvar , id(<uuid>) variable(q14_sales) comment("seems too high")}{p_end}
+{p 8 12 2}{cmd:. suso interview commentbyvar , id(<uuid>) variable(emp_name) rostervector(2) comment("typo")}{p_end}
+
+{pstd}Reassign, save the PDF, or delete (delete needs {opt confirm}):{p_end}
+{p 8 12 2}{cmd:. suso interview assign           , id(<uuid>) responsible("FieldInt07")}{p_end}
+{p 8 12 2}{cmd:. suso interview assignsupervisor , id(<uuid>) responsible("Sup02")}{p_end}
+{p 8 12 2}{cmd:. suso interview pdf    , id(<uuid>) saving("iv.pdf") replace}{p_end}
+{p 8 12 2}{cmd:. suso interview delete , id(<uuid>) confirm}{p_end}
+
+{dlgtab:5. Assignments}
+
+{p 8 12 2}{cmd:. suso assignment create   , responsible("FieldInt01") guid(<guid>) qver(11) quantity(3)}{p_end}
+{p 8 12 2}{cmd:. suso assignment assign   , id(123) responsible("FieldInt09")}{space 1}{it:// reassign}{p_end}
+{p 8 12 2}{cmd:. suso assignment quantity , id(123) n(5)}{space 6}{it:// change target count}{p_end}
+{p 8 12 2}{cmd:. suso assignment audio    , id(123) on}{space 9}{it:// audio audit on/off}{p_end}
+{p 8 12 2}{cmd:. suso assignment close    , id(123)}{p_end}
+{p 8 12 2}{cmd:. suso assignment archive  , id(123) confirm}{space 4}{it:// destructive}{p_end}
+
+{dlgtab:6. Questionnaires}
+
+{p 8 12 2}{cmd:. suso questionnaire document    , guid(<guid>) qver(11) saving("q.json") replace}{p_end}
+{p 8 12 2}{cmd:. suso questionnaire interviews  , guid(<guid>) qver(11) all}{space 1}{it:// interviews for this version}{p_end}
+{p 8 12 2}{cmd:. suso questionnaire audio       , guid(<guid>) qver(11) on}{space 4}{it:// require audio audit}{p_end}
+{p 8 12 2}{cmd:. suso questionnaire criticality , guid(<guid>) qver(11) get}{p_end}
+
+{dlgtab:7. Export data}
+
+{pstd}{bf:One-shot} {hline 1} start, watch progress, and download automatically when done:{p_end}
+{p 8 12 2}{cmd:. suso export get , type(STATA) guid(<guid>) qver(11) istatus(ApprovedBySupervisor) saving("ses_v11.zip") replace}{p_end}
+
+{pstd}Same, but unzip on arrival (the archive password is {opt unzipw()}, not your API password):{p_end}
+{p 8 12 2}{cmd:. suso export get , type(STATA) qver(11) saving("ses_v11.zip") replace unzipw("pw") unzipto("O:/ises/extracted")}{p_end}
+
+{pstd}Or drive the three steps yourself (other types: {cmd:Tabular}, {cmd:SPSS}, {cmd:Binary}, {cmd:Paradata}, {cmd:DDI}):{p_end}
+{p 8 12 2}{cmd:. suso export start    , type(SPSS) guid(<guid>) qver(11) istatus(All)}{p_end}
+{p 8 12 2}{cmd:. suso export status   , id(`=r(jobid)')}{p_end}
+{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("data.zip") replace unzip}{p_end}
+
+{dlgtab:8. Maps (GraphQL)}
+
+{p 8 12 2}{cmd:. suso maps list}{space 3}{it:// all maps in the workspace (auto-paginated)}{p_end}
+{p 8 12 2}{cmd:. suso maps upload , file("colombo_grid.zip")}{space 2}{it:// .zip of a shapefile family, or a .tif/.tpk}{p_end}
+{p 8 12 2}{cmd:. suso maps assign , name("colombo_grid.tif") user("SL_Colombo_Ali01")}{p_end}
+{p 8 12 2}{cmd:. suso maps delete , name("old_grid.tif") confirm}{space 4}{it:// one map (destructive)}{p_end}
+
+{pstd}Wipe the whole map library {hline 1} dry-run first, then confirm by typing the workspace name:{p_end}
+{p 8 12 2}{cmd:. suso maps deleteall}{space 24}{it:// DRY RUN: lists what would go, deletes nothing}{p_end}
+{p 8 12 2}{cmd:. suso maps deleteall , iknowthis("srilankainf")}{space 1}{it:// actually deletes all}{p_end}
+
+{dlgtab:9. Users (admin account required)}
+
+{p 8 12 2}{cmd:. suso user get     , id(<user-id-or-name>)}{p_end}
+{p 8 12 2}{cmd:. suso user create  , role(Interviewer) username("SL_Colombo_Ali01") password("Strong#123") fullname("Ali Khan")}{p_end}
+{p 8 12 2}{cmd:. suso interviewer actionslog , id(<interviewer-id>) start("2026-06-01") end("2026-06-17")}{p_end}
+{p 8 12 2}{cmd:. suso user archive , id(<user-id>) confirm}{space 2}{it:// destructive}{p_end}
+
+{dlgtab:10. Workspaces (admin); see help suso##admin}
+
+{p 8 12 2}{cmd:. suso workspace list , includedisabled}{p_end}
+{p 8 12 2}{cmd:. suso workspace status , name("srilankainf")}{space 3}{it:// counts + r(canbedeleted)}{p_end}
+{p 8 12 2}{cmd:. suso workspace create  , name("ises2026") displayname("ISES Sri Lanka 2026")}{p_end}
+{p 8 12 2}{cmd:. suso workspace disable , name("ises2026") confirm}{p_end}
+{p 8 12 2}{cmd:. suso workspace delete  , name("ises2026") iknowthis("ises2026")}{space 1}{it:// strongest guard}{p_end}
+{p 8 12 2}{cmd:. suso workspace assign  , userids("id1 id2") workspaces("ises2026") mode(Add) supervisor("sup-id")}{p_end}
+
+{dlgtab:11. Server settings and statistics}
+
+{p 8 12 2}{cmd:. suso settings get}{p_end}
+{p 8 12 2}{cmd:. suso settings set , message("Fieldwork freeze 20-22 Jun for QC.")}{space 1}{it:// admin}{p_end}
+{p 8 12 2}{cmd:. suso settings clear}{p_end}
+{p 8 12 2}{cmd:. suso statistics questionnaires}{p_end}
+{p 8 12 2}{cmd:. suso statistics questions , guid(<guid>) qver(11)}{p_end}
+{p 8 12 2}{cmd:. suso statistics report , question(q14_sector) guid(<guid>) qver(11) exporttype(xlsx) saving("tab.xlsx") replace}{p_end}
+
+{dlgtab:12. Back up an entire workspace}
+
+{pstd}One command archives questionnaires, exports (per type), and assignments/users:{p_end}
+{p 8 12 2}{cmd:. suso backup , dir("C:/archive/srilanka")}{p_end}
+{p 8 12 2}{cmd:. suso backup , dir("C:/archive/srilanka") types(STATA Paradata) jobtimeout(7200)}{p_end}
+
+{dlgtab:13. Reach any endpoint with suso raw}
+
+{p 8 12 2}{cmd:. suso raw /api/v1/settings/globalnotice}{space 6}{it:// GET, flatten to r()}{p_end}
+{p 8 12 2}{cmd:. suso raw /api/v1/assignments , query(Limit=5&Offset=0) todata arraykey(Assignments)}{p_end}
+{p 8 12 2}{cmd:. suso raw /api/v1/interviews/<uuid> , method(DELETE) allowdestructive}{p_end}
+
+{dlgtab:14. Paradata}
 {pstd}Paradata QC: pull the event log, flag suspicious interviews, keep the tables:{p_end}
 {p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
 {p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
