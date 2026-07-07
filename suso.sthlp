@@ -615,6 +615,12 @@ Web: {browse "https://sites.google.com/view/attique-ur-rehman":https://sites.goo
 {title:Acknowledgments}
 
 {pstd}
+Thanks to {bf:Fahad Mirza} (World Bank / CERP,
+{browse "https://github.com/fahad-mirza":github.com/fahad-mirza}) for his insights
+and guidance, and for his self-contained Stata tooling ({cmd:sparkta},
+{cmd:wordcloud2}) that helped shape this package's design.
+
+{pstd}
 Built on the World Bank
 {browse "https://docs.mysurvey.solutions/":Survey Solutions} platform and its
 public REST API. This package is an independent client and is not an official
