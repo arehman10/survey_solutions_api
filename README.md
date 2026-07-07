@@ -199,6 +199,40 @@ The jar is compiled to Java 11 bytecode with no external dependencies and contai
 - Questionnaire identities are passed as separate `questionnaire(<guid>)` and `qver(#)`
   options; the backend assembles the `guid$version` form internally.
 
+
+## Citation
+
+If `suso` supports your research or fieldwork, please cite it:
+
+> Rehman, A. U. (2026). *suso: A Survey Solutions API client for Stata* (v1.6.0)
+> \[Computer software]. https://github.com/arehman10/survey_solutions_api
+
+## Contributing
+
+Issues and pull requests are welcome. For backend changes, please rebuild the jar from
+`src/` and confirm `suso doctor` / `suso ping` pass against a test workspace.
+
+## Acknowledgments
+
+Thanks to [Fahad Mirza](https://github.com/fahad-mirza) (World Bank / CERP) for his
+insights and guidance, and for his self-contained Stata tooling
+([sparkta](https://github.com/fahad-mirza/sparkta_stata),
+[wordcloud2](https://github.com/fahad-mirza/wordcloud2_stata)), which helped shape the
+design of this package.
+
+## License
+
+[MIT](LICENSE) © 2026 Attique Ur Rehman (The World Bank, Development Economics).
+
+## Architecture (one line)
+
+`suso.ado` sets `SUSO_*` globals → `javacall org.worldbank.suso.Stata …` → `Http`
+(`java.net.http`) executes → `Json` parses → results are written back into the Stata
+dataset / `r()` via the SFI, and the password global is scrubbed after every call.
+
+
+  
+
 ## Architecture (one line)
 
 `suso.ado` sets `SUSO_*` globals → `javacall org.worldbank.suso.Stata run` → `Http`
