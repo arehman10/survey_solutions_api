@@ -3699,7 +3699,6 @@ program _suso_para_skips, rclass
             quietly count if tier!="C"
             local nact = r(N)
             if `nact'>0 {
-                preserve
                 quietly keep if tier!="C"
                 quietly replace trigger = "(unknown gate)" if trigger==""
                 tempvar gw gi ge tgi tge gc2
@@ -3732,7 +3731,6 @@ program _suso_para_skips, rclass
                     file write `hf' `"</div>"' _n
                 }
                 if `ing' file write `hf' `"</details>"' _n
-                restore
             }
             else file write `hf' `"<div class="meta">Nothing needs action - every case was auto-cleared as routine.</div>"' _n
             quietly use `"`DET2'"', clear
