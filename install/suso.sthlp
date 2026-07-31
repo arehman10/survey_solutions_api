@@ -262,7 +262,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:timing}}collapse events to one row per {opt by(interview)} (default), {opt by(question)} or {opt by(interviewer)} ({opt gapmins()} {opt fastsecs()} {opt allroles}){p_end}
 {synopt :{cmd:flags}}per-interview red flags + interviewer league table ({opt minactive()} {opt burstshare()} {opt nightshare()} {opt churn()} {opt zcut()} {opt top()} {opt saving()}){p_end}
 {synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions, {opt messages(file.txt)} writes an email-ready action list, and {opt html(file.html)} writes a shareable, printable Skip Violation Review page for the vendor/field supervisor{p_end}
-{synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report with figures (all thresholds accepted; runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
+{synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch) with drill-down and CSV export, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
 {synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report), Skip violations (supervisor review), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option{p_end}
 {synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values; {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130); an {it:if} qualifier restricts it by any expression ({cmd:check if lf_responsive==1, ...}); {opt filters(varlist)} adds live Filter variable {c 45} value dropdowns to the dashboard for the named numeric variables (up to 20 distinct values each, 40 in total){p_end}
@@ -442,20 +442,38 @@ the server's own {cmd:NotAnsweredCount} per interview.
 {cmd:report} is the recommended first look: run it straight after {cmd:get}/{cmd:load}
 and it produces an {bf:interactive} one-page HTML report. All data is embedded in the
 file (no internet, no external libraries), so it opens on locked-down machines and can
-be emailed as-is {hline 1} and everything on the page recomputes live: filter by
-enumerator and by interview status (workflow state at the last paradata event,
-including an approved-only view), search and sort the question-timing table, move the night window and the
-fast-answer, burst, minimum-active, churn and outlier-z thresholds from the control
-panel. It shows KPI cards, the six flags, histograms of interview duration and answer
-speed, answers by hour of day, fieldwork volume over time, the enumerator league
-table, the interviews to review first, question timing, and the gate variables wiping
-answers. Records with no interviewer activity (API-preloaded grid points) are counted
-separately and excluded from all figures. It manages the event data internally and
-leaves the combined per-record QC table {hline 1} timing metrics, {cmd:f_*} flags at
-the defaults, cascade counts and a {cmd:started} marker {hline 1} in memory,
+be emailed as-is {hline 1} and everything on the page recomputes live. The report is
+built for a TTL or field supervisor: a verdict line and a {bf:review queue} triage
+every started interview into {bf:Investigate} (hard evidence {hline 1} same-minute
+answering in two interviews, or a rejected interview re-completed with nothing
+changed {hline 1} or 3+ independent signals), {bf:Verify} (2 signals, or 1 signal
+plus a skip cascade, or a near-instant resubmission with 1{c 45}2 edits) and
+{bf:Watch} (a single signal). Every queue row expands into plain-language evidence
+with the team benchmark alongside ({it:"Typical answer took 1.2 s across 90 timed
+answers (team typical 6.5 s)"}), the interview key ready to paste into Headquarters,
+and per-interview hour-of-day and answer-speed mini charts; the whole queue exports
+to CSV for the field team. Signals: {bf:S} sustained speeding, {bf:B} a streak of
+consecutive fast answers, {bf:T} completed too quickly, {bf:N} night work, {bf:C}
+answer churn, {bf:Z} robust duration outlier, {bf:P} faster than peers on the same
+questions (controls for question mix), {bf:O} two interviews answered in the same
+minute. False-positive control is built in: repeat answers on the same variable
+(multi-select taps) never count as fast, rate flags require a minimum number of
+timed answers, CAWI interviews (from {cmd:InterviewModeChanged}) get no timing
+flags, and a tablet whose {cmd:tz_offset} disagrees with the team caveats its own
+night flag. Sensitivity presets (Standard / Lenient / Strict) sit above the full
+threshold panel. The page also keeps the KPI cards, flag counts, duration and
+answer-speed histograms, answers by hour, fieldwork volume, the enumerator league
+table (now with a vs-team speed ratio and overlap minutes), question timing, and
+the gate variables wiping answers. Records with no interviewer activity
+(API-preloaded grid points) are counted separately and excluded from all figures.
+It manages the event data internally and leaves the combined per-record QC table
+{hline 1} timing metrics, {cmd:f_*} flags at the defaults, cascade counts, the new
+signal columns ({cmd:rt} peer ratio, {cmd:ovm} overlap minutes, {cmd:fr} fast
+streak, {cmd:rbm}/{cmd:rbe} resubmit bounce, {cmd:pce} post-completion edits,
+{cmd:iscawi}, {cmd:ikey}) and a {cmd:started} marker {hline 1} in memory,
 merge-ready on {cmd:interview__id}. For very large surveys ({opt litecap(15000)}+
-started interviews) the per-interview hour/gap detail is omitted and the night-window
-and fast-seconds controls fall back to build-time values.
+started interviews) the per-interview hour/gap detail is omitted and the
+night-window and fast-seconds controls fall back to build-time values.
 
 {pstd}
 {cmd:skips} ends with a supervisor action list: one message per violation stating
@@ -549,149 +567,26 @@ For a single-object response (for example {cmd:export status} or
 {cmd:r(progress)}). Rows are loaded as the current dataset and are not duplicated
 in {cmd:r()}.
 
-
 {marker examples}{...}
 {title:Examples}
 
-{pstd}
-Every example below is a real command. {it:guid} is a questionnaire id and {it:qver}
-its version; set them once with {cmd:suso config , guid() qver()} or pass them per
-command. List/browse verbs replace the data in memory; single-record verbs fill {cmd:r()}.
+{pstd}Set up and test:{p_end}
+{p 8 12 2}{cmd:. suso config , server("https://demo.mysurvey.solutions") workspace("primary") user("API_USER") password("pw")}{p_end}
+{p 8 12 2}{cmd:. suso ping}{p_end}
 
-{dlgtab:1. Set up and test the connection}
-
-{pstd}
-You only need {opt server()} and {opt workspace()}. {opt user()} and {opt password()}
-are {bf:optional}: if you omit them, {cmd:suso} asks for the user name and a masked
-password the first time a command contacts the server (or run {cmd:suso login} to enter
-them up front). So the minimal setup is just:{p_end}
-{p 8 12 2}{cmd:. suso config , server("https://demo.mysurvey.solutions") workspace("primary")}{p_end}
-{p 8 12 2}{cmd:. suso ping}{space 6}{it:// prompts for user + password (masked), then checks auth}{p_end}
-
-{pstd}
-You may still supply them non-interactively with {opt user()} / {opt password()}, or
-{hline 1} safer, keeping the password out of your command history {hline 1} set the
-{cmd:SUSO_PASSWORD} environment variable before launching Stata:{p_end}
-{p 8 12 2}{cmd:. suso config , server("https://demo.mysurvey.solutions") workspace("primary") user("API_USER")}{p_end}
-{p 8 12 2}{cmd:. suso login}{space 5}{it:// enter / replace credentials at a masked prompt anytime}{p_end}
-{p 8 12 2}{cmd:. suso doctor}{space 4}{it:// Java/JVM check + which suso.jar is in use}{p_end}
-{p 8 12 2}{cmd:. suso config , show}{space 1}{it:// review current settings (password masked)}{p_end}
-
-{dlgtab:2. Pull lists into a Stata dataset}
-
-{pstd}Add {opt all} to fetch every page (auto-paginated):{p_end}
-{p 8 12 2}{cmd:. suso assignment list , all}{p_end}
-{p 8 12 2}{cmd:. suso assignment list , responsible("FieldInt01") guid(<guid>) qver(11)}{p_end}
+{pstd}List all completed interviews:{p_end}
 {p 8 12 2}{cmd:. suso interview list , status(Completed) all}{p_end}
-{p 8 12 2}{cmd:. suso questionnaire list , all}{p_end}
-{p 8 12 2}{cmd:. suso supervisor list , all}{p_end}
-{p 8 12 2}{cmd:. suso supervisor interviewers , id(<supervisor-id>) all}{p_end}
-{p 8 12 2}{cmd:. suso export list}{p_end}
 
-{dlgtab:3. Inspect one record (values land in r())}
+{pstd}Approve, then reject, an interview with a comment:{p_end}
+{p 8 12 2}{cmd:. suso interview approve , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457) comment("looks good")}{p_end}
+{p 8 12 2}{cmd:. suso interview reject  , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457) comment("please revisit the GPS point")}{p_end}
 
-{p 8 12 2}{cmd:. suso assignment get , id(123)}{p_end}
-{p 8 12 2}{cmd:. suso interview get   , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457)}{p_end}
-{p 8 12 2}{cmd:. suso interview stats , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457)}{p_end}
-{p 8 12 2}{cmd:. return list}{space 2}{it:// see everything the call returned}{p_end}
+{pstd}Export STATA data and download it:{p_end}
+{p 8 12 2}{cmd:. suso config , guid("76732117-1b19-4c82-bd39-1e34a781a2e9") qver(11)}{p_end}
+{p 8 12 2}{cmd:. suso export start , type(STATA) istatus(ApprovedBySupervisor)}{p_end}
+{p 8 12 2}{cmd:. suso export status , id(`=r(jobid)')}{p_end}
+{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("ses_v11.zip") replace}{p_end}
 
-{dlgtab:4. Interview QC workflow}
-
-{pstd}Approve / reject (HQ variants escalate to headquarters):{p_end}
-{p 8 12 2}{cmd:. suso interview approve   , id(<uuid>) comment("looks good")}{p_end}
-{p 8 12 2}{cmd:. suso interview reject    , id(<uuid>) comment("GPS off-square; please revisit")}{p_end}
-{p 8 12 2}{cmd:. suso interview hqapprove , id(<uuid>)}{p_end}
-{p 8 12 2}{cmd:. suso interview hqreject  , id(<uuid>) comment("inconsistent roster")}{p_end}
-
-{pstd}Comment on a specific question, by question id or by variable name:{p_end}
-{p 8 12 2}{cmd:. suso interview comment      , id(<uuid>) question(<question-id>) comment("verify units")}{p_end}
-{p 8 12 2}{cmd:. suso interview commentbyvar , id(<uuid>) variable(q14_sales) comment("seems too high")}{p_end}
-{p 8 12 2}{cmd:. suso interview commentbyvar , id(<uuid>) variable(emp_name) rostervector(2) comment("typo")}{p_end}
-
-{pstd}Reassign, save the PDF, or delete (delete needs {opt confirm}):{p_end}
-{p 8 12 2}{cmd:. suso interview assign           , id(<uuid>) responsible("FieldInt07")}{p_end}
-{p 8 12 2}{cmd:. suso interview assignsupervisor , id(<uuid>) responsible("Sup02")}{p_end}
-{p 8 12 2}{cmd:. suso interview pdf    , id(<uuid>) saving("iv.pdf") replace}{p_end}
-{p 8 12 2}{cmd:. suso interview delete , id(<uuid>) confirm}{p_end}
-
-{dlgtab:5. Assignments}
-
-{p 8 12 2}{cmd:. suso assignment create   , responsible("FieldInt01") guid(<guid>) qver(11) quantity(3)}{p_end}
-{p 8 12 2}{cmd:. suso assignment assign   , id(123) responsible("FieldInt09")}{space 1}{it:// reassign}{p_end}
-{p 8 12 2}{cmd:. suso assignment quantity , id(123) n(5)}{space 6}{it:// change target count}{p_end}
-{p 8 12 2}{cmd:. suso assignment audio    , id(123) on}{space 9}{it:// audio audit on/off}{p_end}
-{p 8 12 2}{cmd:. suso assignment close    , id(123)}{p_end}
-{p 8 12 2}{cmd:. suso assignment archive  , id(123) confirm}{space 4}{it:// destructive}{p_end}
-
-{dlgtab:6. Questionnaires}
-
-{p 8 12 2}{cmd:. suso questionnaire document    , guid(<guid>) qver(11) saving("q.json") replace}{p_end}
-{p 8 12 2}{cmd:. suso questionnaire interviews  , guid(<guid>) qver(11) all}{space 1}{it:// interviews for this version}{p_end}
-{p 8 12 2}{cmd:. suso questionnaire audio       , guid(<guid>) qver(11) on}{space 4}{it:// require audio audit}{p_end}
-{p 8 12 2}{cmd:. suso questionnaire criticality , guid(<guid>) qver(11) get}{p_end}
-
-{dlgtab:7. Export data}
-
-{pstd}{bf:One-shot} {hline 1} start, watch progress, and download automatically when done:{p_end}
-{p 8 12 2}{cmd:. suso export get , type(STATA) guid(<guid>) qver(11) istatus(ApprovedBySupervisor) saving("ses_v11.zip") replace}{p_end}
-
-{pstd}Same, but unzip on arrival (the archive password is {opt unzipw()}, not your API password):{p_end}
-{p 8 12 2}{cmd:. suso export get , type(STATA) qver(11) saving("ses_v11.zip") replace unzipw("pw") unzipto("O:/ises/extracted")}{p_end}
-
-{pstd}Or drive the three steps yourself (other types: {cmd:Tabular}, {cmd:SPSS}, {cmd:Binary}, {cmd:Paradata}, {cmd:DDI}):{p_end}
-{p 8 12 2}{cmd:. suso export start    , type(SPSS) guid(<guid>) qver(11) istatus(All)}{p_end}
-{p 8 12 2}{cmd:. suso export status   , id(`=r(jobid)')}{p_end}
-{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("data.zip") replace unzip}{p_end}
-
-{dlgtab:8. Maps (GraphQL)}
-
-{p 8 12 2}{cmd:. suso maps list}{space 3}{it:// all maps in the workspace (auto-paginated)}{p_end}
-{p 8 12 2}{cmd:. suso maps upload , file("colombo_grid.zip")}{space 2}{it:// .zip of a shapefile family, or a .tif/.tpk}{p_end}
-{p 8 12 2}{cmd:. suso maps assign , name("colombo_grid.tif") user("SL_Colombo_Ali01")}{p_end}
-{p 8 12 2}{cmd:. suso maps delete , name("old_grid.tif") confirm}{space 4}{it:// one map (destructive)}{p_end}
-
-{pstd}Wipe the whole map library {hline 1} dry-run first, then confirm by typing the workspace name:{p_end}
-{p 8 12 2}{cmd:. suso maps deleteall}{space 24}{it:// DRY RUN: lists what would go, deletes nothing}{p_end}
-{p 8 12 2}{cmd:. suso maps deleteall , iknowthis("srilankainf")}{space 1}{it:// actually deletes all}{p_end}
-
-{dlgtab:9. Users (admin account required)}
-
-{p 8 12 2}{cmd:. suso user get     , id(<user-id-or-name>)}{p_end}
-{p 8 12 2}{cmd:. suso user create  , role(Interviewer) username("SL_Colombo_Ali01") password("Strong#123") fullname("Ali Khan")}{p_end}
-{p 8 12 2}{cmd:. suso interviewer actionslog , id(<interviewer-id>) start("2026-06-01") end("2026-06-17")}{p_end}
-{p 8 12 2}{cmd:. suso user archive , id(<user-id>) confirm}{space 2}{it:// destructive}{p_end}
-
-{dlgtab:10. Workspaces (admin); see help suso##admin}
-
-{p 8 12 2}{cmd:. suso workspace list , includedisabled}{p_end}
-{p 8 12 2}{cmd:. suso workspace status , name("srilankainf")}{space 3}{it:// counts + r(canbedeleted)}{p_end}
-{p 8 12 2}{cmd:. suso workspace create  , name("ises2026") displayname("ISES Sri Lanka 2026")}{p_end}
-{p 8 12 2}{cmd:. suso workspace disable , name("ises2026") confirm}{p_end}
-{p 8 12 2}{cmd:. suso workspace delete  , name("ises2026") iknowthis("ises2026")}{space 1}{it:// strongest guard}{p_end}
-{p 8 12 2}{cmd:. suso workspace assign  , userids("id1 id2") workspaces("ises2026") mode(Add) supervisor("sup-id")}{p_end}
-
-{dlgtab:11. Server settings and statistics}
-
-{p 8 12 2}{cmd:. suso settings get}{p_end}
-{p 8 12 2}{cmd:. suso settings set , message("Fieldwork freeze 20-22 Jun for QC.")}{space 1}{it:// admin}{p_end}
-{p 8 12 2}{cmd:. suso settings clear}{p_end}
-{p 8 12 2}{cmd:. suso statistics questionnaires}{p_end}
-{p 8 12 2}{cmd:. suso statistics questions , guid(<guid>) qver(11)}{p_end}
-{p 8 12 2}{cmd:. suso statistics report , question(q14_sector) guid(<guid>) qver(11) exporttype(xlsx) saving("tab.xlsx") replace}{p_end}
-
-{dlgtab:12. Back up an entire workspace}
-
-{pstd}One command archives questionnaires, exports (per type), and assignments/users:{p_end}
-{p 8 12 2}{cmd:. suso backup , dir("C:/archive/srilanka")}{p_end}
-{p 8 12 2}{cmd:. suso backup , dir("C:/archive/srilanka") types(STATA Paradata) jobtimeout(7200)}{p_end}
-
-{dlgtab:13. Reach any endpoint with suso raw}
-
-{p 8 12 2}{cmd:. suso raw /api/v1/settings/globalnotice}{space 6}{it:// GET, flatten to r()}{p_end}
-{p 8 12 2}{cmd:. suso raw /api/v1/assignments , query(Limit=5&Offset=0) todata arraykey(Assignments)}{p_end}
-{p 8 12 2}{cmd:. suso raw /api/v1/interviews/<uuid> , method(DELETE) allowdestructive}{p_end}
-
-{dlgtab:14. Paradata}
 {pstd}Paradata QC: pull the event log, flag suspicious interviews, keep the tables:{p_end}
 {p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
 {p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
@@ -754,4 +649,4 @@ Survey Solutions product.
 {pstd}
 Online: {browse "https://docs.mysurvey.solutions/headquarters/api/api-r-package/":Survey Solutions API documentation}{p_end}
 {pstd}
-Help:  {helpb javacall}, {helpb import}, {helpb shell}{p_end}
+Help:  {helpb survEye}, {helpb javacall}, {helpb import}, {helpb shell}{p_end}
