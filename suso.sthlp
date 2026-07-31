@@ -262,7 +262,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:timing}}collapse events to one row per {opt by(interview)} (default), {opt by(question)} or {opt by(interviewer)} ({opt gapmins()} {opt fastsecs()} {opt allroles}){p_end}
 {synopt :{cmd:flags}}per-interview red flags + interviewer league table ({opt minactive()} {opt burstshare()} {opt nightshare()} {opt churn()} {opt zcut()} {opt top()} {opt saving()}){p_end}
 {synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions, {opt messages(file.txt)} writes an email-ready action list, and {opt html(file.html)} writes a shareable, printable Skip Violation Review page for the vendor/field supervisor{p_end}
-{synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report with figures (all thresholds accepted; runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
+{synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch) with drill-down and CSV export, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
 {synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report), Skip violations (supervisor review), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option{p_end}
 {synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values; {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130); an {it:if} qualifier restricts it by any expression ({cmd:check if lf_responsive==1, ...}); {opt filters(varlist)} adds live Filter variable {c 45} value dropdowns to the dashboard for the named numeric variables (up to 20 distinct values each, 40 in total){p_end}
@@ -442,20 +442,38 @@ the server's own {cmd:NotAnsweredCount} per interview.
 {cmd:report} is the recommended first look: run it straight after {cmd:get}/{cmd:load}
 and it produces an {bf:interactive} one-page HTML report. All data is embedded in the
 file (no internet, no external libraries), so it opens on locked-down machines and can
-be emailed as-is {hline 1} and everything on the page recomputes live: filter by
-enumerator and by interview status (workflow state at the last paradata event,
-including an approved-only view), search and sort the question-timing table, move the night window and the
-fast-answer, burst, minimum-active, churn and outlier-z thresholds from the control
-panel. It shows KPI cards, the six flags, histograms of interview duration and answer
-speed, answers by hour of day, fieldwork volume over time, the enumerator league
-table, the interviews to review first, question timing, and the gate variables wiping
-answers. Records with no interviewer activity (API-preloaded grid points) are counted
-separately and excluded from all figures. It manages the event data internally and
-leaves the combined per-record QC table {hline 1} timing metrics, {cmd:f_*} flags at
-the defaults, cascade counts and a {cmd:started} marker {hline 1} in memory,
+be emailed as-is {hline 1} and everything on the page recomputes live. The report is
+built for a TTL or field supervisor: a verdict line and a {bf:review queue} triage
+every started interview into {bf:Investigate} (hard evidence {hline 1} same-minute
+answering in two interviews, or a rejected interview re-completed with nothing
+changed {hline 1} or 3+ independent signals), {bf:Verify} (2 signals, or 1 signal
+plus a skip cascade, or a near-instant resubmission with 1{c 45}2 edits) and
+{bf:Watch} (a single signal). Every queue row expands into plain-language evidence
+with the team benchmark alongside ({it:"Typical answer took 1.2 s across 90 timed
+answers (team typical 6.5 s)"}), the interview key ready to paste into Headquarters,
+and per-interview hour-of-day and answer-speed mini charts; the whole queue exports
+to CSV for the field team. Signals: {bf:S} sustained speeding, {bf:B} a streak of
+consecutive fast answers, {bf:T} completed too quickly, {bf:N} night work, {bf:C}
+answer churn, {bf:Z} robust duration outlier, {bf:P} faster than peers on the same
+questions (controls for question mix), {bf:O} two interviews answered in the same
+minute. False-positive control is built in: repeat answers on the same variable
+(multi-select taps) never count as fast, rate flags require a minimum number of
+timed answers, CAWI interviews (from {cmd:InterviewModeChanged}) get no timing
+flags, and a tablet whose {cmd:tz_offset} disagrees with the team caveats its own
+night flag. Sensitivity presets (Standard / Lenient / Strict) sit above the full
+threshold panel. The page also keeps the KPI cards, flag counts, duration and
+answer-speed histograms, answers by hour, fieldwork volume, the enumerator league
+table (now with a vs-team speed ratio and overlap minutes), question timing, and
+the gate variables wiping answers. Records with no interviewer activity
+(API-preloaded grid points) are counted separately and excluded from all figures.
+It manages the event data internally and leaves the combined per-record QC table
+{hline 1} timing metrics, {cmd:f_*} flags at the defaults, cascade counts, the new
+signal columns ({cmd:rt} peer ratio, {cmd:ovm} overlap minutes, {cmd:fr} fast
+streak, {cmd:rbm}/{cmd:rbe} resubmit bounce, {cmd:pce} post-completion edits,
+{cmd:iscawi}, {cmd:ikey}) and a {cmd:started} marker {hline 1} in memory,
 merge-ready on {cmd:interview__id}. For very large surveys ({opt litecap(15000)}+
-started interviews) the per-interview hour/gap detail is omitted and the night-window
-and fast-seconds controls fall back to build-time values.
+started interviews) the per-interview hour/gap detail is omitted and the
+night-window and fast-seconds controls fall back to build-time values.
 
 {pstd}
 {cmd:skips} ends with a supervisor action list: one message per violation stating
@@ -631,4 +649,4 @@ Survey Solutions product.
 {pstd}
 Online: {browse "https://docs.mysurvey.solutions/headquarters/api/api-r-package/":Survey Solutions API documentation}{p_end}
 {pstd}
-Help:  {helpb javacall}, {helpb import}, {helpb shell}{p_end}
+Help:  {helpb survEye}, {helpb javacall}, {helpb import}, {helpb shell}{p_end}

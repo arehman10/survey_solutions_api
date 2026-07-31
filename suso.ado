@@ -2628,25 +2628,36 @@ program _suso_para_derive, rclass
             local rolenote "Interviewer-role events"
         }
         else {
-            local rcode ""
-            quietly count if para_cmp
-            if r(N)>0 {
-                preserve
-                quietly keep if para_cmp & para_role!=""
-                if _N>0 {
-                    quietly contract para_role
-                    gsort -_freq para_role
-                    local rcode = para_role[1]
+            * Survey Solutions documents numeric role 1 = Interviewer
+            quietly count if para_role=="1"
+            local __r1 = r(N)
+            quietly count if para_role!="" & para_role!="1"
+            if `__r1'>0 & r(N)>0 {
+                quietly replace para_ivw = (para_role=="1")
+                local rolenote "Interviewer-role events (documented role code 1)"
+            }
+            else if `__r1'>0 local rolenote "all roles (role column has a single value)"
+            else {
+                local rcode ""
+                quietly count if para_cmp
+                if r(N)>0 {
+                    preserve
+                    quietly keep if para_cmp & para_role!=""
+                    if _N>0 {
+                        quietly contract para_role
+                        gsort -_freq para_role
+                        local rcode = para_role[1]
+                    }
+                    restore
                 }
-                restore
+                quietly count if para_role!="" & para_role!="`rcode'"
+                if "`rcode'"!="" & r(N)>0 {
+                    quietly replace para_ivw = (para_role=="`rcode'")
+                    local rolenote `"interviewer role inferred as code `rcode' (modal role on Completed events)"'
+                }
+                else if "`rcode'"!="" local rolenote "all roles (role column has a single value)"
+                else local rolenote "all roles (no Completed events to infer the interviewer role)"
             }
-            quietly count if para_role!="" & para_role!="`rcode'"
-            if "`rcode'"!="" & r(N)>0 {
-                quietly replace para_ivw = (para_role=="`rcode'")
-                local rolenote `"interviewer role inferred as code `rcode' (modal role on Completed events)"'
-            }
-            else if "`rcode'"!="" local rolenote "all roles (role column has a single value)"
-            else local rolenote "all roles (no Completed events to infer the interviewer role)"
         }
     }
     if "`allroles'"!="" local rolenote "all roles (allroles)"
@@ -2672,6 +2683,19 @@ program _suso_para_derive, rclass
     quietly gen double para_act = cond(para_ivw & !missing(para_gap), ///
                                        cond(para_prevp, 0, min(para_gap,`gapsecs')), 0)
     quietly gen double para_ansgap = para_gap if para_ans & para_ivw & !para_brk & !missing(para_gap)
+    * a repeat AnswerSet on the same variable (multi-select taps, list items,
+    * immediate revisions) is not a newly reached question - keep it out of the
+    * answer-speed clock so tapping through a checklist cannot look like speeding
+    capture confirm variable para_var
+    if !_rc {
+        tempvar sameav lastav prevav
+        quietly gen `sameav' = para_var if para_ans & para_ivw
+        quietly bysort interview__id para_ivw (para_ord para_seq): gen `lastav' = `sameav'
+        quietly by interview__id para_ivw: replace `lastav' = `lastav'[_n-1] if `lastav'=="" & _n>1
+        quietly by interview__id para_ivw: gen `prevav' = `lastav'[_n-1] if _n>1
+        quietly replace para_ansgap = . if para_ans & para_var!="" & `prevav'==para_var
+        quietly drop `sameav' `lastav' `prevav'
+    }
     quietly gen byte   para_fast   = (para_ansgap<`fastsecs') if !missing(para_ansgap)
     quietly gen byte   para_night  = para_ans & para_ivw & !missing(para_tsl) & ///
                                      (hh(para_tsl)>=22 | hh(para_tsl)<6)
@@ -2865,7 +2889,7 @@ program _suso_para_flags, rclass
     capture drop f_speed f_burst f_short f_night f_churn f_outlier n_flags z_active
 
     * absolute-threshold flags (missing-safe: a missing metric never flags)
-    quietly gen byte f_speed = !missing(ans_med_s)  & ans_med_s  < `fastsecs'
+    quietly gen byte f_speed = !missing(ans_med_s)  & ans_med_s  < `fastsecs' & n_timed>=10
     quietly gen byte f_burst = !missing(fast_share) & fast_share > `burstshare'
     quietly gen byte f_short = n_completed>0 & active_min < `minactive'
     quietly gen byte f_night = !missing(night_share) & night_share > `nightshare' & n_timed>=10
@@ -2889,7 +2913,7 @@ program _suso_para_flags, rclass
     label variable z_active "robust z of ln(active_min)"
 
     quietly gen byte n_flags = f_speed+f_burst+f_short+f_night+f_churn+f_outlier
-    label variable f_speed   "median sec/answer < `fastsecs'"
+    label variable f_speed   "median sec/answer < `fastsecs' (10+ timed answers)"
     label variable f_burst   "fast-answer share > `burstshare'"
     label variable f_short   "completed with active < `minactive' min"
     label variable f_night   "night share > `nightshare'"
@@ -3677,7 +3701,8 @@ program _suso_para_report, rclass
     local htitle `"`r(out)'"'
 
     di as txt "suso paradata: building the interactive QC report ..."
-    tempfile EV EVD SK QT DAILY HHF GGF MERGED RSD
+    tempfile EV EVD SK QT QTK DAILY HHF GGF MERGED RSD WS FLK                    ///
+        KEYF MODEF TZF REJF OVF PCEF VERF NQF RTF FRF
     quietly save `"`EV'"'
     local nevents = _N
 
@@ -3685,8 +3710,18 @@ program _suso_para_report, rclass
     local rolenote `"`r(rolenote)'"'
     quietly save `"`EVD'"'
 
+    * coverage of the event stream (freshness line in the header)
+    quietly summarize para_tsu
+    local cov0 ""
+    local cov1 ""
+    if r(N)>0 {
+        local cov0 : di %tcCCYY-NN-DD r(min)
+        local cov1 : di %tcCCYY-NN-DD r(max)
+        local cov0 = trim("`cov0'")
+        local cov1 = trim("`cov1'")
+    }
+
     * variable-filter lookup from the main export: value per interview + labels
-    tempfile FLK
     local fdimvars ""
     local jfdims ""
     if `"`data'"'!="" & `"`filters'"'!="" {
@@ -3731,7 +3766,7 @@ program _suso_para_report, rclass
         restore
     }
 
-    * ---- question timing table --------------------------------------------------
+    * ---- question timing table (medians reflect newly-reached questions only) ----
     local hasq 0
     capture confirm variable para_var
     if !_rc {
@@ -3745,6 +3780,9 @@ program _suso_para_report, rclass
             quietly gen double qfsh = qnf/qnt if qnt>0
             gsort -qmed para_var
             quietly save `"`QT'"'
+            quietly keep para_var qmed
+            quietly keep if !missing(qmed)
+            quietly save `"`QTK'"'
         }
     }
 
@@ -3800,8 +3838,7 @@ program _suso_para_report, rclass
         else local lite 1
     }
 
-    * ---- workflow state at the last status event ------------------------------------
-    tempfile WS
+    * ---- workflow state at the last status event ----------------------------------
     local hasws 0
     quietly use `"`EVD'"', clear
     * SuSo logs rejections in the past tense but approvals without the d
@@ -3821,6 +3858,252 @@ program _suso_para_report, rclass
         quietly replace ws = "Unapproved by HQ" if __evn=="unapprovebyheadquarters"
         quietly keep interview__id ws
         quietly save `"`WS'"'
+    }
+
+    * ---- NEW: interview key (what the supervisor types into Headquarters) --------
+    * KeyAssigned parameters carry the NN-NN-NN-NN key; the latest event is current.
+    local haskey 0
+    quietly use `"`EVD'"', clear
+    quietly keep if para_ev=="keyassigned"
+    if _N>0 {
+        capture confirm string variable parameters
+        if !_rc {
+            local haskey 1
+            quietly bysort interview__id (para_ord para_seq): keep if _n==_N
+            quietly gen ikey = substr(strtrim(parameters), 1, 12)
+            quietly keep interview__id ikey
+            quietly save `"`KEYF'"'
+        }
+    }
+
+    * ---- NEW: interview mode (CAPI vs CAWI) ---------------------------------------
+    * A CAWI (self-administered web) interview has respondent-driven timing: speed,
+    * burst, night and duration flags are meaningless there and are suppressed.
+    local hascawi 0
+    quietly use `"`EVD'"', clear
+    quietly keep if para_ev=="interviewmodechanged"
+    if _N>0 {
+        capture confirm string variable parameters
+        if !_rc {
+            quietly bysort interview__id (para_ord para_seq): keep if _n==_N
+            quietly gen byte iscawi = strpos(lower(parameters), "cawi")>0
+            quietly count if iscawi
+            if r(N)>0 local hascawi 1
+            quietly keep interview__id iscawi
+            quietly save `"`MODEF'"'
+        }
+    }
+    capture confirm file `"`MODEF'"'
+    if _rc {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen byte iscawi = 0
+        quietly save `"`MODEF'"'
+    }
+
+    * ---- NEW: device-clock sanity (timezone offsets) ------------------------------
+    * Night-work times come from the tablet clock. A tablet whose timezone differs
+    * from the team, or changes mid-interview, cannot be trusted for time-of-day.
+    quietly use `"`EVD'"', clear
+    quietly contract interview__id para_off, freq(__pk)
+    quietly drop if missing(para_off)
+    local tzmode 0
+    if _N>0 {
+        preserve
+        collapse (sum) __pk, by(para_off) fast
+        gsort -__pk para_off
+        local tzmode = para_off[1]
+        restore
+        gsort interview__id -__pk para_off
+        quietly bysort interview__id: gen __k = _N
+        quietly by interview__id: keep if _n==1
+        quietly gen double tzh   = para_off/3600000
+        quietly gen byte   tzodd = (para_off!=`tzmode') | (__k>1)
+        quietly keep interview__id tzh tzodd
+        quietly save `"`TZF'"'
+    }
+    else {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen double tzh = .
+        quietly gen byte tzodd = 0
+        quietly save `"`TZF'"'
+    }
+    local tzmodeh : di %4.1f `tzmode'/3600000
+    local tzmodeh = trim("`tzmodeh'")
+
+    * ---- NEW: rejection bounce-backs ----------------------------------------------
+    * For every rejection, how quickly was the interview re-completed and how many
+    * answers were actually changed before that re-completion? A re-completion with
+    * zero changes means the supervisor's rejection was simply bounced straight back.
+    quietly use `"`EVD'"', clear
+    sort interview__id para_ord para_seq
+    quietly by interview__id: gen double __ca = sum(para_ans & para_ivw)
+    quietly gen double __cts = para_tsu if para_cmp
+    quietly gen double __cca = __ca     if para_cmp
+    gsort interview__id -para_ord -para_seq
+    quietly by interview__id: replace __cts = __cts[_n-1] if missing(__cts) & _n>1
+    quietly by interview__id: replace __cca = __cca[_n-1] if missing(__cca) & _n>1
+    sort interview__id para_ord para_seq
+    quietly keep if para_rej
+    if _N>0 {
+        quietly gen double rbm = (__cts - para_tsu)/60000
+        quietly replace rbm = 0 if rbm<0
+        quietly gen double rbe = __cca - __ca
+        quietly replace rbe = . if missing(rbm)
+        sort interview__id rbe rbm
+        quietly by interview__id: keep if _n==1
+        quietly keep interview__id rbm rbe
+        quietly save `"`REJF'"'
+    }
+    else {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen double rbm = .
+        quietly gen double rbe = .
+        quietly save `"`REJF'"'
+    }
+
+    * ---- NEW: same-minute cross-interview answering -------------------------------
+    * One person cannot interview two respondents at once. Minutes in which the same
+    * enumerator recorded answers in two or more (non-CAWI) interviews are counted
+    * against every interview involved. Repeated cross-minutes = desk work.
+    quietly use `"`EVD'"', clear
+    local hasov 0
+    capture confirm string variable responsible
+    if !_rc {
+        quietly keep if para_ans & para_ivw & responsible!="" & !missing(para_tsu)
+        if _N>0 {
+            quietly merge m:1 interview__id using `"`MODEF'"', keep(master match) nogenerate
+            quietly drop if iscawi==1
+        }
+        if _N>0 {
+            local hasov 1
+            quietly gen double __mb = floor(para_tsu/60000)
+            quietly contract responsible __mb interview__id
+            quietly bysort responsible __mb: gen __nI = _N
+            quietly keep if __nI>=2
+            if _N>0 {
+                collapse (count) ovm=__nI, by(interview__id) fast
+                quietly save `"`OVF'"'
+            }
+            else local hasov 0
+        }
+    }
+    if !`hasov' {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen long ovm = 0
+        quietly save `"`OVF'"', replace
+    }
+
+    * ---- NEW: answers set after the first completion ------------------------------
+    quietly use `"`EVD'"', clear
+    tempvar fct fmin
+    quietly gen double `fct' = para_tsu if para_cmp
+    quietly egen double `fmin' = min(`fct'), by(interview__id)
+    quietly gen byte __pc1 = para_ans & para_ivw & !missing(`fmin') & para_tsu>`fmin'
+    collapse (sum) pce=__pc1, by(interview__id) fast
+    quietly save `"`PCEF'"'
+
+    * ---- NEW: validation errors still open at the end (full exports only) ---------
+    local hasve 0
+    quietly use `"`EVD'"', clear
+    capture confirm variable para_var
+    if !_rc {
+        quietly keep if (para_inv | para_ev=="questiondeclaredvalid") & para_var!=""
+        if _N>0 {
+            local hasve 1
+            quietly bysort interview__id para_var (para_ord para_seq): keep if _n==_N
+            quietly gen byte __bad = para_inv
+            collapse (sum) verr=__bad, by(interview__id) fast
+            quietly save `"`VERF'"'
+        }
+    }
+    if !`hasve' {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen long verr = .
+        quietly save `"`VERF'"', replace
+    }
+
+    * ---- NEW: distinct questions answered (coverage) ------------------------------
+    local hasnq 0
+    quietly use `"`EVD'"', clear
+    capture confirm variable para_var
+    if !_rc {
+        quietly keep if para_ans & para_ivw & para_var!=""
+        if _N>0 {
+            local hasnq 1
+            quietly bysort interview__id para_var: keep if _n==1
+            collapse (count) nq=para_one, by(interview__id) fast
+            quietly save `"`NQF'"'
+        }
+    }
+    if !`hasnq' {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen long nq = .
+        quietly save `"`NQF'"', replace
+    }
+
+    * ---- NEW: peer-relative speed (controls for question mix) ---------------------
+    * Expected time = sum over this interview's timed questions of the survey-median
+    * seconds for those same questions. An interview finishing its own question mix
+    * in a small fraction of the time colleagues need is speeding relative to peers,
+    * whatever the absolute thresholds.
+    local hasrt 0
+    if `hasq' {
+        quietly use `"`EVD'"', clear
+        quietly keep if !missing(para_ansgap) & para_var!=""
+        if _N>0 {
+            quietly merge m:1 para_var using `"`QTK'"', keep(master match) nogenerate
+            collapse (sum) __act=para_ansgap __exp=qmed, by(interview__id) fast
+            quietly gen double rt = __act/__exp if __exp>0
+            quietly keep interview__id rt
+            quietly keep if !missing(rt)
+            if _N>0 {
+                local hasrt 1
+                quietly save `"`RTF'"'
+            }
+        }
+    }
+    if !`hasrt' {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen double rt = .
+        quietly save `"`RTF'"', replace
+    }
+
+    * ---- NEW: longest fast streak ------------------------------------------------
+    * Honest interviews scatter their quick answers; fabricated ones produce runs.
+    * The streak counts consecutive newly-reached questions each answered in under
+    * fastsecs seconds (same-question repeat taps are already excluded upstream).
+    quietly use `"`EVD'"', clear
+    quietly keep if !missing(para_ansgap)
+    if _N>0 {
+        sort interview__id para_ord para_seq
+        tempvar isf rise runid rlen
+        quietly gen byte `isf' = (para_fast==1)
+        quietly by interview__id: gen byte `rise' = `isf' & (`isf'[_n-1]!=1 | _n==1)
+        quietly by interview__id: gen double `runid' = sum(`rise')
+        quietly bysort interview__id `runid' `isf': gen long `rlen' = _N*`isf'
+        collapse (max) fr=`rlen', by(interview__id) fast
+        quietly save `"`FRF'"'
+    }
+    else {
+        quietly clear
+        quietly set obs 0
+        quietly gen interview__id = ""
+        quietly gen long fr = 0
+        quietly save `"`FRF'"'
     }
 
     * ---- skip cascades ------------------------------------------------------------
@@ -3864,6 +4147,30 @@ program _suso_para_report, rclass
     if "`fdimvars'"!="" {
         quietly merge 1:1 interview__id using `"`FLK'"', keep(master match) nogenerate
     }
+    * merge the new per-interview signals
+    quietly gen ikey = ""
+    if `haskey' {
+        quietly rename ikey __ikfill
+        quietly merge 1:1 interview__id using `"`KEYF'"', keep(master match) nogenerate
+        quietly replace ikey = "" if missing(ikey)
+        quietly drop __ikfill
+    }
+    quietly merge 1:1 interview__id using `"`MODEF'"', keep(master match) nogenerate
+    quietly replace iscawi = 0 if missing(iscawi)
+    quietly merge 1:1 interview__id using `"`TZF'"',  keep(master match) nogenerate
+    quietly replace tzodd = 0 if missing(tzodd)
+    quietly merge 1:1 interview__id using `"`REJF'"', keep(master match) nogenerate
+    quietly merge 1:1 interview__id using `"`OVF'"',  keep(master match) nogenerate
+    quietly replace ovm = 0 if missing(ovm)
+    quietly merge 1:1 interview__id using `"`PCEF'"', keep(master match) nogenerate
+    quietly replace pce = 0 if missing(pce)
+    quietly merge 1:1 interview__id using `"`VERF'"', keep(master match) nogenerate
+    quietly merge 1:1 interview__id using `"`NQF'"',  keep(master match) nogenerate
+    quietly merge 1:1 interview__id using `"`RTF'"',  keep(master match) nogenerate
+    quietly merge 1:1 interview__id using `"`FRF'"',  keep(master match) nogenerate
+    quietly replace fr = 0 if missing(fr)
+    quietly gen __d0 = string(dofc(t_first), "%tdCCYY-NN-DD")
+    quietly replace __d0 = "" if missing(t_first)
     char _dta[suso_paradata] timing
     local nints = _N
     quietly count if started
@@ -3871,6 +4178,8 @@ program _suso_para_report, rclass
     quietly count if n_completed>0
     local ncompleted = r(N)
     local nuntouched = `nints' - `nstarted'
+    quietly count if started & iscawi
+    local ncawi = r(N)
     quietly summarize active_min
     local tothrc : di %12.0fc r(sum)/60
     local tothrc = trim("`tothrc'")
@@ -3898,21 +4207,25 @@ program _suso_para_report, rclass
     file write `fh' `".mast{background:#002244;color:#fff;padding:18px 28px}"' _n
     file write `fh' `".mast h1{margin:0;font-size:22px;font-weight:600}"' _n
     file write `fh' `".mast .sub{color:#c9d4e0;font-size:12.5px;margin-top:5px}"' _n
-    file write `fh' `".wrap{max-width:1040px;margin:0 auto;padding:16px 28px 40px}"' _n
+    file write `fh' `".wrap{max-width:1080px;margin:0 auto;padding:16px 28px 40px}"' _n
     file write `fh' `".cards{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 4px}"' _n
     file write `fh' `".card{flex:1 1 130px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 13px;border-top:3px solid #002244}"' _n
-    file write `fh' `".card.dim{border-top-color:#9aa7b5}.card.warn{border-top-color:#C9A227}"' _n
+    file write `fh' `".card.dim{border-top-color:#9aa7b5}.card.warn{border-top-color:#C9A227}.card.bad{border-top-color:#a33}"' _n
     file write `fh' `".card .v{font-size:20px;font-weight:700;color:#002244}"' _n
     file write `fh' `".card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
-    file write `fh' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;position:sticky;top:0;z-index:5;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
+    file write `fh' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;position:sticky;top:0;z-index:5;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
+    file write `fh' `".prow{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}"' _n
+    file write `fh' `".prow+.prow{margin-top:10px;padding-top:10px;border-top:1px dashed #e3e6ea}"' _n
     file write `fh' `".ctrl{display:flex;flex-direction:column;gap:3px}"' _n
     file write `fh' `".ctrl label{font-size:10.5px;color:#555;text-transform:uppercase;letter-spacing:.03em}"' _n
     file write `fh' `".ctrl input,.ctrl select{font-size:13px;padding:4px 6px;border:1px solid #c9cfd6;border-radius:5px;min-width:64px}"' _n
-    file write `fh' `"#c_resp{min-width:220px}"' _n
-    file write `fh' `"#c_reset{background:#002244;color:#fff;border:0;border-radius:5px;padding:7px 14px;font-size:12.5px;cursor:pointer}"' _n
+    file write `fh' `"#c_resp{min-width:210px}"' _n
+    file write `fh' `".pbtn{background:#002244;color:#fff;border:0;border-radius:5px;padding:7px 14px;font-size:12.5px;cursor:pointer}"' _n
+    file write `fh' `".pbtn.ghost{background:#fff;color:#002244;border:1px solid #c9cfd6}"' _n
     file write `fh' `".verdict{margin:10px 0;padding:10px 14px;border-radius:8px;font-size:13.5px;font-weight:600}"' _n
     file write `fh' `".verdict.ok{background:#eaf5ec;color:#1e6b34;border:1px solid #bfe0c8}"' _n
     file write `fh' `".verdict.warn{background:#fdf6e3;color:#7a5b00;border:1px solid #ecd9a0}"' _n
+    file write `fh' `".verdict.bad{background:#fbeaea;color:#8a1f1f;border:1px solid #e8bcbc}"' _n
     file write `fh' `"h2{font-size:15px;color:#002244;border-bottom:2px solid #C9A227;padding-bottom:4px;margin:24px 0 4px}"' _n
     file write `fh' `".note{font-size:12px;color:#555;margin:2px 0 8px}"' _n
     file write `fh' `"section{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:8px 16px 14px;margin-top:8px}"' _n
@@ -3926,14 +4239,32 @@ program _suso_para_report, rclass
     file write `fh' `".nodata{color:#888;font-size:12px}"' _n
     file write `fh' `".foot{font-size:11px;color:#777;margin-top:26px;line-height:1.5}"' _n
     file write `fh' `"#lite_note,#q_more,#l_more,#w_none,#n_act{font-size:11.5px;color:#8a6d00}"' _n
+    file write `fh' `".tier{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;letter-spacing:.03em}"' _n
+    file write `fh' `".tier.A{background:#fbeaea;color:#8a1f1f;border:1px solid #e8bcbc}"' _n
+    file write `fh' `".tier.V{background:#fdf6e3;color:#7a5b00;border:1px solid #ecd9a0}"' _n
+    file write `fh' `".tier.W{background:#eef3f8;color:#2a4a6b;border:1px solid #c9d4e0}"' _n
+    file write `fh' `".chip{display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;border-radius:9px;font-size:10.5px;background:#eef3f8;color:#2a4a6b;border:1px solid #c9d4e0;cursor:default}"' _n
+    file write `fh' `".chip.hard{background:#fbeaea;color:#8a1f1f;border-color:#e8bcbc;font-weight:700}"' _n
+    file write `fh' `".chip.info{background:#f2f2f2;color:#666;border-color:#ddd}"' _n
+    file write `fh' `".ev{font-size:12px;color:#333;margin-top:3px;line-height:1.45}"' _n
+    file write `fh' `".ev .cav{color:#8a6d00}"' _n
+    file write `fh' `".wrow{cursor:pointer}"' _n
+    file write `fh' `".wdet td{background:#f7f9fb !important;border-left:3px solid #C9A227}"' _n
+    file write `fh' `".wdet .facts{font-size:12px;color:#444;margin:4px 0 8px}"' _n
+    file write `fh' `".cpy{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid #c9cfd6;border-radius:4px;font-size:10.5px;color:#2a4a6b;cursor:pointer;background:#fff}"' _n
+    file write `fh' `".cpy:hover{background:#eef3f8}"' _n
+    file write `fh' `".legend{font-size:11.5px;color:#555;margin:6px 0 2px}"' _n
+    file write `fh' `"@media print{.panel{position:static;box-shadow:none}.pbtn,.cpy{display:none}}"' _n
     file write `fh' `"</style></head><body>"' _n
-    file write `fh' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
+    file write `fh' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img (class wbLogo) -->"' _n
     file write `fh' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
     file write `fh' `"<div class="mast"><h1>`htitle'</h1>"' _n
     local sub "Generated `now'"
     if "$SUSO_BASE"!="" local sub "`sub' &nbsp;-&nbsp; $SUSO_BASE"
     if "$SUSO_GUID"!="" local sub "`sub' &nbsp;-&nbsp; questionnaire $SUSO_GUID v$SUSO_QVER"
-    file write `fh' `"<div class="sub">`sub' &nbsp;-&nbsp; `nevents' paradata events</div></div>"' _n
+    local covline ""
+    if "`cov0'"!="" local covline " &nbsp;-&nbsp; events `cov0' to `cov1'"
+    file write `fh' `"<div class="sub">`sub' &nbsp;-&nbsp; `nevents' paradata events`covline'</div></div>"' _n
     file write `fh' `"<div class="wrap">"' _n
     file write `fh' `"<div class="cards">"' _n
     file write `fh' `"<div class="card dim"><div class="v">`nintsc'</div><div class="k">records in paradata</div></div>"' _n
@@ -3944,50 +4275,60 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="card `warnc'"><div class="v">`ncasc'</div><div class="k">skip cascades (`nwiped' wiped)</div></div>"' _n
     file write `fh' `"</div>"' _n
     file write `fh' `"<div class="panel">"' _n
+    file write `fh' `"<div class="prow">"' _n
     file write `fh' `"<div class="ctrl"><label>Enumerator</label><select id="c_resp"></select></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Interview status</label><select id="c_ws"></select></div>"' _n
     file write `fh' `"<div class="ctrl" id="ctl_fd"><label>Filter variable</label><select id="c_fd"></select></div>"' _n
     file write `fh' `"<div class="ctrl" id="ctl_fv"><label>= value</label><select id="c_fv"></select></div>"' _n
-    file write `fh' `"<div class="ctrl"><label>Fast answer &lt; sec</label><input id="c_fs" type="number" min="1" max="10" step="1"></div>"' _n
-    file write `fh' `"<div class="ctrl"><label>Burst share %</label><input id="c_burst" type="number" min="5" max="90" step="1" value="33"></div>"' _n
-    file write `fh' `"<div class="ctrl"><label>Min active min</label><input id="c_minact" type="number" min="1" max="240" step="1" value="10"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Sensitivity</label><select id="c_preset"><option value="standard">Standard</option><option value="lenient">Lenient (fewer flags)</option><option value="strict">Strict (more flags)</option><option value="custom">Custom</option></select></div>"' _n
+    file write `fh' `"<div class="ctrl"><label>Show top</label><input id="c_top" type="number" min="5" max="200" step="5" value="25"></div>"' _n
+    file write `fh' `"<button id="c_adv" class="pbtn ghost">Advanced thresholds</button>"' _n
+    file write `fh' `"<button id="c_reset" class="pbtn">Reset</button>"' _n
+    file write `fh' `"<span id="lite_note"></span>"' _n
+    file write `fh' `"</div>"' _n
+    file write `fh' `"<div class="prow" id="advrow" style="display:none">"' _n
+    file write `fh' `"<div class="ctrl"><label title="An answer arriving faster than this is a fast answer">Fast answer &lt; sec</label><input id="c_fs" type="number" min="0.5" max="10" step="0.5"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label title="Flag a streak of this many consecutive answers, each faster than the fast-answer cutoff fixed at build time">Burst run &ge;</label><input id="c_burst" type="number" min="3" max="40" step="1" value="8"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label title="A completed interview under this active time is too short">Min active min</label><input id="c_minact" type="number" min="1" max="240" step="1" value="10"></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Night from</label><select id="c_n1"></select></div>"' _n
     file write `fh' `"<div class="ctrl"><label>Night to</label><select id="c_n2"></select></div>"' _n
-    file write `fh' `"<div class="ctrl"><label>Night share %</label><input id="c_nshare" type="number" min="1" max="100" step="1" value="25"></div>"' _n
-    file write `fh' `"<div class="ctrl"><label>Churn %</label><input id="c_churn" type="number" min="1" max="100" step="1" value="20"></div>"' _n
-    file write `fh' `"<div class="ctrl"><label>Outlier z</label><input id="c_z" type="number" min="2" max="6" step="0.5" value="3.5"></div>"' _n
-    file write `fh' `"<div class="ctrl"><label>Show top</label><input id="c_top" type="number" min="5" max="100" step="5" value="15"></div>"' _n
-    file write `fh' `"<button id="c_reset">Reset</button>"' _n
-    file write `fh' `"<span id="lite_note"></span>"' _n
+    file write `fh' `"<div class="ctrl"><label title="Flag when this share of answers falls in the night window">Night share %</label><input id="c_nshare" type="number" min="1" max="100" step="1" value="25"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label title="Answers removed per 100 set">Churn %</label><input id="c_churn" type="number" min="1" max="100" step="1" value="20"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label title="Robust z-score on log active time">Outlier z</label><input id="c_z" type="number" min="2" max="6" step="0.5" value="3.5"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label title="Flag when the interview needed less than this share of the time colleagues typically take on the same questions">Peer speed &lt; %</label><input id="c_peer" type="number" min="5" max="90" step="5" value="35"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label title="Minutes in which the enumerator answered in two interviews at once">Overlap min &ge;</label><input id="c_ov" type="number" min="1" max="60" step="1" value="3"></div>"' _n
+    file write `fh' `"<div class="ctrl"><label title="Rate-based flags need at least this many timed answers">Min answers</label><input id="c_nmin" type="number" min="3" max="100" step="1" value="10"></div>"' _n
+    file write `fh' `"</div>"' _n
     file write `fh' `"</div>"' _n
     file write `fh' `"<div class="cards">"' _n
     file write `fh' `"<div class="card"><div class="v" id="k_started">-</div><div class="k">interviews in view</div></div>"' _n
-    file write `fh' `"<div class="card warn"><div class="v" id="k_flagged">-</div><div class="k">flagged</div></div>"' _n
+    file write `fh' `"<div class="card bad"><div class="v" id="k_inv">-</div><div class="k">investigate</div></div>"' _n
+    file write `fh' `"<div class="card warn"><div class="v" id="k_ver">-</div><div class="k">verify</div></div>"' _n
     file write `fh' `"<div class="card"><div class="v" id="k_medact">-</div><div class="k">median active min</div></div>"' _n
     file write `fh' `"<div class="card"><div class="v" id="k_medans">-</div><div class="k">median sec / answer</div></div>"' _n
     file write `fh' `"</div>"' _n
     file write `fh' `"<div id="verdict" class="verdict"></div>"' _n
+    file write `fh' `"<h2>What needs attention</h2>"' _n
+    file write `fh' `"<div class="note">Every interview here comes with the evidence in plain words. <b>Investigate</b> = hard evidence (two interviews at once, or a rejection bounced straight back) or three independent signals. <b>Verify</b> = two signals, or one signal plus a skip cascade. <b>Watch</b> = a single signal; look only if a pattern builds. Click a row for its detail; the key is what you paste into Headquarters. Signals are screening evidence for review, never proof of fabrication on their own. <span id="w_none"></span></div>"' _n
+    file write `fh' `"<section><div style="margin:6px 0"><button id="c_csv" class="pbtn ghost">Download this list (CSV)</button></div><table id="t_worst"></table></section>"' _n
     file write `fh' `"<h2>Behaviour flags</h2>"' _n
-    file write `fh' `"<div class="note">Screening signals, not proof. Adjust the thresholds in the panel above; everything on this page recomputes instantly. Only interviews with actual fieldwork are analysed; API-preloaded grid records are set aside.</div>"' _n
-    file write `fh' `"<section id="ch_flags"></section>"' _n
+    file write `fh' `"<div class="note">How often each signal fires at the current thresholds. Adjust sensitivity in the panel; everything recomputes instantly. Only interviews with actual fieldwork are analysed; API-preloaded records are set aside.</div>"' _n
+    file write `fh' `"<section id="ch_flags"><div class="legend" id="flag_leg"></div></section>"' _n
     file write `fh' `"<h2>How long do interviews take?</h2>"' _n
     file write `fh' `"<div class="note">Active interviewer time per interview: gaps over `gapmins' min and pauses excluded. <span id="n_act"></span></div>"' _n
     file write `fh' `"<section id="ch_act"></section>"' _n
     file write `fh' `"<h2>How fast are answers?</h2>"' _n
-    file write `fh' `"<div class="note">Each interview gets one number: the typical (median) time the interviewer took to answer one question. The bar above 5 counts interviews where a typical question took about 5 seconds; the last bar groups 20 seconds or more. A real interview needs time to ask, listen and type - so an interview answered at a sustained 1-2 seconds per question was probably filled in without talking to anyone. <span id="n_med"></span></div>"' _n
+    file write `fh' `"<div class="note">Each interview gets one number: the typical (median) time to answer a newly reached question. Repeat taps on the same question (multi-select choices, list items, immediate corrections) are kept out of this clock, so tapping through a checklist cannot look like speeding. A real interview needs time to ask, listen and type - a sustained 1-2 seconds per question was probably filled in without talking to anyone. <span id="n_med"></span></div>"' _n
     file write `fh' `"<section id="ch_med"></section>"' _n
     file write `fh' `"<h2>When is the work happening?</h2>"' _n
-    file write `fh' `"<div class="note">Interviewer answers by hour of day (device-local time). Gold bars mark the night window set in the panel - night answering on establishment surveys usually means desk work, not fieldwork.</div>"' _n
+    file write `fh' `"<div class="note">Interviewer answers by hour of day (device-local time). Gold bars mark the night window - night answering on establishment surveys usually means desk work, not fieldwork. Interviews whose tablet clock disagrees with the team are marked in their detail row, because their hours cannot be trusted.</div>"' _n
     file write `fh' `"<section id="ch_hour"></section>"' _n
     file write `fh' `"<h2>Fieldwork over time</h2>"' _n
     file write `fh' `"<div class="note">Interviewer answers recorded per day (`dnote'). Responds to the enumerator filter.</div>"' _n
     file write `fh' `"<section id="ch_daily"></section>"' _n
     file write `fh' `"<h2>Enumerators</h2>"' _n
-    file write `fh' `"<div class="note">Compare within the team: someone whose answer speed or night share stands well apart from colleagues on the same instrument is the one to review first. Gold rows have at least one flagged interview. <span id="l_more"></span></div>"' _n
+    file write `fh' `"<div class="note">Compare within the team: the person whose answer speed, night share or overlap stands apart from colleagues on the same instrument is the one to review first. <b>vs team</b> is the enumerator's typical answer speed relative to the team (0.5 = twice as fast as the team). Gold rows have at least one flagged interview; judge shares only where the interview count is reasonable. <span id="l_more"></span></div>"' _n
     file write `fh' `"<section><table id="t_league"></table></section>"' _n
-    file write `fh' `"<h2>Interviews to review first</h2>"' _n
-    file write `fh' `"<div class="note">Sorted by flags raised, then answers wiped, then speed. Flag pattern S B T N C Z as above. Interview ids are full and copyable for lookup in Headquarters. <span id="w_none"></span></div>"' _n
-    file write `fh' `"<section><table id="t_worst"></table></section>"' _n
     file write `fh' `"<h2>Question timing</h2>"' _n
     file write `fh' `"<div class="note">Median seconds to answer each question, across interviews with fieldwork. Type to filter; click a column header to sort. Slow questions are usually hard questions - candidates for rewording or interviewer training. <span id="q_more"></span></div>"' _n
     file write `fh' `"<section><div class="ctrl" style="max-width:280px;margin-bottom:8px"><label>Filter questions</label><input id="c_q" type="text" placeholder="variable name contains..."></div><table id="t_q"></table></section>"' _n
@@ -4066,21 +4407,30 @@ program _suso_para_report, rclass
     }
     _suso_para_hesc `"`rolenote'"'
     local rnesc `"`r(out)'"'
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Active time sums inter-event gaps within each interview, capping every gap at `gapmins' minutes and zeroing Paused-to-Resumed intervals. Answer speed is the gap preceding each AnswerSet within a session. Night uses device-local time. Interview status is the workflow state at the last status event in the paradata (completion, rejection, approval). Duration outliers use a robust (median/MAD) z on log active time. Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from all figures. Flags are screening signals for review, not evidence of fabrication.<br><b>Produced by</b> suso paradata report (suso v1.7.0) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    local veline ""
+    if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Active time sums inter-event gaps within each interview, capping every gap at `gapmins' minutes and zeroing Paused-to-Resumed intervals. Answer speed is the gap preceding each AnswerSet on a newly reached question within a session; repeat answers on the same question (multi-select taps, list items, immediate revisions) are excluded from the speed clock. Peer speed compares each interview's timed questions with the survey-median seconds for those same questions, so it is unaffected by which sections an interview reached. Overlap counts device-clock minutes in which the same enumerator recorded answers in two or more interviews. Night uses device-local time; the team's modal timezone offset is `tzmodeh' h and interviews on a different or changing offset are marked clock-suspect. CAWI (web) interviews keep only churn, duration-outlier and workflow signals, since respondent-driven timing says nothing about the enumerator. Interview status is the workflow state at the last status event in the paradata. Duration outliers use a robust (median/MAD) z on log active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from all figures. Flags are screening signals for review, not evidence of fabrication.<br><b>Produced by</b> suso paradata report (suso v1.7.0) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
     * ---- embedded data ------------------------------------------------------------
     file write `fh' `"<script>"' _n
-    file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"lite":`lite',"fdims":[`jfdims']},"' _n
+    file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"lite":`lite',"hasve":`hasve',"hascawi":`hascawi',"haskey":`haskey',"fdims":[`jfdims']},"' _n
     file write `fh' `""rows":["' _n
     quietly use `"`MERGED'"', clear
     quietly keep if started
     forvalues i = 1/`=_N' {
         _suso_jsonesc `"`=responsible[`i']'"'
         local rj `"`r(js)'"'
+        _suso_jsonesc `"`=ikey[`i']'"'
+        local kj `"`r(js)'"'
         local med = cond(missing(ans_med_s[`i']), "null", string(ans_med_s[`i'],"%12.2f"))
         local fsh = cond(missing(fast_share[`i']), "null", string(fast_share[`i'],"%12.3f"))
         local nsh = cond(missing(night_share[`i']), "null", string(night_share[`i'],"%12.3f"))
+        local rtj = cond(missing(rt[`i']), "null", string(rt[`i'],"%12.2f"))
+        local rbj = cond(missing(rbm[`i']), "null", string(rbm[`i'],"%12.1f"))
+        local rej = cond(missing(rbe[`i']), "null", string(rbe[`i'],"%12.0f"))
+        local vej = cond(missing(verr[`i']), "null", string(verr[`i'],"%12.0f"))
+        local nqj = cond(missing(nq[`i']), "null", string(nq[`i'],"%12.0f"))
         local vecs ""
         if !`lite' {
             local hv "`=h0[`i']'"
@@ -4100,7 +4450,8 @@ program _suso_para_report, rclass
         }
         if `"`fjm'"'!="" local fjm `","f":{`fjm'}"'
         local sep = cond(`i'==1, "", ",")
-        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","r":"`rj'","ws":"`=ws[`i']'"`fjm',"nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']'`vecs'}"' _n
+        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","k":"`kj'","r":"`rj'","ws":"`=ws[`i']'"`fjm',"d0":"`=__d0[`i']'","m":`=iscawi[`i']',"nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']',"fr":`=fr[`i']'"'
+        file write `fh' `","rt":`rtj',"ov":`=ovm[`i']',"rj":`=n_rejected[`i']',"rb":`rbj',"re":`rej',"pc":`=pce[`i']',"ve":`vej',"nq":`nqj',"ss":`=sessions[`i']',"rs":`=n_restarted[`i']',"tz":`=cond(missing(tzh[`i']),"null",string(tzh[`i'],"%12.1f"))',"to":`=tzodd[`i']'`vecs'}"' _n
     }
     file write `fh' `"],"' _n
     file write `fh' `""q":["' _n
@@ -4129,7 +4480,15 @@ program _suso_para_report, rclass
     file write `fh' `"]};"' _n
     file write `fh' `"/* suso paradata report - dynamic engine. Pure compute core in P (node-testable), DOM layer below. */"' _n
     file write `fh' `"var P = {"' _n
+    file write `fh' `"  letters: ['S','B','T','N','C','Z','P','O'],"' _n
+    file write `fh' `"  names: ['Speeding','Fast streak','Too short','Night work','Churn','Duration outlier','Faster than peers','Two at once'],"' _n
+    file write `fh' `"  presets: {"' _n
+    file write `fh' `"    standard:{burst:8,minact:10,n1:22,n2:6,nshare:0.25,churn:0.20,z:3.5,peer:0.35,ov:3,nmin:10},"' _n
+    file write `fh' `"    lenient:{fs:1.5,burst:12,minact:7,n1:22,n2:6,nshare:0.35,churn:0.30,z:4,peer:0.25,ov:5,nmin:15},"' _n
+    file write `fh' `"    strict:{fs:3,burst:6,minact:15,n1:22,n2:6,nshare:0.15,churn:0.15,z:3,peer:0.45,ov:2,nmin:8}"' _n
+    file write `fh' `"  },"' _n
     file write `fh' `"  sum: function(a){ var s=0,i; for(i=0;i<a.length;i++) s+=a[i]; return s; },"' _n
+    file write `fh' `"  f1: function(x,d){ if(x===null||x===undefined||isNaN(x)) return '.'; return x.toFixed(d===undefined?1:d); },"' _n
     file write `fh' `"  inWindow: function(h,n1,n2){ if(n1===n2) return false; if(n1<n2) return h>=n1&&h<n2; return h>=n1||h<n2; },"' _n
     file write `fh' `"  fastShare: function(row,fs){"' _n
     file write `fh' `"    if(!row.g) return row.fsh;"' _n
@@ -4163,16 +4522,78 @@ program _suso_para_report, rclass
     file write `fh' `"    if(!ctx||!(row.act>0)) return null;"' _n
     file write `fh' `"    return 0.6745*(Math.log(row.act)-ctx.med)/ctx.mad;"' _n
     file write `fh' `"  },"' _n
+    file write `fh' `"  team: function(rows){"' _n
+    file write `fh' `"    var med=[],nq=[],act=[],i,r;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      r=rows[i];"' _n
+    file write `fh' `"      act.push(r.act);"' _n
+    file write `fh' `"      if(r.med!==null) med.push(r.med);"' _n
+    file write `fh' `"      if(r.nq!==null&&r.nq!==undefined) nq.push(r.nq);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return {med:P.median(med), nq:P.median(nq), act:P.median(act)};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  isCapi: function(row){ return row.m!==1; },"' _n
     file write `fh' `"  flagsFor: function(row,S,ctx){"' _n
-    file write `fh' `"    var fsh=P.fastShare(row,S.fs), nsh=P.nightShare(row,S.n1,S.n2), z=P.zval(row,ctx);"' _n
+    file write `fh' `"    var capi=P.isCapi(row);"' _n
+    file write `fh' `"    var nsh=P.nightShare(row,S.n1,S.n2), z=P.zval(row,ctx);"' _n
     file write `fh' `"    return ["' _n
-    file write `fh' `"      row.med!==null && row.med<S.fs,"' _n
-    file write `fh' `"      fsh!==null && fsh>S.burst,"' _n
-    file write `fh' `"      row.nc>0 && row.act<S.minact,"' _n
-    file write `fh' `"      nsh!==null && nsh>S.nshare && row.nt>=10,"' _n
-    file write `fh' `"      row.ch!==null && row.ch>S.churn && row.nt>=10,"' _n
-    file write `fh' `"      z!==null && Math.abs(z)>S.z"' _n
+    file write `fh' `"      capi && row.med!==null && row.med<S.fs && row.nt>=S.nmin,"' _n
+    file write `fh' `"      capi && row.fr>=S.burst && row.nt>=S.nmin,"' _n
+    file write `fh' `"      capi && row.nc>0 && row.act<S.minact,"' _n
+    file write `fh' `"      capi && nsh!==null && nsh>S.nshare && row.nt>=S.nmin,"' _n
+    file write `fh' `"      row.ch!==null && row.ch>S.churn && row.nt>=S.nmin,"' _n
+    file write `fh' `"      z!==null && Math.abs(z)>S.z,"' _n
+    file write `fh' `"      capi && row.rt!==null && row.rt<S.peer && row.nt>=S.nmin,"' _n
+    file write `fh' `"      capi && row.ov>=S.ov"' _n
     file write `fh' `"    ];"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  resub: function(row){ return row.rj>0 && row.re===0; },"' _n
+    file write `fh' `"  softResub: function(row){"' _n
+    file write `fh' `"    return row.rj>0 && row.re!==null && row.re>0 && row.re<=2 && row.rb!==null && row.rb<10;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  tierFor: function(row){"' _n
+    file write `fh' `"    if(row._r || row._f[7]) return 'A';"' _n
+    file write `fh' `"    if(row._n>=3) return 'A';"' _n
+    file write `fh' `"    if(row._n===2) return 'V';"' _n
+    file write `fh' `"    if(row._n===1 && (row.cas>0 || P.softResub(row))) return 'V';"' _n
+    file write `fh' `"    if(P.softResub(row)) return 'V';"' _n
+    file write `fh' `"    if(row._n===1) return 'W';"' _n
+    file write `fh' `"    if(row.cas>0) return 'W';"' _n
+    file write `fh' `"    return '';"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  evidence: function(row,S,team){"' _n
+    file write `fh' `"    var out=[], f=row._f;"' _n
+    file write `fh' `"    if(f[7]) out.push({t:'hard', s:'Answered this and another interview during the same minute on '+row.ov+' occasion(s) - one person cannot conduct two interviews at once.'});"' _n
+    file write `fh' `"    if(row._r){"' _n
+    file write `fh' `"      var w='Rejected, then re-completed ';"' _n
+    file write `fh' `"      if(row.rb!==null) w+=P.f1(row.rb,0)+' min later ';"' _n
+    file write `fh' `"      out.push({t:'hard', s:w+'with no answers changed.'});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    else if(P.softResub(row)) out.push({t:'flag', s:'Rejected, re-completed after '+P.f1(row.rb,0)+' min with only '+row.re+' answer(s) changed.'});"' _n
+    file write `fh' `"    if(f[0]) out.push({t:'flag', s:'Typical answer took '+P.f1(row.med,1)+' s across '+row.nt+' timed answers'+(team.med!==null?' (team typical '+P.f1(team.med,1)+' s)':'')+'.'});"' _n
+    file write `fh' `"    if(f[6]) out.push({t:'flag', s:'Finished its questions in '+P.f1(100*row.rt,0)+'% of the time colleagues typically need on those same questions.'});"' _n
+    file write `fh' `"    if(f[1]){"' _n
+    file write `fh' `"      var wfs=P.fastShare(row,S.fs);"' _n
+    file write `fh' `"      out.push({t:'flag', s:'A streak of '+row.fr+' consecutive questions each answered in under '+D.meta.fastsecs+' s'+(wfs!==null?(' ('+P.f1(100*wfs,0)+'% of all answers were that fast)'):'')+'.'});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(f[2]){"' _n
+    file write `fh' `"      var w2='Marked completed after only '+P.f1(row.act,1)+' min of active work';"' _n
+    file write `fh' `"      if(row.nq!==null&&row.nq!==undefined&&team.nq!==null) w2+=' - '+row.nq+' distinct questions answered (team median '+P.f1(team.nq,0)+')';"' _n
+    file write `fh' `"      out.push({t:'flag', s:w2+'.'});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(f[3]){"' _n
+    file write `fh' `"      var w3=P.f1(100*P.nightShare(row,S.n1,S.n2),0)+'% of answering happened between '+S.n1+':00 and '+S.n2+':00 device time.';"' _n
+    file write `fh' `"      if(row.to===1) w3+=' Caution: this tablet clock disagrees with the team, so its hours are unreliable.';"' _n
+    file write `fh' `"      out.push({t:'flag', s:w3, cav:(row.to===1)});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(f[4]) out.push({t:'flag', s:P.f1(100*row.ch,0)+' answers removed per 100 set.'});"' _n
+    file write `fh' `"    if(f[5]) out.push({t:'flag', s:'Active time '+P.f1(row.act,1)+' min is far outside the survey-wide pattern.'});"' _n
+    file write `fh' `"    if(row.cas>0) out.push({t:'flag', s:'A gate flip erased '+row.wip+' recorded answer(s) - details in the skip sections below.'});"' _n
+    file write `fh' `"    if(row.m===1) out.push({t:'info', s:'Web (CAWI) interview - timing signals not applied.'});"' _n
+    file write `fh' `"    if(row.to===1 && !f[3]) out.push({t:'info', s:'Tablet clock offset '+(row.tz===null?'?':P.f1(row.tz,1))+' h differs from the team.'});"' _n
+    file write `fh' `"    if(row.pc>0 && row.rj===0) out.push({t:'info', s:'Edited '+row.pc+' answer(s) after completion without any rejection.'});"' _n
+    file write `fh' `"    if(row.ve!==null && row.ve>0) out.push({t:'info', s:row.ve+' validation error(s) still open.'});"' _n
+    file write `fh' `"    return out;"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  filterRows: function(rows,resp,ws,fd,fv){"' _n
     file write `fh' `"    var out=[],i,r;"' _n
@@ -4189,22 +4610,24 @@ program _suso_para_report, rclass
     file write `fh' `"    return out;"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  aggregate: function(rows,S){"' _n
-    file write `fh' `"    var ctx=P.zctx(rows), tot=[0,0,0,0,0,0], flagged=[], i,j;"' _n
+    file write `fh' `"    var ctx=P.zctx(rows), tot=[0,0,0,0,0,0,0,0], flagged=[], tiers={A:0,V:0,W:0}, i,j;"' _n
     file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
     file write `fh' `"      var f=P.flagsFor(rows[i],S,ctx), n=0;"' _n
-    file write `fh' `"      for(j=0;j<6;j++){ if(f[j]){tot[j]++;n++;} }"' _n
+    file write `fh' `"      for(j=0;j<8;j++){ if(f[j]){tot[j]++;n++;} }"' _n
     file write `fh' `"      rows[i]._f=f; rows[i]._n=n;"' _n
-    file write `fh' `"      if(n>0||rows[i].cas>0) flagged.push(rows[i]);"' _n
+    file write `fh' `"      rows[i]._r=P.resub(rows[i]);"' _n
+    file write `fh' `"      rows[i]._t=P.tierFor(rows[i]);"' _n
+    file write `fh' `"      if(rows[i]._t!==''){ flagged.push(rows[i]); tiers[rows[i]._t]++; }"' _n
     file write `fh' `"    }"' _n
+    file write `fh' `"    var rank={A:0,V:1,W:2};"' _n
     file write `fh' `"    flagged.sort(function(a,b){"' _n
+    file write `fh' `"      if(rank[a._t]!==rank[b._t]) return rank[a._t]-rank[b._t];"' _n
     file write `fh' `"      if(b._n!==a._n) return b._n-a._n;"' _n
     file write `fh' `"      if(b.wip!==a.wip) return b.wip-a.wip;"' _n
     file write `fh' `"      var am=a.med===null?1e9:a.med, bm=b.med===null?1e9:b.med;"' _n
     file write `fh' `"      return am-bm;"' _n
     file write `fh' `"    });"' _n
-    file write `fh' `"    var nfl=0;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i]._n>0) nfl++;"' _n
-    file write `fh' `"    return {tot:tot, flagged:flagged, nflagged:nfl, n:rows.length};"' _n
+    file write `fh' `"    return {tot:tot, flagged:flagged, tiers:tiers, n:rows.length, ctx:ctx};"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  niceBin: function(p99){"' _n
     file write `fh' `"    var c=[1,2,5,10,15,30,60,120,240,480], i, b=1;"' _n
@@ -4254,10 +4677,12 @@ program _suso_para_report, rclass
     file write `fh' `"    var ctx=P.zctx(rows), m={}, i, r;"' _n
     file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
     file write `fh' `"      r=rows[i];"' _n
-    file write `fh' `"      if(!m[r.r]) m[r.r]={r:r.r,n:0,fl:0,act:[],med:[],fsh:[],nsh:[]};"' _n
+    file write `fh' `"      if(!m[r.r]) m[r.r]={r:r.r,n:0,fl:0,ov:0,act:[],med:[],fsh:[],nsh:[]};"' _n
     file write `fh' `"      var g=m[r.r], f=P.flagsFor(r,S,ctx), any=false, j;"' _n
-    file write `fh' `"      for(j=0;j<6;j++) if(f[j]) any=true;"' _n
+    file write `fh' `"      for(j=0;j<8;j++) if(f[j]) any=true;"' _n
+    file write `fh' `"      if(P.resub(r)) any=true;"' _n
     file write `fh' `"      g.n++; if(any||r.cas>0) g.fl++;"' _n
+    file write `fh' `"      g.ov+=r.ov;"' _n
     file write `fh' `"      g.act.push(r.act);"' _n
     file write `fh' `"      if(r.med!==null) g.med.push(r.med);"' _n
     file write `fh' `"      var fs=P.fastShare(r,S.fs); if(fs!==null) g.fsh.push(fs);"' _n
@@ -4272,8 +4697,30 @@ program _suso_para_report, rclass
     file write `fh' `"      out[i].mnsh=out[i].nsh.length?P.sum(out[i].nsh)/out[i].nsh.length:null;"' _n
     file write `fh' `"      out[i].share=out[i].fl/out[i].n;"' _n
     file write `fh' `"    }"' _n
-    file write `fh' `"    out.sort(function(a,b){ return b.n-a.n; });"' _n
+    file write `fh' `"    out.sort(function(a,b){ if(b.share!==a.share) return b.share-a.share; return b.n-a.n; });"' _n
     file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  csv: function(flagged,S){"' _n
+    file write `fh' `"    var Q=String.fromCharCode(34);"' _n
+    file write `fh' `"    function cell(x){"' _n
+    file write `fh' `"      if(x===null||x===undefined) return '';"' _n
+    file write `fh' `"      var s=String(x);"' _n
+    file write `fh' `"      if(s.indexOf(',')>=0||s.indexOf(Q)>=0||s.indexOf('\n')>=0) return Q+s.split(Q).join(Q+Q)+Q;"' _n
+    file write `fh' `"      return s;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    var head=['tier','interview_key','interview_id','enumerator','status','first_day','flags','active_min','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_min','rejections','resubmit_min','resubmit_edits','cascades','answers_wiped','post_completion_edits','open_errors','questions_answered'];"' _n
+    file write `fh' `"    var lines=[head.join(',')], i, r, j, pat;"' _n
+    file write `fh' `"    var tname={A:'INVESTIGATE',V:'VERIFY',W:'WATCH'};"' _n
+    file write `fh' `"    for(i=0;i<flagged.length;i++){"' _n
+    file write `fh' `"      r=flagged[i]; pat='';"' _n
+    file write `fh' `"      for(j=0;j<8;j++) if(r._f[j]) pat+=P.letters[j];"' _n
+    file write `fh' `"      if(r._r) pat+='R';"' _n
+    file write `fh' `"      lines.push([tname[r._t],cell(r.k),cell(r.id),cell(r.r),cell(r.ws),cell(r.d0),pat,"' _n
+    file write `fh' `"        P.f1(r.act,1),P.f1(r.med,1),P.f1(P.fastShare(r,S.fs),2),r.fr,P.f1(P.nightShare(r,S.n1,S.n2),2),"' _n
+    file write `fh' `"        P.f1(r.ch,2),P.f1(r.rt,2),r.ov,r.rj,P.f1(r.rb,0),(r.re===null?'':r.re),r.cas,r.wip,r.pc,"' _n
+    file write `fh' `"        (r.ve===null?'':r.ve),(r.nq===null||r.nq===undefined?'':r.nq)].join(','));"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return lines.join('\n');"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"};"' _n
     file write `fh' `"if (typeof module!=='undefined' && module.exports) module.exports=P;"' _n
@@ -4281,6 +4728,9 @@ program _suso_para_report, rclass
     file write `fh' `"/* ---------------- DOM layer (browser only) ---------------- */"' _n
     file write `fh' `"if (typeof document!=='undefined') {"' _n
     file write `fh' _n
+    file write `fh' `"var Q=String.fromCharCode(34);"' _n
+    file write `fh' `"var expOpen={};"' _n
+    file write `fh' `"var lastA=null, lastS=null, lastTeam=null;"' _n
     file write `fh' `"function el(id){ return document.getElementById(id); }"' _n
     file write `fh' `"function fmt(x,d){"' _n
     file write `fh' `"  if(x===null||x===undefined||isNaN(x)) return '.';"' _n
@@ -4296,15 +4746,21 @@ program _suso_para_report, rclass
     file write `fh' `"function esc(s){"' _n
     file write `fh' `"  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');"' _n
     file write `fh' `"}"' _n
+    file write `fh' `"function copyText(t){"' _n
+    file write `fh' `"  var ta=document.createElement('textarea');"' _n
+    file write `fh' `"  ta.value=t; ta.style.position='fixed'; ta.style.left='-999px';"' _n
+    file write `fh' `"  document.body.appendChild(ta); ta.select();"' _n
+    file write `fh' `"  try{ document.execCommand('copy'); }catch(e){}"' _n
+    file write `fh' `"  document.body.removeChild(ta);"' _n
+    file write `fh' `"}"' _n
     file write `fh' _n
     file write `fh' `"function svgBars(counts,labels,hi,opts){"' _n
     file write `fh' `"  opts=opts||{};"' _n
-    file write `fh' `"  var Q=String.fromCharCode(34);"' _n
     file write `fh' `"  function at(n,v){ return ' '+n+'='+Q+v+Q; }"' _n
     file write `fh' `"  var w=opts.w||940, hgt=opts.hgt||170, lstep=opts.lstep||1, showv=opts.vals||false;"' _n
     file write `fh' `"  var k=counts.length, maxc=0, i;"' _n
     file write `fh' `"  for(i=0;i<k;i++) if(counts[i]>maxc) maxc=counts[i];"' _n
-    file write `fh' `"  if(maxc<=0||k===0) return '<p class="nodata">Nothing to plot for this selection.</p>';"' _n
+    file write `fh' `"  if(maxc<=0||k===0) return '<p class=\"nodata\">Nothing to plot for this selection.</p>';"' _n
     file write `fh' `"  var plotw=w-16, ploth=hgt-34, step=plotw/k, barw=Math.max(Math.floor(step)-2,1);"' _n
     file write `fh' `"  var s='<svg'+at('viewBox','0 0 '+w+' '+hgt)+at('width','100%')+at('xmlns','http://www.w3.org/2000/svg')+'>';"' _n
     file write `fh' `"  s+='<text'+at('x',8)+at('y',12)+at('font-size',10)+at('fill','#888')+'>max '+fmtc(maxc)+'</text>';"' _n
@@ -4328,32 +4784,48 @@ program _suso_para_report, rclass
     file write `fh' `"    ws:   el('c_ws').value,"' _n
     file write `fh' `"    fd:   el('c_fd').value,"' _n
     file write `fh' `"    fv:   el('c_fv').value,"' _n
-    file write `fh' `"    fs:   Math.max(1,parseInt(el('c_fs').value,10)||2),"' _n
-    file write `fh' `"    burst:(parseFloat(el('c_burst').value)||33)/100,"' _n
+    file write `fh' `"    fs:   Math.max(0.5,parseFloat(el('c_fs').value)||2),"' _n
+    file write `fh' `"    burst:Math.max(3,parseInt(el('c_burst').value,10)||8),"' _n
     file write `fh' `"    minact:parseFloat(el('c_minact').value)||10,"' _n
     file write `fh' `"    n1:   parseInt(el('c_n1').value,10),"' _n
     file write `fh' `"    n2:   parseInt(el('c_n2').value,10),"' _n
     file write `fh' `"    nshare:(parseFloat(el('c_nshare').value)||25)/100,"' _n
     file write `fh' `"    churn:(parseFloat(el('c_churn').value)||20)/100,"' _n
     file write `fh' `"    z:    parseFloat(el('c_z').value)||3.5,"' _n
-    file write `fh' `"    top:  Math.max(1,parseInt(el('c_top').value,10)||15)"' _n
+    file write `fh' `"    peer:(parseFloat(el('c_peer').value)||35)/100,"' _n
+    file write `fh' `"    ov:   Math.max(1,parseInt(el('c_ov').value,10)||3),"' _n
+    file write `fh' `"    nmin: Math.max(3,parseInt(el('c_nmin').value,10)||10),"' _n
+    file write `fh' `"    top:  Math.max(1,parseInt(el('c_top').value,10)||25)"' _n
     file write `fh' `"  };"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function applyPreset(p){"' _n
+    file write `fh' `"  if(p==='custom'||!P.presets[p]) return;"' _n
+    file write `fh' `"  var t=P.presets[p];"' _n
+    file write `fh' `"  el('c_fs').value=(t.fs!==undefined)?t.fs:D.meta.fastsecs;"' _n
+    file write `fh' `"  el('c_burst').value=t.burst;"' _n
+    file write `fh' `"  el('c_minact').value=t.minact;"' _n
+    file write `fh' `"  el('c_n1').value=t.n1; el('c_n2').value=t.n2;"' _n
+    file write `fh' `"  el('c_nshare').value=Math.round(t.nshare*100);"' _n
+    file write `fh' `"  el('c_churn').value=Math.round(t.churn*100);"' _n
+    file write `fh' `"  el('c_z').value=t.z;"' _n
+    file write `fh' `"  el('c_peer').value=Math.round(t.peer*100);"' _n
+    file write `fh' `"  el('c_ov').value=t.ov;"' _n
+    file write `fh' `"  el('c_nmin').value=t.nmin;"' _n
     file write `fh' `"}"' _n
     file write `fh' `"function resetSettings(){"' _n
     file write `fh' `"  el('c_resp').value='';"' _n
     file write `fh' `"  el('c_ws').value='';"' _n
     file write `fh' `"  el('c_fd').value='';"' _n
     file write `fh' `"  fvOptions();"' _n
-    file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
-    file write `fh' `"  el('c_burst').value=33; el('c_minact').value=10;"' _n
-    file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
-    file write `fh' `"  el('c_nshare').value=25; el('c_churn').value=20;"' _n
-    file write `fh' `"  el('c_z').value=3.5; el('c_top').value=15;"' _n
+    file write `fh' `"  el('c_preset').value='standard';"' _n
+    file write `fh' `"  applyPreset('standard');"' _n
+    file write `fh' `"  el('c_top').value=25;"' _n
+    file write `fh' `"  expOpen={};"' _n
     file write `fh' `"  renderAll();"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
     file write `fh' `"function fvOptions(){"' _n
-    file write `fh' `"  var dim=el('c_fd').value, Q5=String.fromCharCode(34), s='<option value='+Q5+Q5+'>-</option>', i, j, cnt={};"' _n
+    file write `fh' `"  var dim=el('c_fd').value, s='<option value='+Q+Q+'>-</option>', i, j, cnt={};"' _n
     file write `fh' `"  if(dim && D.meta && D.meta.fdims){"' _n
     file write `fh' `"    for(i=0;i<D.rows.length;i++){"' _n
     file write `fh' `"      var rv=(D.rows[i].f&&D.rows[i].f[dim])?D.rows[i].f[dim]:'';"' _n
@@ -4364,7 +4836,7 @@ program _suso_para_report, rclass
     file write `fh' `"      var vv=D.meta.fdims[i].vals;"' _n
     file write `fh' `"      for(j=0;j<vv.length;j++){"' _n
     file write `fh' `"        var lab=(vv[j].l&&vv[j].l!==vv[j].c)?(vv[j].c+' '+vv[j].l):vv[j].c;"' _n
-    file write `fh' `"        s+='<option value='+Q5+esc(vv[j].c)+Q5+'>'+esc(lab)+' ('+(cnt[vv[j].c]||0)+')</option>';"' _n
+    file write `fh' `"        s+='<option value='+Q+esc(vv[j].c)+Q+'>'+esc(lab)+' ('+(cnt[vv[j].c]||0)+')</option>';"' _n
     file write `fh' `"      }"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"  }"' _n
@@ -4387,48 +4859,117 @@ program _suso_para_report, rclass
     file write `fh' `"    if(av===bv) return a.v<b.v?-1:1;"' _n
     file write `fh' `"    return (av<bv?-1:1)*(-qSortDir);"' _n
     file write `fh' `"  });"' _n
-    file write `fh' `"  var s='<tr><th class="srt" onclick="qSort(String.fromCharCode(118))">question</th>'+"' _n
-    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(110))">answers</th>'+"' _n
-    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(110,105))">interviews</th>'+"' _n
-    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(109,101,100))">median s</th>'+"' _n
-    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(112,57,48))">p90 s</th>'+"' _n
-    file write `fh' `"        '<th class="r srt" onclick="qSort(String.fromCharCode(102,115,104))">fast share</th></tr>';"' _n
+    file write `fh' `"  var s='<tr><th class=\"srt\" onclick=\"qSort(String.fromCharCode(118))\">question</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(110))\">answers</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(110,105))\">interviews</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(109,101,100))\">median s</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(112,57,48))\">p90 s</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(102,115,104))\">fast share</th></tr>';"' _n
     file write `fh' `"  var k=Math.min(rows.length,40);"' _n
     file write `fh' `"  for(i=0;i<k;i++){"' _n
     file write `fh' `"    var q=rows[i];"' _n
-    file write `fh' `"    s+='<tr><td class="mono">'+esc(q.v)+'</td><td class="r">'+fmtc(q.n)+'</td><td class="r">'+fmtc(q.ni)+"' _n
-    file write `fh' `"       '</td><td class="r">'+fmt(q.med)+'</td><td class="r">'+fmt(q.p90)+'</td><td class="r">'+fmt(q.fsh,2)+'</td></tr>';"' _n
+    file write `fh' `"    s+='<tr><td class=\"mono\">'+esc(q.v)+'</td><td class=\"r\">'+fmtc(q.n)+'</td><td class=\"r\">'+fmtc(q.ni)+"' _n
+    file write `fh' `"       '</td><td class=\"r\">'+fmt(q.med)+'</td><td class=\"r\">'+fmt(q.p90)+'</td><td class=\"r\">'+fmt(q.fsh,2)+'</td></tr>';"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  el('t_q').innerHTML=s;"' _n
     file write `fh' `"  el('q_more').textContent = rows.length>k ? ('Showing '+k+' of '+rows.length+' questions - refine the search to see others.') : '';"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function chipsFor(r){"' _n
+    file write `fh' `"  var s='',j;"' _n
+    file write `fh' `"  if(r._r) s+='<span class='+Q+'chip hard'+Q+' title='+Q+'Rejected and re-completed with no answers changed'+Q+'>Resubmitted unchanged</span>';"' _n
+    file write `fh' `"  for(j=0;j<8;j++){"' _n
+    file write `fh' `"    if(!r._f[j]) continue;"' _n
+    file write `fh' `"    var cls=(j===7)?'chip hard':'chip';"' _n
+    file write `fh' `"    s+='<span class='+Q+cls+Q+'>'+P.names[j]+'</span>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  if(r.cas>0) s+='<span class='+Q+'chip'+Q+' title='+Q+'Skip cascade: a gate answer flip erased later answers'+Q+'>Gate flip</span>';"' _n
+    file write `fh' `"  if(r.m===1) s+='<span class='+Q+'chip info'+Q+'>CAWI</span>';"' _n
+    file write `fh' `"  if(r.to===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Tablet timezone differs from the team or changed - hours unreliable'+Q+'>Clock suspect</span>';"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function detailHtml(r,S,team){"' _n
+    file write `fh' `"  var ev=P.evidence(r,S,team), s='', i;"' _n
+    file write `fh' `"  s+='<div class='+Q+'facts'+Q+'><b>Interview:</b> <span class='+Q+'mono'+Q+'>'+esc(r.id)+'</span>'+"' _n
+    file write `fh' `"     '<span class='+Q+'cpy'+Q+' data-t='+Q+esc(r.id)+Q+'>copy id</span>';"' _n
+    file write `fh' `"  if(r.k) s+=' &nbsp; <b>Key:</b> <span class='+Q+'mono'+Q+'>'+esc(r.k)+'</span><span class='+Q+'cpy'+Q+' data-t='+Q+esc(r.k)+Q+'>copy key</span>';"' _n
+    file write `fh' `"  s+=' &nbsp; <b>Status:</b> '+esc(r.ws||'-')+' &nbsp; <b>First day:</b> '+esc(r.d0||'-')+"' _n
+    file write `fh' `"     ' &nbsp; <b>Sessions:</b> '+r.ss+' &nbsp; <b>Restarts:</b> '+r.rs+' &nbsp; <b>Rejections:</b> '+r.rj+"' _n
+    file write `fh' `"     ' &nbsp; <b>Answers:</b> '+fmtc(r.nt)+' timed'+((r.nq!==null&&r.nq!==undefined)?(' / '+fmtc(r.nq)+' questions'):'')+"' _n
+    file write `fh' `"     ((r.tz!==null)?(' &nbsp; <b>Device offset:</b> '+fmt(r.tz,1)+' h'):'')+'</div>';"' _n
+    file write `fh' `"  for(i=0;i<ev.length;i++){"' _n
+    file write `fh' `"    var cls=(ev[i].t==='hard')?'ev hard':'ev';"' _n
+    file write `fh' `"    var pre=(ev[i].t==='hard')?'<b style='+Q+'color:#8a1f1f'+Q+'>! </b>':((ev[i].t==='info')?'<span style='+Q+'color:#888'+Q+'>i </span>':'<span style='+Q+'color:#C9A227'+Q+'>&#9679; </span>');"' _n
+    file write `fh' `"    s+='<div class='+Q+cls+Q+'>'+pre+esc(ev[i].s)+'</div>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  if(!D.meta.lite && (r.h||r.g)){"' _n
+    file write `fh' `"    s+='<div style='+Q+'display:flex;flex-wrap:wrap;gap:18px;margin-top:8px'+Q+'>';"' _n
+    file write `fh' `"    if(r.h){"' _n
+    file write `fh' `"      var labH=[],hiH=[],x;"' _n
+    file write `fh' `"      for(x=0;x<24;x++){ labH.push(String(x)); if(P.inWindow(x,S.n1,S.n2)) hiH.push(x); }"' _n
+    file write `fh' `"      s+='<div style='+Q+'flex:1 1 320px'+Q+'><div class='+Q+'legend'+Q+'>Answers by hour (device time)</div>'+svgBars(r.h,labH,hiH,{w:460,hgt:100,lstep:3})+'</div>';"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(r.g){"' _n
+    file write `fh' `"      var labG=[],hiG=[],y;"' _n
+    file write `fh' `"      for(y=0;y<21;y++){ labG.push(y<20?String(y):'20+'); if(y<S.fs) hiG.push(y); }"' _n
+    file write `fh' `"      s+='<div style='+Q+'flex:1 1 320px'+Q+'><div class='+Q+'legend'+Q+'>Seconds per answer</div>'+svgBars(r.g,labG,hiG,{w:460,hgt:100,lstep:4})+'</div>';"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    s+='</div>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function renderWorst(){"' _n
+    file write `fh' `"  var A=lastA, S=lastS, team=lastTeam;"' _n
+    file write `fh' `"  if(!A) return;"' _n
+    file write `fh' `"  var s='<tr><th></th><th>interview</th><th>enumerator</th><th>day</th><th>signals</th><th class=\"r\">act min</th><th class=\"r\">sec/ans</th></tr>';"' _n
+    file write `fh' `"  var F=A.flagged, kk=Math.min(F.length,S.top), i;"' _n
+    file write `fh' `"  var tlab={A:'Investigate',V:'Verify',W:'Watch'};"' _n
+    file write `fh' `"  for(i=0;i<kk;i++){"' _n
+    file write `fh' `"    var r=F[i];"' _n
+    file write `fh' `"    var keyc=r.k?('<span class='+Q+'mono'+Q+'><b>'+esc(r.k)+'</b></span>'):('<span class='+Q+'mono'+Q+'>'+esc(r.id.substring(0,8))+'</span>');"' _n
+    file write `fh' `"    s+='<tr class='+Q+'wrow'+Q+' data-i='+Q+i+Q+'>'+"' _n
+    file write `fh' `"       '<td><span class='+Q+'tier '+r._t+Q+'>'+tlab[r._t]+'</span></td>'+"' _n
+    file write `fh' `"       '<td>'+keyc+'</td>'+"' _n
+    file write `fh' `"       '<td>'+esc(r.r)+'</td>'+"' _n
+    file write `fh' `"       '<td>'+esc(r.d0||'-')+'</td>'+"' _n
+    file write `fh' `"       '<td>'+chipsFor(r)+'</td>'+"' _n
+    file write `fh' `"       '<td class=\"r\">'+fmt(r.act)+'</td>'+"' _n
+    file write `fh' `"       '<td class=\"r\">'+fmt(r.med)+'</td></tr>';"' _n
+    file write `fh' `"    if(expOpen[r.id]) s+='<tr class='+Q+'wdet'+Q+'><td colspan='+Q+'7'+Q+'>'+detailHtml(r,S,team)+'</td></tr>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('t_worst').innerHTML=s;"' _n
+    file write `fh' `"  el('w_none').textContent = F.length===0 ? 'Nothing to review for this selection - no signals and no cascades.' : (F.length>kk?('Showing '+kk+' of '+F.length+' - raise Show top to see more.'):'');"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
     file write `fh' `"function renderAll(){"' _n
     file write `fh' `"  var S=settings();"' _n
     file write `fh' `"  var rows=P.filterRows(D.rows,S.resp,S.ws,S.fd,S.fv);"' _n
     file write `fh' `"  var A=P.aggregate(rows,S);"' _n
+    file write `fh' `"  var team=P.team(rows);"' _n
+    file write `fh' `"  lastA=A; lastS=S; lastTeam=team;"' _n
     file write `fh' `"  var scope=S.resp?('enumerator '+S.resp):'all enumerators';"' _n
     file write `fh' `"  if(S.ws) scope+=(S.ws==='APP')?', approved interviews':(', status '+S.ws);"' _n
     file write `fh' `"  if(S.fd && S.fv) scope+=', '+S.fd+' = '+S.fv;"' _n
     file write `fh' _n
     file write `fh' `"  el('k_started').textContent=fmtc(A.n);"' _n
-    file write `fh' `"  el('k_flagged').textContent=fmtc(A.nflagged)+' ('+fmt(100*A.nflagged/Math.max(A.n,1))+'%)';"' _n
+    file write `fh' `"  el('k_inv').textContent=fmtc(A.tiers.A);"' _n
+    file write `fh' `"  el('k_ver').textContent=fmtc(A.tiers.V);"' _n
     file write `fh' `"  var acts=[],i;"' _n
     file write `fh' `"  for(i=0;i<rows.length;i++) acts.push(rows[i].act);"' _n
     file write `fh' `"  el('k_medact').textContent=fmt(P.median(acts));"' _n
-    file write `fh' `"  var meds=[];"' _n
-    file write `fh' `"  for(i=0;i<rows.length;i++) if(rows[i].med!==null) meds.push(rows[i].med);"' _n
-    file write `fh' `"  el('k_medans').textContent=fmt(P.median(meds));"' _n
+    file write `fh' `"  el('k_medans').textContent=fmt(team.med);"' _n
     file write `fh' _n
-    file write `fh' `"  var verdict, vc;"' _n
-    file write `fh' `"  if(A.nflagged===0){ verdict='No behaviour flags raised for '+scope+' at the current thresholds.'; vc='ok'; }"' _n
-    file write `fh' `"  else { verdict=fmtc(A.nflagged)+' of '+fmtc(A.n)+' interviews raise at least one flag for '+scope+' - review the tables below.'; vc='warn'; }"' _n
+    file write `fh' `"  var verdict, vc, tA=A.tiers.A, tV=A.tiers.V, tW=A.tiers.W;"' _n
+    file write `fh' `"  if(tA>0){ verdict=fmtc(tA)+' interview(s) need investigation, '+fmtc(tV)+' to verify and '+fmtc(tW)+' to watch, out of '+fmtc(A.n)+' for '+scope+'.'; vc='bad'; }"' _n
+    file write `fh' `"  else if(tV>0){ verdict=fmtc(tV)+' interview(s) to verify and '+fmtc(tW)+' to watch, out of '+fmtc(A.n)+' for '+scope+' - no hard evidence at these thresholds.'; vc='warn'; }"' _n
+    file write `fh' `"  else if(tW>0){ verdict='Only single, isolated signals ('+fmtc(tW)+' interview(s) to watch) for '+scope+'.'; vc='warn'; }"' _n
+    file write `fh' `"  else { verdict='No behaviour signals raised for '+scope+' at the current sensitivity.'; vc='ok'; }"' _n
     file write `fh' `"  el('verdict').textContent=verdict;"' _n
     file write `fh' `"  el('verdict').className='verdict '+vc;"' _n
     file write `fh' _n
     file write `fh' `"  el('ch_flags').innerHTML=svgBars(A.tot,"' _n
-    file write `fh' `"    ['S speeding','B bursts','T too short','N night','C churn','Z outlier'],[],"' _n
-    file write `fh' `"    {hgt:150,vals:true});"' _n
+    file write `fh' `"    ['S speed','B streak','T short','N night','C churn','Z outlier','P peers','O overlap'],[7],"' _n
+    file write `fh' `"    {hgt:150,vals:true})+'<div class='+Q+'legend'+Q+'>S sustained speeding &nbsp; B a run of consecutive fast answers &nbsp; T completed too quickly &nbsp; N night work &nbsp; C answer churn &nbsp; Z duration outlier &nbsp; P far faster than peers on the same questions &nbsp; O two interviews in the same minute</div>';"' _n
     file write `fh' _n
     file write `fh' `"  var BA=P.binsActive(rows), labA=[], hiA=[];"' _n
     file write `fh' `"  for(i=0;i<20;i++){ labA.push(String(i*BA.w)); if((i+1)*BA.w<=S.minact) hiA.push(i); }"' _n
@@ -4443,35 +4984,25 @@ program _suso_para_report, rclass
     file write `fh' `"  var HT=P.hourTotals(rows), labH=[], hiH=[];"' _n
     file write `fh' `"  for(i=0;i<24;i++){ labH.push(String(i)); if(P.inWindow(i,S.n1,S.n2)) hiH.push(i); }"' _n
     file write `fh' `"  if(HT) el('ch_hour').innerHTML=svgBars(HT,labH,hiH,{lstep:2});"' _n
-    file write `fh' `"  else el('ch_hour').innerHTML='<p class="nodata">Hour detail not embedded for this survey size.</p>';"' _n
+    file write `fh' `"  else el('ch_hour').innerHTML='<p class=\"nodata\">Hour detail not embedded for this survey size.</p>';"' _n
     file write `fh' _n
     file write `fh' `"  var DT=P.dailyTotals(D.daily,S.resp), dc=[], dl=[], dstep=Math.max(1,Math.floor(DT.length/8));"' _n
     file write `fh' `"  for(i=0;i<DT.length;i++){ dc.push(DT[i].c); dl.push(i%dstep===0?DT[i].d.substring(5):''); }"' _n
     file write `fh' `"  el('ch_daily').innerHTML=svgBars(dc,dl,[],{lstep:1});"' _n
     file write `fh' _n
-    file write `fh' `"  var L=P.league(rows,S), s='<tr><th>enumerator</th><th class="r">interviews</th><th class="r">med active min</th><th class="r">med sec/ans</th><th class="r">fast share</th><th class="r">night share</th><th class="r">flagged</th><th style="width:110px">flag share</th></tr>';"' _n
+    file write `fh' `"  var L=P.league(rows,S), s='<tr><th>enumerator</th><th class=\"r\">interviews</th><th class=\"r\">med active min</th><th class=\"r\">med sec/ans</th><th class=\"r\" title=\"enumerator median sec per answer over team median: 0.5 means twice as fast as the team\">vs team</th><th class=\"r\">fast share</th><th class=\"r\">night share</th><th class=\"r\" title=\"minutes answering two interviews at once, summed\">overlap</th><th class=\"r\">flagged</th><th style=\"width:110px\">flag share</th></tr>';"' _n
     file write `fh' `"  var k=Math.min(L.length,30);"' _n
     file write `fh' `"  for(i=0;i<k;i++){"' _n
     file write `fh' `"    var g=L[i];"' _n
-    file write `fh' `"    s+=(g.fl>0?'<tr class="hot">':'<tr>')+'<td>'+esc(g.r)+'</td><td class="r">'+fmtc(g.n)+'</td><td class="r">'+fmt(g.medact)+"' _n
-    file write `fh' `"       '</td><td class="r">'+fmt(g.medmed)+'</td><td class="r">'+fmt(g.mfsh,2)+'</td><td class="r">'+fmt(g.mnsh,2)+"' _n
-    file write `fh' `"       '</td><td class="r">'+fmtc(g.fl)+'</td><td><span class="bar" style="width:'+Math.round(100*g.share)+'px"></span> '+fmt(100*g.share)+'%</td></tr>';"' _n
+    file write `fh' `"    var vst=(g.medmed!==null&&team.med!==null&&team.med>0)?(g.medmed/team.med):null;"' _n
+    file write `fh' `"    s+=(g.fl>0?'<tr class=\"hot\">':'<tr>')+'<td>'+esc(g.r)+'</td><td class=\"r\">'+fmtc(g.n)+'</td><td class=\"r\">'+fmt(g.medact)+"' _n
+    file write `fh' `"       '</td><td class=\"r\">'+fmt(g.medmed)+'</td><td class=\"r\">'+fmt(vst,2)+'</td><td class=\"r\">'+fmt(g.mfsh,2)+'</td><td class=\"r\">'+fmt(g.mnsh,2)+"' _n
+    file write `fh' `"       '</td><td class=\"r\">'+fmtc(g.ov)+'</td><td class=\"r\">'+fmtc(g.fl)+'</td><td><span class=\"bar\" style=\"width:'+Math.round(100*g.share)+'px\"></span> '+fmt(100*g.share)+'%</td></tr>';"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  el('t_league').innerHTML=s;"' _n
-    file write `fh' `"  el('l_more').textContent = L.length>k ? ('Top '+k+' of '+L.length+' enumerators by workload.') : '';"' _n
+    file write `fh' `"  el('l_more').textContent = L.length>k ? ('Top '+k+' of '+L.length+' enumerators by flag share.') : '';"' _n
     file write `fh' _n
-    file write `fh' `"  s='<tr><th>interview id</th><th>enumerator</th><th>flags</th><th class="r">active min</th><th class="r">sec/ans</th><th class="r">fast</th><th class="r">night</th><th class="r">cascades</th><th class="r">wiped</th></tr>';"' _n
-    file write `fh' `"  var F=A.flagged, kk=Math.min(F.length,S.top), letters=['S','B','T','N','C','Z'];"' _n
-    file write `fh' `"  for(i=0;i<kk;i++){"' _n
-    file write `fh' `"    var r=F[i], pat='', j;"' _n
-    file write `fh' `"    for(j=0;j<6;j++) pat+=r._f[j]?letters[j]:'-';"' _n
-    file write `fh' `"    s+='<tr><td class="mono">'+esc(r.id)+'</td><td>'+esc(r.r)+'</td><td class="mono" style="letter-spacing:2px">'+pat+"' _n
-    file write `fh' `"       '</td><td class="r">'+fmt(r.act)+'</td><td class="r">'+fmt(r.med)+'</td><td class="r">'+fmt(P.fastShare(r,S.fs),2)+"' _n
-    file write `fh' `"       '</td><td class="r">'+fmt(P.nightShare(r,S.n1,S.n2),2)+'</td><td class="r">'+r.cas+'</td><td class="r">'+r.wip+'</td></tr>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  el('t_worst').innerHTML=s;"' _n
-    file write `fh' `"  el('w_none').textContent = F.length===0 ? 'Nothing to review for this selection - no flags and no cascades.' : '';"' _n
-    file write `fh' _n
+    file write `fh' `"  renderWorst();"' _n
     file write `fh' `"  renderQuestions();"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
@@ -4480,20 +5011,20 @@ program _suso_para_report, rclass
     file write `fh' `"  for(i=0;i<D.rows.length;i++) rs[D.rows[i].r]=1;"' _n
     file write `fh' `"  for(var k in rs){ if(rs.hasOwnProperty(k)&&k!=='') names.push(k); }"' _n
     file write `fh' `"  names.sort();"' _n
-    file write `fh' `"  var s='<option value="">All enumerators ('+names.length+')</option>';"' _n
+    file write `fh' `"  var s='<option value=\"\">All enumerators ('+names.length+')</option>';"' _n
     file write `fh' `"  for(i=0;i<names.length;i++) s+='<option>'+esc(names[i])+'</option>';"' _n
     file write `fh' `"  el('c_resp').innerHTML=s;"' _n
-    file write `fh' `"  var Q2=String.fromCharCode(34), wsm={}, wnames=[];"' _n
+    file write `fh' `"  var wsm={}, wnames=[];"' _n
     file write `fh' `"  for(i=0;i<D.rows.length;i++){ var w=D.rows[i].ws||''; if(w) wsm[w]=(wsm[w]||0)+1; }"' _n
     file write `fh' `"  for(var k2 in wsm){ if(wsm.hasOwnProperty(k2)) wnames.push(k2); }"' _n
     file write `fh' `"  wnames.sort();"' _n
-    file write `fh' `"  var so='<option value='+Q2+Q2+'>All statuses</option>';"' _n
-    file write `fh' `"  if(wsm['Approved by HQ']||wsm['Approved by Sup']) so+='<option value='+Q2+'APP'+Q2+'>Approved only (Sup + HQ)</option>';"' _n
-    file write `fh' `"  for(i=0;i<wnames.length;i++) so+='<option value='+Q2+esc(wnames[i])+Q2+'>'+esc(wnames[i])+' ('+wsm[wnames[i]]+')</option>';"' _n
+    file write `fh' `"  var so='<option value='+Q+Q+'>All statuses</option>';"' _n
+    file write `fh' `"  if(wsm['Approved by HQ']||wsm['Approved by Sup']) so+='<option value='+Q+'APP'+Q+'>Approved only (Sup + HQ)</option>';"' _n
+    file write `fh' `"  for(i=0;i<wnames.length;i++) so+='<option value='+Q+esc(wnames[i])+Q+'>'+esc(wnames[i])+' ('+wsm[wnames[i]]+')</option>';"' _n
     file write `fh' `"  el('c_ws').innerHTML=so;"' _n
     file write `fh' `"  var fds=(D.meta&&D.meta.fdims)?D.meta.fdims:[];"' _n
     file write `fh' `"  if(fds.length){"' _n
-    file write `fh' `"    var fo='<option value='+Q2+Q2+'>None</option>';"' _n
+    file write `fh' `"    var fo='<option value='+Q+Q+'>None</option>';"' _n
     file write `fh' `"    for(i=0;i<fds.length;i++) fo+='<option>'+esc(fds[i].v)+'</option>';"' _n
     file write `fh' `"    el('c_fd').innerHTML=fo;"' _n
     file write `fh' `"    fvOptions();"' _n
@@ -4507,10 +5038,39 @@ program _suso_para_report, rclass
     file write `fh' `"  el('c_n1').innerHTML=hsel; el('c_n2').innerHTML=hsel;"' _n
     file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
     file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
-    file write `fh' `"  var ids=['c_resp','c_ws','c_fv','c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_top'];"' _n
-    file write `fh' `"  for(i=0;i<ids.length;i++) el(ids[i]).addEventListener('change',renderAll);"' _n
+    file write `fh' `"  el('c_preset').value='standard';"' _n
+    file write `fh' `"  el('c_adv').addEventListener('click',function(){"' _n
+    file write `fh' `"    var a=el('advrow');"' _n
+    file write `fh' `"    a.style.display=(a.style.display==='none')?'flex':'none';"' _n
+    file write `fh' `"  });"' _n
+    file write `fh' `"  el('c_preset').addEventListener('change',function(){ applyPreset(el('c_preset').value); renderAll(); });"' _n
+    file write `fh' `"  var simp=['c_resp','c_ws','c_fv','c_top'];"' _n
+    file write `fh' `"  for(i=0;i<simp.length;i++) el(simp[i]).addEventListener('change',renderAll);"' _n
+    file write `fh' `"  var adv=['c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_peer','c_ov','c_nmin'];"' _n
+    file write `fh' `"  for(i=0;i<adv.length;i++) el(adv[i]).addEventListener('change',function(){ el('c_preset').value='custom'; renderAll(); });"' _n
     file write `fh' `"  el('c_q').addEventListener('input',renderQuestions);"' _n
     file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
+    file write `fh' `"  el('c_csv').addEventListener('click',function(){"' _n
+    file write `fh' `"    if(!lastA) return;"' _n
+    file write `fh' `"    var body=P.csv(lastA.flagged,lastS);"' _n
+    file write `fh' `"    var a=document.createElement('a');"' _n
+    file write `fh' `"    a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(body);"' _n
+    file write `fh' `"    a.download='suso_review_list.csv';"' _n
+    file write `fh' `"    document.body.appendChild(a); a.click(); document.body.removeChild(a);"' _n
+    file write `fh' `"  });"' _n
+    file write `fh' `"  el('t_worst').addEventListener('click',function(ev){"' _n
+    file write `fh' `"    var t=ev.target||ev.srcElement;"' _n
+    file write `fh' `"    if(t && t.className && String(t.className).indexOf('cpy')>=0){"' _n
+    file write `fh' `"      copyText(t.getAttribute('data-t')||'');"' _n
+    file write `fh' `"      t.textContent='copied';"' _n
+    file write `fh' `"      return;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    while(t && t!==this && (!t.getAttribute || t.getAttribute('data-i')===null)) t=t.parentNode;"' _n
+    file write `fh' `"    if(t && t.getAttribute && t.getAttribute('data-i')!==null){"' _n
+    file write `fh' `"      var r=lastA.flagged[parseInt(t.getAttribute('data-i'),10)];"' _n
+    file write `fh' `"      if(r){ expOpen[r.id]=!expOpen[r.id]; renderWorst(); }"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"  });"' _n
     file write `fh' `"  if(D.meta.lite===1){"' _n
     file write `fh' `"    el('c_n1').disabled=true; el('c_n2').disabled=true; el('c_fs').disabled=true;"' _n
     file write `fh' `"    el('lite_note').textContent='Large survey: per-interview hour/gap detail was not embedded, so the night window and fast-seconds controls use the values fixed at build time.';"' _n
@@ -4531,8 +5091,9 @@ program _suso_para_report, rclass
     di as txt "suso paradata: interactive report written to " as res `"`fullp'"'
     di as txt `"               {browse "`fullp'":Click to open in your browser}"'
     di as txt "  `nstartedc' of `nintsc' records have fieldwork; `nuntouchedc' are untouched (preload-only) and shown separately."
+    if `ncawi'>0 di as txt "  `ncawi' CAWI (web) interview(s) detected - timing flags are suppressed for them."
     di as txt "  timing basis: `rolenote'."
-    di as txt "  in memory: one row per record (timing + flags at defaults + cascades + started marker)."
+    di as txt "  in memory: one row per record (timing + flags at defaults + cascades + new signals + started marker)."
     return local  report `"`fullp'"'
     return scalar nints    = `nints'
     return scalar nstarted = `nstarted'
