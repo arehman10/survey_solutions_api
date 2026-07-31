@@ -3099,6 +3099,31 @@ program _suso_para_skips, rclass
     quietly by interview__id: replace sk_nextval = sk_nextval[_n-1] if sk_nextval=="" & _n>1
     sort interview__id para_ord para_seq
 
+    * lookups for the review page: answer history (old gate values) + interview keys
+    tempfile AVF SKKEY
+    local hasav 0
+    local haskey 0
+    preserve
+    quietly keep if para_ans & sk_lastvar!="" & sk_lastvar!="(unnamed)"
+    if _N>0 {
+        local hasav 1
+        quietly keep interview__id sk_lastvar sk_lastval para_tsu
+        rename (sk_lastvar sk_lastval) (trigger av_val)
+        quietly save `"`AVF'"'
+    }
+    restore
+    preserve
+    quietly keep if para_ev=="keyassigned"
+    capture confirm string variable parameters
+    if !_rc & _N>0 {
+        local haskey 1
+        quietly bysort interview__id (para_ord para_seq): keep if _n==_N
+        quietly gen ikey = substr(strtrim(parameters), 1, 12)
+        quietly keep interview__id ikey
+        quietly save `"`SKKEY'"'
+    }
+    restore
+
     * runs of consecutive AnswerRemoved events
     tempvar rise
     quietly by interview__id: gen byte `rise' = para_rem & para_rem[_n-1]!=1
@@ -3305,13 +3330,20 @@ program _suso_para_skips, rclass
 
         * ---- automatic triage: classify every case, roll up to findings -------------
         quietly gen byte nsecs = 1
+        quietly gen byte selferased = 0
         quietly gen strL wlc = wl
         forvalues r = 1/`=_N' {
             local wlw = subinstr(wl[`r'], ",", " ", .)
+            local trg = trigger[`r']
+            local selfr 0
             local seen ""
             local out ""
             local secs ""
             foreach w of local wlw {
+                if "`w'"=="`trg'" & "`trg'"!="" {
+                    local selfr 1
+                    continue
+                }
                 if strpos(" `seen' ", " `w' ")>0 continue
                 local seen "`seen' `w'"
                 local k 0
@@ -3325,6 +3357,7 @@ program _suso_para_skips, rclass
                 }
             }
             quietly replace wlc = "`out'" in `r'
+            quietly replace selferased = `selfr' in `r'
             local nsc = length(`"`secs'"') - length(subinstr(`"`secs'"', "|", "", .))
             if `nsc'>0 quietly replace nsecs = `nsc' in `r'
         }
@@ -3526,7 +3559,40 @@ program _suso_para_skips, rclass
             gsort -wiped -flips trigger
             quietly keep in 1/`=min(10,_N)'
             quietly save `"`GSUM'"'
+            * old value of the gate before the flip (answer-history lookup)
+            tempfile OVF
+            local hasov2 0
+            if `hasav' {
+                quietly use `"`DET1'"', clear
+                quietly keep interview__id sk_run trigger trigval ts0
+                quietly drop if trigger==""
+                if _N>0 {
+                    quietly joinby interview__id trigger using `"`AVF'"', unmatched(none)
+                    quietly keep if para_tsu <= ts0 + `window'*1000
+                    quietly bysort interview__id sk_run (para_tsu): gen long __n = _n
+                    quietly by interview__id sk_run: gen long __N = _N
+                    quietly keep if __n >= __N - 1
+                    quietly by interview__id sk_run: gen strL __last = av_val[_N]
+                    quietly gen strL oldval = ""
+                    quietly by interview__id sk_run: replace oldval =                 ///
+                        cond(_N>=2, cond(__last==trigval, av_val[1], __last),         ///
+                             cond(av_val!=trigval, av_val, "")) if _n==1
+                    quietly by interview__id sk_run: keep if _n==1
+                    quietly keep if oldval!=""
+                    if _N>0 {
+                        local hasov2 1
+                        quietly keep interview__id sk_run oldval
+                        quietly save `"`OVF'"'
+                    }
+                }
+            }
             quietly use `"`DET1'"', clear
+            if `hasov2' quietly merge 1:1 interview__id sk_run using `"`OVF'"', keep(master match) nogenerate
+            capture confirm variable oldval
+            if _rc quietly gen strL oldval = ""
+            if `haskey' quietly merge m:1 interview__id using `"`SKKEY'"', keep(master match) nogenerate
+            capture confirm variable ikey
+            if _rc quietly gen ikey = ""
             gsort -nrem interview__id sk_run
             * pre-built display columns: data reaches the file only via (exp)
             quietly gen strL h_ac = cond(actor!="", actor, resp)
@@ -3541,15 +3607,20 @@ program _suso_para_skips, rclass
                 quietly replace h_en = substr(qx_enable,1,200)
             }
             quietly gen strL h_wl = substr(wlc,1,400)
-            foreach v in h_ac h_tg h_tv0 h_qt h_sc h_en h_wl {
+            quietly gen strL h_ov0 = substr(oldval,1,60)
+            quietly gen strL h_key = ikey
+            foreach v in h_ac h_tg h_tv0 h_qt h_sc h_en h_wl h_ov0 h_key {
                 quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
             }
             quietly gen strL h_open = "<div class=" + char(34) + "case" + cond(nrem>=5, " big", "") + char(34) + ">"
             quietly gen strL h_chip = "<div class=" + char(34) + "chip" + char(34) + ">" + strofreal(nrem) + " erased</div>"
-            quietly gen strL h_l1 = "<div class=" + char(34) + "c1" + char(34) + "><span class=" + char(34) + "mono" + char(34) + ">" ///
-                + interview__id + "</span> &nbsp;&middot;&nbsp; <b>" + h_ac + "</b> &nbsp;&middot;&nbsp; " ///
+            quietly gen strL h_l1 = "<div class=" + char(34) + "c1" + char(34) + ">" ///
+                + cond(h_key!="", "<b class=" + char(34) + "mono" + char(34) + ">" + h_key + "</b> &nbsp;&middot;&nbsp; <span class=" + char(34) + "mono small" + char(34) + ">" + interview__id + "</span>", ///
+                       "<span class=" + char(34) + "mono" + char(34) + ">" + interview__id + "</span>") ///
+                + " &nbsp;&middot;&nbsp; <b>" + h_ac + "</b> &nbsp;&middot;&nbsp; " ///
                 + string(ts0/86400000, "%tdDD_Mon_CCYY") + " " + string(ts0, "%tcHH:MM") + " UTC</div>"
             quietly gen strL h_l2 = "<div class=" + char(34) + "c2" + char(34) + ">The answer to <b class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</b> was changed"
+            quietly replace h_l2 = h_l2 + " from &quot;" + h_ov0 + "&quot;" if h_ov0!="" & h_ov0!=h_tv0
             quietly replace h_l2 = h_l2 + " to &quot;" + h_tv0 + "&quot;" if h_tv0!=""
             quietly replace h_l2 = h_l2 + " after <b>" + strofreal(nrem) + "</b> later answers were recorded - the skip logic erased them.</div>"
             quietly gen strL h_l3 = ""
@@ -3560,7 +3631,13 @@ program _suso_para_skips, rclass
             quietly replace h_l4 = "<div class=" + char(34) + "meta" + char(34) + ">" + h_l4 + "</div>" if h_l4!=""
             quietly gen strL h_l5 = ""
             quietly replace h_l5 = "<div class=" + char(34) + "meta" + char(34) + ">Erased: <span class=" + char(34) + "mono" + char(34) + ">" + h_wl ///
-                + cond(nrem>8, " ... and " + strofreal(nrem-8) + " more", "") + "</span></div>" if h_wl!=""
+                + cond(nrem>8, " ... and " + strofreal(nrem-8) + " more", "") + "</span>" ///
+                + cond(selferased==1, " <span style=" + char(34) + "color:#7a5b00" + char(34) + ">(the gate itself was erased again by a follow-on flip - the value shown may not be final; check the history)</span>", "") ///
+                + "</div>" if h_wl!=""
+            quietly gen strL h_do = ""
+            quietly replace h_do = "<div class=" + char(34) + "meta do" + char(34) + ">Do: if &quot;" + h_tv0 + "&quot; is correct, <b>reject the interview</b> so the erased answers are re-asked (they are empty now); if " ///
+                + cond(h_ov0!="" & h_ov0!=h_tv0, "&quot;" + h_ov0 + "&quot;", "the old answer") ///
+                + " was correct, restore it and verify the section.</div>" if h_tv0!=""
             quietly gen strL h_l6 = ""
             if `hasqxt' {
                 quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#1e6b34;font-weight:600" + char(34) + ">Gate confirmed: the erased questions depend on this variable.</div>" if conf>0
@@ -3592,6 +3669,8 @@ program _suso_para_skips, rclass
             file write `hf' `".c1{font-size:12.5px;color:#444;margin-right:90px}.c2{font-size:13.5px;margin-top:6px}"' _n
             file write `hf' `"blockquote{margin:8px 0;padding:8px 12px;background:#f7f8fa;border-left:3px solid #c9cfd6;font-size:12.5px;color:#333}"' _n
             file write `hf' `".meta{font-size:11.5px;color:#666;margin-top:4px}.mono{font-family:Consolas,monospace}"' _n
+    file write `hf' `".small{font-size:10.5px;color:#888}.do{color:#333;margin-top:6px}"' _n
+    file write `hf' `"details{margin:4px 0}summary.gate{cursor:pointer;font-size:13.5px;color:#002244;padding:8px 10px;background:#fbf7ea;border:1px solid #eadfbe;border-radius:6px;margin-top:14px}"' _n
             file write `hf' `".foot{font-size:11px;color:#777;margin-top:24px;line-height:1.5}"' _n
             file write `hf' `"@media print{body{background:#fff}.case{border:1px solid #bbb;border-left-width:4px}}"' _n
             file write `hf' `"</style></head><body>"' _n
@@ -3616,24 +3695,54 @@ program _suso_para_skips, rclass
             }
             file write `hf' `"</table>"' _n
             quietly use `"`DET2'"', clear
-            file write `hf' `"<h2>Action needed</h2>"' _n
-            local nact 0
-            forvalues i = 1/`=_N' {
-                if tier[`i']=="C" continue
-                local ++nact
-                file write `hf' (h_open[`i']) _n
-                file write `hf' (h_chip[`i']) _n
-                file write `hf' (h_l1[`i']) _n
-                file write `hf' `"<div class="c2" style="font-weight:700;color:#7a5b00">"' (why[`i']) `"</div>"' _n
-                file write `hf' (h_l2[`i']) _n
-                if h_l5[`i']!="" file write `hf' (h_l5[`i']) _n
-                file write `hf' `"</div>"' _n
+            file write `hf' `"<h2>Action needed - grouped by gate question</h2>"' _n
+            quietly count if tier!="C"
+            local nact = r(N)
+            if `nact'>0 {
+                preserve
+                quietly keep if tier!="C"
+                quietly replace trigger = "(unknown gate)" if trigger==""
+                tempvar gw gi ge tgi tge gc2
+                quietly egen long `gw'  = total(nrem), by(trigger)
+                quietly egen byte `tgi' = tag(trigger interview__id)
+                quietly egen long `gi'  = total(`tgi'), by(trigger)
+                quietly egen byte `tge' = tag(trigger h_ac)
+                quietly egen long `ge'  = total(`tge'), by(trigger)
+                quietly egen long `gc2' = count(nrem), by(trigger)
+                gsort -`gw' trigger -nrem interview__id sk_run
+                quietly gen byte __gf = 1
+                quietly replace __gf = trigger != trigger[_n-1] if _n>1
+                local ing 0
+                forvalues i = 1/`=_N' {
+                    if __gf[`i'] {
+                        if `ing' file write `hf' `"</details>"' _n
+                        local ing 1
+                        file write `hf' `"<details open><summary class="gate"><b class="mono">"' (cond(h_tg[`i']!="", h_tg[`i'], "(unknown gate)")) `"</b> &nbsp;-&nbsp; "' (strofreal(`gc2'[`i'])) `" case(s), "' (strofreal(`gw'[`i'])) `" answers erased, in "' (strofreal(`gi'[`i'])) `" interview(s) by "' (strofreal(`ge'[`i'])) `" enumerator(s)</summary>"' _n
+                        if h_l3[`i']!="" file write `hf' (h_l3[`i']) _n
+                        if h_l4[`i']!="" file write `hf' (h_l4[`i']) _n
+                    }
+                    file write `hf' (h_open[`i']) _n
+                    file write `hf' (h_chip[`i']) _n
+                    file write `hf' (h_l1[`i']) _n
+                    file write `hf' `"<div class="c2" style="font-weight:700;color:#7a5b00">"' (why[`i']) `"</div>"' _n
+                    file write `hf' (h_l2[`i']) _n
+                    if h_do[`i']!="" file write `hf' (h_do[`i']) _n
+                    if h_l5[`i']!="" file write `hf' (h_l5[`i']) _n
+                    if h_l6[`i']!="" file write `hf' (h_l6[`i']) _n
+                    file write `hf' `"</div>"' _n
+                }
+                if `ing' file write `hf' `"</details>"' _n
+                restore
             }
-            if `nact'==0 file write `hf' `"<div class="meta">Nothing needs action - every case was auto-cleared as routine.</div>"' _n
+            else file write `hf' `"<div class="meta">Nothing needs action - every case was auto-cleared as routine.</div>"' _n
+            quietly use `"`DET2'"', clear
             file write `hf' `"<h2>Routine cases (auto-cleared)</h2>"' _n
             file write `hf' `"<details><summary style="cursor:pointer;font-size:13px;color:#555;padding:6px 0">Show `nclr' routine case(s) - confirmed corrections, workflow resets and systemic churn</summary>"' _n
-            local kk = min(_N, 200)
-            forvalues i = 1/`kk' {
+            local wr 0
+            forvalues i = 1/`=_N' {
+                if tier[`i']!="C" continue
+                if `wr'>=200 continue
+                local ++wr
                 file write `hf' (h_open[`i']) _n
                 file write `hf' (h_chip[`i']) _n
                 file write `hf' (h_l1[`i']) _n
@@ -3645,7 +3754,7 @@ program _suso_para_skips, rclass
                 file write `hf' `"</div>"' _n
             }
             file write `hf' `"</details>"' _n
-            if _N>`kk' file write `hf' `"<div class="meta">Showing the `kk' largest of `ncasc' cases.</div>"' _n
+            if `nclr'>200 file write `hf' `"<div class="meta">Showing the 200 largest of `nclr' routine case(s).</div>"' _n
             file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.0). Cases are screening signals from the paradata event stream, not proof of misconduct.</div>"' _n
             file write `hf' `"</div></body></html>"' _n
             file close `hf'
@@ -3906,8 +4015,14 @@ program _suso_para_report, rclass
     * Night-work times come from the tablet clock. A tablet whose timezone differs
     * from the team, or changes mid-interview, cannot be trusted for time-of-day.
     quietly use `"`EVD'"', clear
+    * tablet clock = interviewer-side events only; supervisor/HQ web actions carry
+    * the browser or server offset and would fake a "changed mid-interview" signal
+    * on every rejected or approved interview
+    quietly keep if para_ivw
     quietly contract interview__id para_off, freq(__pk)
     quietly drop if missing(para_off)
+    * an offset must back >=5 events to count at all (a stray event is not a clock)
+    quietly drop if __pk<5
     local tzmode 0
     if _N>0 {
         preserve
@@ -3940,7 +4055,7 @@ program _suso_para_report, rclass
     * zero changes means the supervisor's rejection was simply bounced straight back.
     quietly use `"`EVD'"', clear
     sort interview__id para_ord para_seq
-    quietly by interview__id: gen double __ca = sum(para_ans & para_ivw)
+    quietly by interview__id: gen double __ca = sum((para_ans | para_rem) & para_ivw)
     quietly gen double __cts = para_tsu if para_cmp
     quietly gen double __cca = __ca     if para_cmp
     gsort interview__id -para_ord -para_seq
@@ -4414,7 +4529,7 @@ program _suso_para_report, rclass
 
     * ---- embedded data ------------------------------------------------------------
     file write `fh' `"<script>"' _n
-    file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"lite":`lite',"hasve":`hasve',"hascawi":`hascawi',"haskey":`haskey',"fdims":[`jfdims']},"' _n
+    file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"tzmode":`tzmodeh',"lite":`lite',"hasve":`hasve',"hascawi":`hascawi',"haskey":`haskey',"fdims":[`jfdims']},"' _n
     file write `fh' `""rows":["' _n
     quietly use `"`MERGED'"', clear
     quietly keep if started
@@ -4583,14 +4698,18 @@ program _suso_para_report, rclass
     file write `fh' `"    }"' _n
     file write `fh' `"    if(f[3]){"' _n
     file write `fh' `"      var w3=P.f1(100*P.nightShare(row,S.n1,S.n2),0)+'% of answering happened between '+S.n1+':00 and '+S.n2+':00 device time.';"' _n
-    file write `fh' `"      if(row.to===1) w3+=' Caution: this tablet clock disagrees with the team, so its hours are unreliable.';"' _n
+    file write `fh' `"      if(row.to===1) w3+=' Caution: this tablet clock is unreliable (offset differs from the team or changed mid-fieldwork).';"' _n
     file write `fh' `"      out.push({t:'flag', s:w3, cav:(row.to===1)});"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"    if(f[4]) out.push({t:'flag', s:P.f1(100*row.ch,0)+' answers removed per 100 set.'});"' _n
     file write `fh' `"    if(f[5]) out.push({t:'flag', s:'Active time '+P.f1(row.act,1)+' min is far outside the survey-wide pattern.'});"' _n
     file write `fh' `"    if(row.cas>0) out.push({t:'flag', s:'A gate flip erased '+row.wip+' recorded answer(s) - details in the skip sections below.'});"' _n
     file write `fh' `"    if(row.m===1) out.push({t:'info', s:'Web (CAWI) interview - timing signals not applied.'});"' _n
-    file write `fh' `"    if(row.to===1 && !f[3]) out.push({t:'info', s:'Tablet clock offset '+(row.tz===null?'?':P.f1(row.tz,1))+' h differs from the team.'});"' _n
+    file write `fh' `"    if(row.to===1 && !f[3]){"' _n
+    file write `fh' `"      if(row.tz!==null && D.meta.tzmode!==undefined && Math.abs(row.tz-D.meta.tzmode)<0.05)"' _n
+    file write `fh' `"        out.push({t:'info', s:'The tablet clock offset changed during fieldwork on this interview - its hours are unreliable.'});"' _n
+    file write `fh' `"      else out.push({t:'info', s:'Tablet clock offset '+(row.tz===null?'?':P.f1(row.tz,1))+' h differs from the team ('+P.f1(D.meta.tzmode,1)+' h).'});"' _n
+    file write `fh' `"    }"' _n
     file write `fh' `"    if(row.pc>0 && row.rj===0) out.push({t:'info', s:'Edited '+row.pc+' answer(s) after completion without any rejection.'});"' _n
     file write `fh' `"    if(row.ve!==null && row.ve>0) out.push({t:'info', s:row.ve+' validation error(s) still open.'});"' _n
     file write `fh' `"    return out;"' _n
@@ -5644,6 +5763,9 @@ program _suso_para_check, rclass
     file write `hf' `".chip.ok{background:#eaf0f7;color:#002244}.chip.dim{background:#f0f0f0;color:#666}"' _n
     file write `hf' `".chip.warn{background:#fdf6e3;color:#7a5b00}.chip.off{background:#f7f7f7;color:#999}"' _n
     file write `hf' `".mono{font-family:Consolas,monospace}.nodata{color:#888;font-size:12px}"' _n
+    file write `hf' `".legend2{font-size:11.5px;color:#555;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:8px 12px;margin:10px 0;line-height:1.5}"' _n
+    file write `hf' `".verdict{font-size:13px;font-weight:600;border-radius:8px;padding:10px 14px;margin:10px 0;border:1px solid}"' _n
+    file write `hf' `".verdict.ok{background:#eef7f0;border-color:#bfe0c8;color:#1e6b34}.verdict.warn{background:#fdf6e3;border-color:#ecd9a0;color:#7a5b00}.verdict.bad{background:#fbeeee;border-color:#e6c3c3;color:#8a1f1f}"' _n
     file write `hf' `".foot{font-size:11px;color:#777;margin-top:24px;line-height:1.5}"' _n
     file write `hf' `"#l_more{font-size:11.5px;color:#8a6d00}"' _n
     file write `hf' `"</style></head><body>"' _n
@@ -5662,14 +5784,16 @@ program _suso_para_check, rclass
     file write `hf' `"<div class="panel">"' _n
     file write `hf' `"<div class="ctrl"><label>Search variable or text</label><input id="c_q" type="text" placeholder="e.g. a3 or sales"></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Section</label><select id="c_sec"></select></div>"' _n
-    file write `hf' `"<div class="ctrl"><label>Check status</label><select id="c_st"><option value="">All</option><option>evaluated</option><option>always on</option><option>not evaluable</option><option>not in file</option></select></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Check status</label><select id="c_st"><option value="">All</option><option>evaluated</option><option value="always on">always asked</option><option>not evaluable</option><option>not in file</option></select></div>"' _n
     file write `hf' `"<div class="ctrl" id="ctl_ist"><label>Interview status</label><select id="c_ist"></select></div>"' _n
     file write `hf' `"<div class="ctrl" id="ctl_fd"><label>Filter variable</label><select id="c_fd"></select></div>"' _n
     file write `hf' `"<div class="ctrl" id="ctl_fv"><label>= value</label><select id="c_fv"></select></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Min share % (chart)</label><input id="c_minsh" type="number" min="0" max="100" step="1" value="0"></div>"' _n
-    file write `hf' `"<div class="ctrl"><label>Sort questions by</label><select id="c_sort"><option value="sh">worst nonresponse share</option><option value="im">most unanswered</option><option value="vi">most violations</option><option value="bd">most out-of-list</option><option value="v">variable name</option></select></div>"' _n
+    file write `hf' `"<div class="ctrl"><label>Sort questions by</label><select id="c_sort"><option value="hard">hard problems first</option><option value="sh">worst nonresponse share</option><option value="im">most unanswered</option><option value="vi">most violations</option><option value="bd">most out-of-list</option><option value="v">variable name</option></select></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Problems only</label><input id="c_prob" type="checkbox" style="width:20px;height:20px"></div>"' _n
     file write `hf' `"</div>"' _n
+    file write `hf' `"<div class="legend2"><b>Reading the counts:</b> asked = the skip logic says the question applies to the record &nbsp;&middot;&nbsp; viol = answered while the logic says it should be off (hard problem) &nbsp;&middot;&nbsp; unans = applies but no answer was recorded &nbsp;&middot;&nbsp; bad codes = a value outside the option list &nbsp;&middot;&nbsp; undetermined = the enabling condition references an unanswered question</div>"' _n
+    file write `hf' `"<div id="v_chk" class="verdict ok"></div>"' _n
     file write `hf' `"<div class="cards">"' _n
     file write `hf' `"<div class="card"><div class="v" id="k_recs">-</div><div class="k">records in view</div></div>"' _n
     file write `hf' `"<div class="card"><div class="v" id="k_shown">-</div><div class="k">questions in view</div></div>"' _n
@@ -5735,6 +5859,8 @@ program _suso_para_check, rclass
     file write `hf' `"    var idxs=[], i, j;"' _n
     file write `hf' `"    if(sel==='APP'){"' _n
     file write `hf' `"      for(i=0;i<meta.statuses.length;i++) if(meta.statuses[i].c===120||meta.statuses[i].c===130) idxs.push(i);"' _n
+    file write `hf' `"    } else if(sel==='FIELD'){"' _n
+    file write `hf' `"      for(i=0;i<meta.statuses.length;i++) if(meta.statuses[i].c>=65) idxs.push(i);"' _n
     file write `hf' `"    } else idxs.push(parseInt(sel,10));"' _n
     file write `hf' `"    var out=[];"' _n
     file write `hf' `"    for(i=0;i<rows.length;i++){"' _n
@@ -5759,6 +5885,10 @@ program _suso_para_check, rclass
     file write `hf' `"      for(i=0;i<meta.statuses.length;i++) if(meta.statuses[i].c===120||meta.statuses[i].c===130) t+=meta.statuses[i].n||0;"' _n
     file write `hf' `"      return t;"' _n
     file write `hf' `"    }"' _n
+    file write `hf' `"    if(sel==='FIELD'){"' _n
+    file write `hf' `"      for(i=0;i<meta.statuses.length;i++) if(meta.statuses[i].c>=65) t+=meta.statuses[i].n||0;"' _n
+    file write `hf' `"      return t;"' _n
+    file write `hf' `"    }"' _n
     file write `hf' `"    var k=parseInt(sel,10);"' _n
     file write `hf' `"    return meta.statuses[k] ? (meta.statuses[k].n||0) : null;"' _n
     file write `hf' `"  },"' _n
@@ -5780,6 +5910,16 @@ program _suso_para_check, rclass
     file write `hf' `"  srt: function(rows, key){"' _n
     file write `hf' `"    var out=rows.slice();"' _n
     file write `hf' `"    if(key==='v'){ out.sort(function(a,b){ return a.v<b.v?-1:1; }); return out; }"' _n
+    file write `hf' `"    if(key==='hard'){"' _n
+    file write `hf' `"      out.sort(function(a,b){"' _n
+    file write `hf' `"        var ah=(a.vi||0)+(a.bd||0)+(a.vu||0), bh=(b.vi||0)+(b.bd||0)+(b.vu||0);"' _n
+    file write `hf' `"        if(bh!==ah) return bh-ah;"' _n
+    file write `hf' `"        var as2=(a.sh===null||a.sh===undefined)?-1:a.sh, bs2=(b.sh===null||b.sh===undefined)?-1:b.sh;"' _n
+    file write `hf' `"        if(bs2!==as2) return bs2-as2;"' _n
+    file write `hf' `"        return a.v<b.v?-1:1;"' _n
+    file write `hf' `"      });"' _n
+    file write `hf' `"      return out;"' _n
+    file write `hf' `"    }"' _n
     file write `hf' `"    out.sort(function(a,b){"' _n
     file write `hf' `"      var av=a[key], bv=b[key];"' _n
     file write `hf' `"      if(av===null||av===undefined) av=-1;"' _n
@@ -5855,7 +5995,8 @@ program _suso_para_check, rclass
     file write `hf' _n
     file write `hf' `"function chip(st){"' _n
     file write `hf' `"  var cl = st==='evaluated'?'ok':(st==='always on'?'dim':(st==='not evaluable'?'warn':'off'));"' _n
-    file write `hf' `"  return '<span class='+Q+'chip '+cl+Q+'>'+esc(st)+'</span>';"' _n
+    file write `hf' `"  var lab = st==='always on' ? 'always asked' : st;"' _n
+    file write `hf' `"  return '<span class='+Q+'chip '+cl+Q+'>'+esc(lab)+'</span>';"' _n
     file write `hf' `"}"' _n
     file write `hf' _n
     file write `hf' `"function renderList(rows, S){"' _n
@@ -5868,10 +6009,10 @@ program _suso_para_check, rclass
     file write `hf' `"    s+='<details class='+Q+'qrow'+Q+'><summary>'+"' _n
     file write `hf' `"       '<span class='+Q+'mono qv'+Q+'>'+esc(r.v)+'</span>'+chip(r.st)+"' _n
     file write `hf' `"       '<span class='+Q+'qsec'+Q+'>'+esc(r.s||'')+'</span>'+"' _n
-    file write `hf' `"       '<span class='+Q+'qn'+Q+'>on '+fc(r.on)+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'qn'+Q+'>asked '+fc(r.on)+'</span>'+"' _n
     file write `hf' `"       '<span class='+Q+'qn'+Q+(r.vi>0?' style='+Q+'color:#a33;font-weight:700'+Q:'')+'>viol '+fc(r.vi)+'</span>'+"' _n
-    file write `hf' `"       '<span class='+Q+'qn'+Q+'>miss '+fc(r.im)+' '+shb+'</span>'+"' _n
-    file write `hf' `"       '<span class='+Q+'qn'+Q+(r.bd>0?' style='+Q+'color:#7a5b00;font-weight:700'+Q:'')+'>bad '+fc(r.bd)+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'qn'+Q+'>unans '+fc(r.im)+' '+shb+'</span>'+"' _n
+    file write `hf' `"       '<span class='+Q+'qn'+Q+(r.bd>0?' style='+Q+'color:#7a5b00;font-weight:700'+Q:'')+'>bad codes '+fc(r.bd)+'</span>'+"' _n
     file write `hf' `"       '</summary><div class='+Q+'qbody'+Q+'>'+"' _n
     file write `hf' `"       (r.q?('<div class='+Q+'qt'+Q+'>&quot;'+esc(r.q)+'&quot;</div>'):'')+"' _n
     file write `hf' `"       (r.t?('<div class='+Q+'qm'+Q+'>Type: '+esc(r.t)+'</div>'):'')+"' _n
@@ -5912,6 +6053,17 @@ program _suso_para_check, rclass
     file write `hf' `"  el('k_viol').textContent=fc(K.vi);"' _n
     file write `hf' `"  el('k_bad').textContent=fc(K.bd);"' _n
     file write `hf' `"  el('k_vund').textContent=fc(K.vu);"' _n
+    file write `hf' `"  var hard=(K.vi||0)+(K.bd||0)+(K.vu||0), vtx, vcl;"' _n
+    file write `hf' `"  var scope = S.ist==='FIELD' ? 'records with fieldwork done' : (S.ist==='' ? 'ALL records including not-yet-started ones' : 'the selected status');"' _n
+    file write `hf' `"  if(hard>0){"' _n
+    file write `hf' `"    vtx='Hard problems: '+fc(K.vi)+' answer(s) on disabled questions, '+fc(K.bd)+' out-of-list value(s), '+fc(K.vu)+' undetermined-with-answer, across '+fc(K.n)+' question(s) in view. Item nonresponse: '+fc(K.im)+' unanswered enabled cell(s). Scope: '+scope+'.';"' _n
+    file write `hf' `"    vcl='bad';"' _n
+    file write `hf' `"  } else {"' _n
+    file write `hf' `"    vtx='No hard problems in this view. The workload is item nonresponse: '+fc(K.im)+' unanswered enabled cell(s) across '+fc(K.n)+' question(s). Scope: '+scope+'.';"' _n
+    file write `hf' `"    vcl=(K.im>0)?'warn':'ok';"' _n
+    file write `hf' `"  }"' _n
+    file write `hf' `"  el('v_chk').textContent=vtx;"' _n
+    file write `hf' `"  el('v_chk').className='verdict '+vcl;"' _n
     file write `hf' `"  hbars('ch_imiss', C.topBy(rows,'im',10,S.minsh,15), 'im');"' _n
     file write `hf' `"  var tv=C.topBy(rows,'vi',0,0,15);"' _n
     file write `hf' `"  el('sec_viol').style.display = tv.length ? '' : 'none';"' _n
@@ -5930,10 +6082,13 @@ program _suso_para_check, rclass
     file write `hf' `"  var sts=(D.meta&&D.meta.statuses)?D.meta.statuses:[];"' _n
     file write `hf' `"  if(sts.length){"' _n
     file write `hf' `"    var hasApp=false, o='<option value='+Q+Q+'>All statuses</option>';"' _n
-    file write `hf' `"    for(i=0;i<sts.length;i++) if(sts[i].c===120||sts[i].c===130) hasApp=true;"' _n
+    file write `hf' `"    var hasField=false;"' _n
+    file write `hf' `"    for(i=0;i<sts.length;i++){ if(sts[i].c===120||sts[i].c===130) hasApp=true; if(sts[i].c>=65) hasField=true; }"' _n
+    file write `hf' `"    if(hasField) o+='<option value='+Q+'FIELD'+Q+'>Fieldwork done (completed + rejected + approved)</option>';"' _n
     file write `hf' `"    if(hasApp) o+='<option value='+Q+'APP'+Q+'>Approved only (Sup + HQ)</option>';"' _n
     file write `hf' `"    for(i=0;i<sts.length;i++) o+='<option value='+Q+i+Q+'>'+esc(sts[i].l||String(sts[i].c))+' ('+fc(sts[i].n)+')</option>';"' _n
     file write `hf' `"    el('c_ist').innerHTML=o;"' _n
+    file write `hf' `"    if(hasField) el('c_ist').value='FIELD';"' _n
     file write `hf' `"  } else {"' _n
     file write `hf' `"    el('ctl_ist').style.display='none';"' _n
     file write `hf' `"  }"' _n

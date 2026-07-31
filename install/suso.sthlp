@@ -265,7 +265,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch) with drill-down and CSV export, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
 {synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report), Skip violations (supervisor review), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option{p_end}
-{synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values; {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130); an {it:if} qualifier restricts it by any expression ({cmd:check if lf_responsive==1, ...}); {opt filters(varlist)} adds live Filter variable {c 45} value dropdowns to the dashboard for the named numeric variables (up to 20 distinct values each, 40 in total){p_end}
+{synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values; {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130); the dashboard itself defaults its interview-status scope to {bf:fieldwork done} (completed + rejected + approved) so preloaded records that never became interviews do not inflate item nonresponse, and shows a live verdict strip plus a plain-language legend (asked / viol / unans / bad codes); an {it:if} qualifier restricts it by any expression ({cmd:check if lf_responsive==1, ...}); {opt filters(varlist)} adds live Filter variable {c 45} value dropdowns to the dashboard for the named numeric variables (up to 20 distinct values each, 40 in total){p_end}
 {synoptline}
 
 {pstd}{bf:maps} {it:(uploads/deletes via the GraphQL endpoint; see {help suso##maps:Maps})}{p_end}
@@ -476,6 +476,12 @@ started interviews) the per-interview hour/gap detail is omitted and the
 night-window and fast-seconds controls fall back to build-time values.
 
 {pstd}
+{cmd:skips} ends with a supervisor action list, and its shareable review page
+({opt html()}) groups the action cases by gate question (with per-gate totals:
+cases, answers erased, interviews, enumerators), shows the gate{c 39}s old {c 45}{c 62} new
+values recovered from the answer history, the interview key for Headquarters,
+and a per-case decision line; when a chained flip erased the gate itself, the
+card says so instead of listing the gate among its own casualties.
 {cmd:skips} ends with a supervisor action list: one message per violation stating
 the interview, the enumerator, when it happened, which gate variable was changed
 (and to what value), how many later answers the skip logic erased, and what to do
@@ -649,4 +655,4 @@ Survey Solutions product.
 {pstd}
 Online: {browse "https://docs.mysurvey.solutions/headquarters/api/api-r-package/":Survey Solutions API documentation}{p_end}
 {pstd}
-Help:  {helpb survEye}, {helpb javacall}, {helpb import}, {helpb shell}{p_end}
+Help:  {helpb javacall}, {helpb import}, {helpb shell}{p_end}
