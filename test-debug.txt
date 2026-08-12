@@ -1,0 +1,4 @@
+  File "tests/test_paradata_skip_integrity.py", line 106
+    assert '"wip":`=casc_questions[`i']'' in TEXT
+                                      ^
+SyntaxError: unmatched ']'
