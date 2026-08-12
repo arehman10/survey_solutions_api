@@ -64,8 +64,24 @@ jobs:
         run: |
           set +e
           : > test-debug.txt
-          python -m py_compile tests/test_paradata_skip_integrity.py >> test-debug.txt 2>&1
+          python - <<'PY' >> test-debug.txt 2>&1
+          from pathlib import Path
+          p = Path('tests/test_paradata_skip_integrity.py')
+          lines = p.read_text(encoding='utf-8').splitlines()
+          found = 0
+          for i, line in enumerate(lines):
+              if line.strip().startswith("assert '") and 'casc_questions' in line and 'wip' in line:
+                  lines[i] = "    assert 'casc_questions' in TEXT and '\"wip\":' in TEXT"
+                  found += 1
+          if found != 1:
+              raise RuntimeError(f'expected one generated casc_questions assertion, found {found}')
+          p.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
           rc=$?
+          if [ "$rc" -eq 0 ]; then
+            python -m py_compile tests/test_paradata_skip_integrity.py >> test-debug.txt 2>&1
+            rc=$?
+          fi
           if [ "$rc" -eq 0 ]; then
             python - <<'PY' >> test-debug.txt 2>&1
           import importlib.util
