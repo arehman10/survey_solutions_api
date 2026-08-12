@@ -1,0 +1,53 @@
+name: Debug paradata patch
+
+on:
+  push:
+    branches:
+      - fix/paradata-final-state
+
+permissions:
+  contents: write
+
+jobs:
+  debug:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/paradata-final-state
+          fetch-depth: 0
+
+      - name: Extract and run patch with diagnostics
+        shell: bash
+        run: |
+          set +e
+          awk '
+            /PATCH_GZ_B64: \|/ { capture=1; next }
+            capture && /^        run: \|/ { exit }
+            capture { sub(/^            /, ""); printf "%s", $0 }
+          ' .github/workflows/apply-paradata-final-state.yml \
+            | base64 --decode \
+            | gzip --decompress > /tmp/patch_paradata_final_state.py 2>patch-debug.txt
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            python -m py_compile /tmp/patch_paradata_final_state.py >>patch-debug.txt 2>&1
+            rc=$?
+          fi
+          if [ "$rc" -eq 0 ]; then
+            python /tmp/patch_paradata_final_state.py >>patch-debug.txt 2>&1
+            rc=$?
+          fi
+          echo "exit_code=$rc" >> patch-debug.txt
+          cat patch-debug.txt
+          if [ "$rc" -eq 0 ]; then
+            echo "Patch unexpectedly succeeded in the diagnostic job."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add patch-debug.txt
+          git commit -m 'Capture paradata patch diagnostics'
+          git push origin HEAD:fix/paradata-final-state
