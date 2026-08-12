@@ -1,5 +1,0 @@
-
-gzip: stdin: invalid compressed data--crc error
-
-gzip: stdin: invalid compressed data--length error
-exit_code=1
