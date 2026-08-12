@@ -1,3 +1,0 @@
-
-gzip: stdin: unexpected end of file
-exit_code=1
