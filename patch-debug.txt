@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/tmp/patch_paradata_final_state.py", line 397, in <module>
+    raise RuntimeError(f'unsafe current-state assertion remains: {forbidden!r}')
+RuntimeError: unsafe current-state assertion remains: 'the skip logic erased them'
+exit_code=1
