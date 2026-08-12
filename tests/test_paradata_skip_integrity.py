@@ -91,3 +91,21 @@ def test_filtering_after_detection_cannot_create_adjacency():
 
 def test_install_copy_matches_root():
     assert (ROOT / "install" / "suso.ado").read_bytes() == ADO
+
+
+def test_run_propagation_does_not_depend_on_first_physical_row():
+    assert "egen byte `runiscasc' = max(sk_casc1)" in TEXT
+    assert "sk_casc1[1]" not in TEXT
+    assert "sk_useprev" in TEXT
+
+
+def test_backward_compatible_event_counts_are_preserved():
+    assert "casc_removed=sk_casc" in TEXT
+    assert "casc_questions=sk_qtag" in TEXT
+    assert "return scalar naffectedquestions" in TEXT
+    assert 'casc_questions' in TEXT and '"wip":' in TEXT
+
+
+def test_affected_list_uses_distinct_question_threshold():
+    assert 'if wl!="" & nqrem>8' in TEXT
+    assert 'cond(nqrem>8, " ... and " + strofreal(nqrem-8)' in TEXT

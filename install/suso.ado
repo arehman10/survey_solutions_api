@@ -1,4 +1,4 @@
-*! suso v1.7.1 build 2026-07-02-SCRUB  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.1 build 2026-08-12-SKIPFIX  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -213,7 +213,7 @@ end
 
 program _suso_about
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.1 (build 2026-07-02-SCRUB)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.1 (build 2026-08-12-SKIPFIX)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -3176,11 +3176,15 @@ program _suso_para_skips, rclass
         & inrange(`dtnext', 0, `window'*1000) & `rspan'<=`window'*1000 & sk_nextvar!=""
     quietly gen byte sk_prevnear = `prevnear'
     quietly gen byte sk_nextnear = `nextnear'
+    quietly gen byte sk_useprev = sk_prevnear & (!sk_nextnear | (`dtprev'<=`dtnext'))
     quietly gen byte sk_casc1 = sk_prevnear | sk_nextnear
-    quietly by interview__id sk_run para_rem: gen byte sk_casc = (sk_casc1[1]==1) if para_rem
-    quietly replace sk_casc = 0 if missing(sk_casc)
-    quietly gen sk_trig = cond(sk_prevnear, sk_lastvar, sk_nextvar) if sk_casc1
-    quietly by interview__id sk_run para_rem: replace sk_trig = sk_trig[1] if sk_casc & para_rem
+    tempvar runiscasc
+    quietly egen byte `runiscasc' = max(sk_casc1), by(interview__id sk_run)
+    quietly gen byte sk_casc = para_rem & `runiscasc'
+    quietly gen sk_trig = cond(sk_useprev, sk_lastvar, sk_nextvar) if sk_casc1
+    quietly bysort interview__id sk_run (para_ord para_seq): ///
+        replace sk_trig = sk_trig[_n-1] if sk_trig=="" & _n>1
+    quietly replace sk_trig = "" if !sk_casc
 
     * Apply vars() only AFTER a run exists. Keep a run when either its candidate
     * trigger or at least one affected question matches the requested patterns.
@@ -3218,9 +3222,10 @@ program _suso_para_skips, rclass
     quietly count if sk_casc1
     local ncasc = r(N)
     quietly count if sk_casc
-    local nremevents = r(N)
+    local nwiped = r(N)                 // backward-compatible: removal-event count
+    local nremevents = `nwiped'
     quietly count if sk_qtag
-    local nwiped = r(N)
+    local naffectedqall = r(N)          // distinct question-within-run cases
     quietly count if sk_reanswered
     local nreansweredall = r(N)
     quietly count if sk_open
@@ -3235,7 +3240,7 @@ program _suso_para_skips, rclass
         local hasdet 1
         preserve
         quietly keep if sk_casc
-        quietly gen sk_val = cond(sk_prevnear, sk_lastval, sk_nextval)
+        quietly gen sk_val = cond(sk_useprev, sk_lastval, sk_nextval)
         sort interview__id sk_run para_ord para_seq
         quietly by interview__id sk_run: gen long sk_k = _n
         quietly gen strL sk_wl = ""
@@ -3292,9 +3297,9 @@ program _suso_para_skips, rclass
     * ---- stage 1: collapse to (interview x trigger) — everything below is small,
     *      so the multi-million-row events are copied/sorted exactly once ----
     collapse (sum) n_answers=para_ans n_removed=para_rem n_cascades=sk_casc1     ///
-        casc_removed=sk_qtag casc_open=sk_open casc_reanswered=sk_reanswered     ///
-        casc_unknown=sk_unknown (first) responsible=sk_resp,                    ///
-        by(interview__id sk_trig) fast
+        casc_removed=sk_casc casc_questions=sk_qtag casc_open=sk_open            ///
+        casc_reanswered=sk_reanswered casc_unknown=sk_unknown                    ///
+        (first) responsible=sk_resp, by(interview__id sk_trig) fast
     tempfile sk1
     quietly save `"`sk1'"'
 
@@ -3312,8 +3317,8 @@ program _suso_para_skips, rclass
         tempname SKT
         matrix `SKT' = J(`k', 3, 0)
         local trigret ""
-        di as txt "  trigger variables wiping the most answers (top `k'):"
-        di as txt "  {ul:variable                }  {ul:flips}  {ul:interviews}  {ul:answers wiped}"
+        di as txt "  candidate gate variables associated with the most removal events (top `k'):"
+        di as txt "  {ul:variable                }  {ul:flips}  {ul:interviews}  {ul:removal events}"
         forvalues i = 1/`k' {
             local vv : di %-24s abbrev(sk_trig[`i'],24)
             local nf : di %5.0f n_flips[`i']
@@ -3332,8 +3337,8 @@ program _suso_para_skips, rclass
 
     * ---- stage 2: one row per interview ----
     quietly gen byte sk_tg = (sk_trig!="")
-    collapse (sum) n_answers n_removed n_cascades casc_removed casc_open          ///
-        casc_reanswered casc_unknown n_triggers=sk_tg                              ///
+    collapse (sum) n_answers n_removed n_cascades casc_removed casc_questions    ///
+        casc_open casc_reanswered casc_unknown n_triggers=sk_tg                    ///
         (first) responsible, by(interview__id) fast
     quietly gen double wipe_share = casc_removed/max(n_answers,1)
     label variable interview__id "interview id"
@@ -3341,7 +3346,8 @@ program _suso_para_skips, rclass
     label variable n_answers     "AnswerSet events"
     label variable n_removed     "AnswerRemoved events (all)"
     label variable n_cascades    "skip cascades (gate flips)"
-    label variable casc_removed    "distinct questions affected by removal runs"
+    label variable casc_removed    "AnswerRemoved events in detected cascades"
+    label variable casc_questions  "distinct question-within-run cases affected"
     label variable casc_open       "affected questions whose final event is AnswerRemoved"
     label variable casc_reanswered "affected questions re-answered later"
     label variable casc_unknown    "affected questions with unknown final state"
@@ -3354,16 +3360,17 @@ program _suso_para_skips, rclass
     quietly count if n_cascades>0
     local naff = r(N)
     local nints = _N
-    di as txt "  cascades " as res "`ncasc'" as txt "  |  questions affected historically " as res "`nwiped'" ///
-        as txt "  |  re-answered later " as res "`nreansweredall'" as txt "  |  still removed " as res "`nopenall'" ///
+    di as txt "  cascades " as res "`ncasc'" as txt "  |  question-run cases affected " as res "`naffectedqall'" ///
+        as txt "  |  removal events " as res "`nwiped'" as txt "  |  re-answered later " as res "`nreansweredall'" ///
+        as txt "  |  still removed " as res "`nopenall'" ///
         as txt "  |  interviews affected " as res "`naff'" as txt " of " as res "`nints'"
 
     * ---- top interviews ----
     if `naff'>0 {
         gsort -casc_removed -n_cascades interview__id
         local k = min(`top', `naff')
-        di as txt _n "  interviews wiping the most answers (top `k'):"
-        di as txt "  {ul:interview}  {ul:interviewer }  {ul:cascades}  {ul:wiped}  {ul:gates}  {ul:wiped/set}"
+        di as txt _n "  interviews with the largest historical removal runs (top `k'):"
+        di as txt "  {ul:interview}  {ul:interviewer }  {ul:cascades}  {ul:removal events}  {ul:gates}  {ul:removed/set}"
         forvalues i = 1/`k' {
             local id8 = substr(interview__id[`i'],1,8)
             local rsp : di %-12s abbrev(responsible[`i'],12)
@@ -3388,7 +3395,7 @@ program _suso_para_skips, rclass
             gsort -casc_share -wiped responsible
             local k = min(10, _N)
             di as txt _n "  interviewers, by share of interviews with a cascade (top `k'):"
-            di as txt "  {ul:interviewer     }  {ul:ints}  {ul:w/ cascade}  {ul:share}  {ul:flips}  {ul:wiped}"
+            di as txt "  {ul:interviewer     }  {ul:ints}  {ul:w/ cascade}  {ul:share}  {ul:flips}  {ul:removal events}"
             forvalues i = 1/`k' {
                 local rsp : di %-16s abbrev(responsible[`i'],16)
                 local ni : di %4.0f n_ints[`i']
@@ -3539,11 +3546,11 @@ program _suso_para_skips, rclass
         }
         quietly gen strL m_w = ""
         quietly replace m_w = "HISTORICALLY AFFECTED QUESTIONS: " + substr(wl,1,300) if wl!=""
-        quietly replace m_w = m_w + " ... and " + strofreal(nqrem-8) + " more" if wl!="" & nrem>8
+        quietly replace m_w = m_w + " ... and " + strofreal(nqrem-8) + " more" if wl!="" & nqrem>8
         quietly gen strL m_c = ""
         if `hasqxt' {
             quietly replace m_c = "GATE CONFIRMED: the affected questions depend on [" + trigger + "] in the questionnaire skip logic." if conf>0
-            quietly replace m_c = "NOTE: the erased items carry no skip conditions (service/review fields) - this is a review/approval workflow reset, not enumerator skip abuse. No action needed with the enumerator." if conf==0 & allsvc==1
+            quietly replace m_c = "NOTE: the affected items carry no skip conditions (service/review fields) - this is a review/approval workflow reset, not enumerator skip abuse. No action needed with the enumerator." if conf==0 & allsvc==1
             quietly replace m_c = "CAUTION: timing points to [" + trigger + "] but none of the affected questions depends on it - verify in the interview history before raising this with the enumerator." if conf==0 & allsvc==0
         }
         quietly gen strL m_a = "ACTION: review the interview history and the final export. "
@@ -3584,7 +3591,7 @@ program _suso_para_skips, rclass
         di as txt "  {hline 70}"
         foreach rr of local invresps {
             local nids : word count `inv_ids_`rr''
-            di as res "  INVESTIGATE  `rr'" as txt ": `nids' interview(s) heavily restructured, `inv_w_`rr'' answers erased."
+            di as res "  INVESTIGATE  `rr'" as txt ": `nids' interview(s) heavily restructured, `inv_w_`rr'' questions affected."
             di as txt "               ids:`inv_ids_`rr''"
             di as txt "               do: open each in Headquarters — if no rejection immediately before the erasures, escalate."
         }
@@ -3615,7 +3622,7 @@ program _suso_para_skips, rclass
         }
         if `mh' {
             file write `mf' _n "----------------------------------------------------------------------" _n
-            file write `mf' "General note: occasional cases are honest corrections. The pattern to challenge is the same gate variable erased across many interviews, or one enumerator producing many cases." _n
+            file write `mf' "General note: occasional cases are honest corrections. The pattern to challenge is the the same candidate gate recurring across many interviews, or one enumerator producing many cases." _n
             file close `mf'
             di as txt _n "  vendor/supervisor message file written: " as res `"`messages'"'
         }
@@ -3716,7 +3723,7 @@ program _suso_para_skips, rclass
             quietly replace h_l4 = "<div class=" + char(34) + "meta" + char(34) + ">" + h_l4 + "</div>" if h_l4!=""
             quietly gen strL h_l5 = ""
             quietly replace h_l5 = "<div class=" + char(34) + "meta" + char(34) + ">Historically affected: <span class=" + char(34) + "mono" + char(34) + ">" + h_wl ///
-                + cond(nrem>8, " ... and " + strofreal(nqrem-8) + " more", "") + "</span>" ///
+                + cond(nqrem>8, " ... and " + strofreal(nqrem-8) + " more", "") + "</span>" ///
                 + cond(selferased==1, " <span style=" + char(34) + "color:#7a5b00" + char(34) + ">(the gate itself was erased again by a follow-on flip - the value shown may not be final; check the history)</span>", "") ///
                 + "</div>" if h_wl!=""
             quietly gen strL h_do = "<div class=" + char(34) + "meta do" + char(34) + ">Review the history and final export. "
@@ -3725,7 +3732,7 @@ program _suso_para_skips, rclass
             quietly gen strL h_l6 = ""
             if `hasqxt' {
                 quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#1e6b34;font-weight:600" + char(34) + ">Gate confirmed: the affected questions depend on this variable.</div>" if conf>0
-                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#666" + char(34) + ">Review/approval workflow reset (erased items carry no skip conditions) - not enumerator skip abuse.</div>" if conf==0 & allsvc==1
+                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#666" + char(34) + ">Review/approval workflow reset (affected items carry no skip conditions) - not enumerator skip abuse.</div>" if conf==0 & allsvc==1
                 quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#7a5b00;font-weight:600" + char(34) + ">Unconfirmed (timing only) - none of the affected questions depends on this variable; verify in the interview history first.</div>" if conf==0 & allsvc==0
             }
             local now = trim("`c(current_date)' `c(current_time)'")
@@ -3765,7 +3772,7 @@ program _suso_para_skips, rclass
             file write `hf' `"<div class="wrap">"' _n
             file write `hf' `"<div class="cards">"' _n
             file write `hf' `"<div class="card"><div class="v">`ncasc'</div><div class="k">cases</div></div>"' _n
-            file write `hf' `"<div class="card"><div class="v">`nwiped'</div><div class="k">questions affected historically</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v">`naffectedqall'</div><div class="k">question-run cases affected</div></div>"' _n
             file write `hf' `"<div class="card"><div class="v">`nopenall'</div><div class="k">still removed at final event</div></div>"' _n
             file write `hf' `"<div class="card"><div class="v">`nreansweredall'</div><div class="k">re-answered later</div></div>"' _n
             file write `hf' `"</div>"' _n
@@ -3773,7 +3780,7 @@ program _suso_para_skips, rclass
             quietly save `"`DET2'"'
             quietly use `"`GSUM'"', clear
             file write `hf' `"<h2>Gate questions flipped most</h2>"' _n
-            file write `hf' `"<table><tr><th>variable</th><th class="r">cases</th><th class="r">questions affected</th></tr>"' _n
+            file write `hf' `"<table><tr><th>variable</th><th class="r">cases</th><th class="r">removal events</th></tr>"' _n
             forvalues i = 1/`=_N' {
                 file write `hf' `"<tr><td class="mono">"' (trigger[`i']) `"</td><td class="r">"' (strofreal(flips[`i'])) `"</td><td class="r">"' (strofreal(wiped[`i'])) `"</td></tr>"' _n
             }
@@ -3861,6 +3868,7 @@ program _suso_para_skips, rclass
     return scalar ncascades = `ncasc'
     return scalar nwiped       = `nwiped'
     return scalar nremovalevents = `nremevents'
+    return scalar naffectedquestions = `naffectedqall'
     return scalar nreanswered  = `nreansweredall'
     return scalar nopen        = `nopenall'
     return scalar nunknown     = `nunknownall'
@@ -4315,13 +4323,14 @@ program _suso_para_report, rclass
         detail(`"`RSD'"') vars(`"`vars'"')
     local ncasc = r(ncascades)
     local nwiped = r(nwiped)
+    local naffectedq = r(naffectedquestions)
     local nopen = r(nopen)
     local nreanswered = r(nreanswered)
     local nunknown = r(nunknown)
     local trignames `"`r(triggers)'"'
     tempname RT
     capture matrix `RT' = r(triggers_stats)
-    quietly keep interview__id n_cascades casc_removed casc_open casc_reanswered casc_unknown n_triggers
+    quietly keep interview__id n_cascades casc_removed casc_questions casc_open casc_reanswered casc_unknown n_triggers
     quietly save `"`SK'"'
 
     * ---- timing + flags (defaults; live thresholds are client-side) ---------------
@@ -4329,7 +4338,7 @@ program _suso_para_report, rclass
     quietly _suso_para_timing , by(interview) gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
     quietly _suso_para_flags
     quietly merge 1:1 interview__id using `"`SK'"', nogenerate
-    foreach v in n_cascades casc_removed casc_open casc_reanswered casc_unknown n_triggers {
+    foreach v in n_cascades casc_removed casc_questions casc_open casc_reanswered casc_unknown n_triggers {
         quietly replace `v' = 0 if missing(`v')
     }
     if !`lite' {
@@ -4479,7 +4488,7 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="card"><div class="v">`ncompletedc'</div><div class="k">completed</div></div>"' _n
     file write `fh' `"<div class="card dim"><div class="v">`nuntouchedc'</div><div class="k">never started (preload only)</div></div>"' _n
     file write `fh' `"<div class="card"><div class="v">`tothrc'</div><div class="k">interviewer hours</div></div>"' _n
-    file write `fh' `"<div class="card `warnc'"><div class="v">`ncasc'</div><div class="k">skip cascades (`nwiped' affected; `nopen' still removed)</div></div>"' _n
+    file write `fh' `"<div class="card `warnc'"><div class="v">`ncasc'</div><div class="k">skip cascades (`naffectedq' affected; `nopen' still removed)</div></div>"' _n
     file write `fh' `"</div>"' _n
     file write `fh' `"<div class="panel">"' _n
     file write `fh' `"<div class="prow">"' _n
@@ -4543,7 +4552,7 @@ program _suso_para_report, rclass
     if `ncasc'>0 & `"`trignames'"'!="" {
         file write `fh' `"<h2>Candidate gate variables near removal runs</h2>"' _n
         file write `fh' `"<div class="note">A cascade is `cascade'+ consecutive answer removals within `window' seconds of an answer (a gate/filter flip). These are historical removal runs. Affected questions may be re-answered later; repeated patterns still warrant review. These are computed at build time.</div>"' _n
-        file write `fh' `"<section><table><tr><th>variable</th><th class="r">flips</th><th class="r">interviews</th><th class="r">questions affected</th></tr>"' _n
+        file write `fh' `"<section><table><tr><th>variable</th><th class="r">flips</th><th class="r">interviews</th><th class="r">removal events</th></tr>"' _n
         local i = 0
         foreach t of local trignames {
             local ++i
@@ -4657,7 +4666,7 @@ program _suso_para_report, rclass
         }
         if `"`fjm'"'!="" local fjm `","f":{`fjm'}"'
         local sep = cond(`i'==1, "", ",")
-        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","k":"`kj'","r":"`rj'","ws":"`=ws[`i']'"`fjm',"d0":"`=__d0[`i']'","m":`=iscawi[`i']',"nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']',"cop":`=casc_open[`i']',"cr":`=casc_reanswered[`i']',"cu":`=casc_unknown[`i']',"fr":`=fr[`i']'"'
+        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","k":"`kj'","r":"`rj'","ws":"`=ws[`i']'"`fjm',"d0":"`=__d0[`i']'","m":`=iscawi[`i']',"nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"rem":`=casc_removed[`i']',"wip":`=casc_questions[`i']',"cop":`=casc_open[`i']',"cr":`=casc_reanswered[`i']',"cu":`=casc_unknown[`i']',"fr":`=fr[`i']'"'
         file write `fh' `","rt":`rtj',"ov":`=ovm[`i']',"rj":`=n_rejected[`i']',"rb":`rbj',"re":`rej',"pc":`=pce[`i']',"ve":`vej',"nq":`nqj',"ss":`=sessions[`i']',"rs":`=n_restarted[`i']',"tz":`=cond(missing(tzh[`i']),"null",string(tzh[`i'],"%12.1f"))',"to":`=tzodd[`i']'`vecs'}"' _n
     }
     file write `fh' `"],"' _n

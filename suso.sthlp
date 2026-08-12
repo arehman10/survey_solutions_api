@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.5.0  17jun2026}{...}
+{* *! version 1.7.1  12aug2026}{...}
 {viewerdialog suso "dialog suso"}{...}
 {vieweralsosee "[D] import" "help import"}{...}
 {vieweralsosee "" "--"}{...}
@@ -261,7 +261,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:load} {opt file()}}load a previously downloaded paradata {cmd:.zip}/{cmd:.tab} offline ({opt unzipw()}){p_end}
 {synopt :{cmd:timing}}collapse events to one row per {opt by(interview)} (default), {opt by(question)} or {opt by(interviewer)} ({opt gapmins()} {opt fastsecs()} {opt allroles}){p_end}
 {synopt :{cmd:flags}}per-interview red flags + interviewer league table ({opt minactive()} {opt burstshare()} {opt nightshare()} {opt churn()} {opt zcut()} {opt top()} {opt saving()}){p_end}
-{synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions, {opt messages(file.txt)} writes an email-ready action list, and {opt html(file.html)} writes a shareable, printable Skip Violation Review page for the vendor/field supervisor{p_end}
+{synopt :{cmd:skips}}historical answer-removal runs near candidate gate changes ({opt cascade()} {opt window()} {opt top()} {opt saving()} {opt vars()}); {opt qx(file.html)} adjudicates candidate gates, {opt messages(file.txt)} writes an email-ready review list, and {opt html(file.html)} writes a shareable, printable review page{p_end}
 {synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch) with drill-down and CSV export, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
 {synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report), Skip violations (supervisor review), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option{p_end}
@@ -422,21 +422,28 @@ league table, and leaves one row per interview in memory ({cmd:f_*} dummies plus
 dashboard; {opt saving()} writes it directly.
 
 {pstd}
-{cmd:skips} answers the skip-check question the way paradata can. The Survey
-Solutions engine enforces enablement at capture time, so a disabled question
-can never carry an answer; the abuse that {bf:does} happen is the {bf:gate flip}:
-the interviewer changes a filter/gate answer and the engine cascades
-{cmd:AnswerRemoved} through the section it disables {hline 1} sometimes a
-legitimate correction, sometimes workload avoidance or fabrication cleanup.
-{cmd:skips} detects every run of {opt cascade(3)} or more consecutive
-{cmd:AnswerRemoved} events that starts within {opt window(60)} seconds of an
-{cmd:AnswerSet} (the trigger), names the trigger variable, and reports: the gate
-variables wiping the most answers survey-wide, the worst interviews, and an
-interviewer league table by cascade rate. It leaves one row per interview
-({cmd:n_cascades}, {cmd:casc_removed}, {cmd:n_triggers}, {cmd:wipe_share}) that
-merges 1:1 on {cmd:interview__id} with the {cmd:flags} table. For enabled-but-
-unanswered counts (item nonresponse), {cmd:suso interview stats , id()} returns
-the server's own {cmd:NotAnsweredCount} per interview.
+{cmd:skips} detects historical runs of {opt cascade(3)} or more consecutive
+{cmd:AnswerRemoved} events in the untouched paradata stream. A run must be compact
+and lie within {opt window(60)} seconds of a candidate {cmd:AnswerSet} immediately
+before or after it. With {opt qx()}, questionnaire enabling conditions are used to
+confirm or reattribute the candidate gate; without that evidence the relationship
+is reported as timing-only, never as proven causation. Raw removal events are not
+assumed to describe the current interview: for every affected question the command
+checks its last paradata event and separates questions re-answered later, questions
+still ending in {cmd:AnswerRemoved}, and unknown final states. Rejection is advised
+only after the final export confirms that a question is actually blank and the
+final questionnaire logic says it should be asked.
+
+{pstd}
+{opt vars()} is applied only after runs have been constructed on the full event
+stream. It filters which completed runs are reported; it never drops intervening
+events before adjacency is evaluated. The output keeps backward-compatible
+{cmd:casc_removed} and {cmd:r(nwiped)} as removal-event counts and adds
+{cmd:casc_questions}, {cmd:casc_open}, {cmd:casc_reanswered},
+{cmd:casc_unknown}, and {cmd:r(naffectedquestions)} for final-state-aware review.
+The one-row-per-interview result merges 1:1 on {cmd:interview__id} with the
+{cmd:flags} table. For enabled-but-unanswered counts, use the final-data
+{cmd:check} audit or {cmd:suso interview stats , id()}.
 
 {pstd}
 {cmd:report} is the recommended first look: run it straight after {cmd:get}/{cmd:load}
@@ -464,7 +471,7 @@ night flag. Sensitivity presets (Standard / Lenient / Strict) sit above the full
 threshold panel. The page also keeps the KPI cards, flag counts, duration and
 answer-speed histograms, answers by hour, fieldwork volume, the enumerator league
 table (now with a vs-team speed ratio and overlap minutes), question timing, and
-the gate variables wiping answers. Records with no interviewer activity
+candidate gates associated with historical removal runs. Records with no interviewer activity
 (API-preloaded grid points) are counted separately and excluded from all figures.
 It manages the event data internally and leaves the combined per-record QC table
 {hline 1} timing metrics, {cmd:f_*} flags at the defaults, cascade counts, the new
@@ -476,29 +483,17 @@ started interviews) the per-interview hour/gap detail is omitted and the
 night-window and fast-seconds controls fall back to build-time values.
 
 {pstd}
-{cmd:skips} ends with a supervisor action list, and its shareable review page
-({opt html()}) groups the action cases by gate question (with per-gate totals:
-cases, answers erased, interviews, enumerators), shows the gate{c 39}s old {c 45}{c 62} new
-values recovered from the answer history, the interview key for Headquarters,
-and a per-case decision line; when a chained flip erased the gate itself, the
-card says so instead of listing the gate among its own casualties.
-{cmd:skips} ends with a supervisor action list: one message per violation stating
-the interview, the enumerator, when it happened, which gate variable was changed
-(and to what value), how many later answers the skip logic erased, and what to do
-about it. Point {opt qx()} at the questionnaire HTML that Survey Solutions includes
-with every data export and each message also carries the question wording, its
-section, and its own enabling condition; {opt messages()} writes the list to a plain
-text file ready to paste into an email to the vendor. {cmd:report , qx()} shows the
-same action list in the interactive report. {cmd:qx} on its own loads the parsed
-questionnaire as a dataset for browsing. {cmd:check} closes the loop on the data
-side: it translates the questionnaire{c 39}s C# enabling conditions to Stata (the
-common patterns; untranslatable ones are listed, never guessed), normalises the
-Survey Solutions missing sentinels, and audits the exported main file record by
-record. Conditions whose numeric referents are themselves unanswered are scored
-undetermined and excluded from both counts, matching C# null semantics rather
-than Stata{c 39}s missing-is-infinity rule. skips watches the paradata stream for
-mid-interview gate flips; check audits the final exported state that analysts
-actually receive.
+The supervisor action list and {opt html()} review page group historical removal
+runs by candidate gate, show old and new values recovered from answer history,
+and report both removal-event counts and distinct affected questions. Every case
+states how many affected questions were re-answered later, how many still end in
+{cmd:AnswerRemoved}, and how many have unknown final state. The page does not say
+that answers are currently empty merely because an earlier removal event exists.
+Point {opt qx()} at the questionnaire HTML for question wording and gate
+adjudication; {opt messages()} writes the same evidence to a plain-text review
+file. {cmd:report , qx()} embeds it in the interactive report. {cmd:check} then
+audits the final exported data against the questionnaire, complementing the
+historical event-stream evidence from {cmd:skips}.
 
 {pstd}
 Thresholds are deliberately conservative defaults for face-to-face firm surveys;
