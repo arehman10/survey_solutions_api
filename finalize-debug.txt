@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/home/runner/work/survey_solutions_api/survey_solutions_api/tools/finalize_paradata_skip_integrity.py", line 301, in <module>
+    main()
+  File "/home/runner/work/survey_solutions_api/survey_solutions_api/tools/finalize_paradata_skip_integrity.py", line 273, in main
+    ado = patch_ado(ADO_FILES[0].read_text(encoding='utf-8'))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/survey_solutions_api/survey_solutions_api/tools/finalize_paradata_skip_integrity.py", line 112, in patch_ado
+    text = rep(text,
+           ^^^^^^^^^
+  File "/home/runner/work/survey_solutions_api/survey_solutions_api/tools/finalize_paradata_skip_integrity.py", line 11, in rep
+    raise RuntimeError(f"{label}: expected {count} match(es), found {found}")
+RuntimeError: return affected count: expected 1 match(es), found 0
