@@ -1,0 +1,82 @@
+name: Complete paradata skip-integrity fix
+
+on:
+  push:
+    branches:
+      - fix/paradata-skip-integrity
+
+permissions:
+  contents: write
+
+jobs:
+  complete:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/paradata-skip-integrity
+          fetch-depth: 0
+
+      - name: Repair and apply finalizer
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY' > complete-debug.txt 2>&1
+          from pathlib import Path
+          p = Path('tools/finalize_paradata_skip_integrity.py')
+          s = p.read_text(encoding='utf-8')
+          old = "    return scalar nreanswered  = `nreansweredall' ''',"
+          new = "    return scalar nreanswered  = `nreansweredall'\n''',"
+          n = s.count(old)
+          if n != 2:
+              raise RuntimeError(f'expected 2 finalizer string-boundary matches, found {n}')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+          PY
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            python tools/finalize_paradata_skip_integrity.py >> complete-debug.txt 2>&1
+            rc=$?
+          fi
+          cat complete-debug.txt
+          if [ "$rc" -ne 0 ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add complete-debug.txt
+            git commit -m 'Capture paradata completion diagnostics'
+            git push origin HEAD:fix/paradata-skip-integrity
+            exit "$rc"
+          fi
+
+      - name: Run focused regression tests
+        run: |
+          python -m py_compile tests/test_paradata_skip_integrity.py
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          p = Path('tests/test_paradata_skip_integrity.py')
+          spec = importlib.util.spec_from_file_location('test_paradata_skip_integrity', p)
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          tests = sorted(name for name in dir(mod) if name.startswith('test_'))
+          for name in tests:
+              getattr(mod, name)()
+              print('PASS', name)
+          print(f'{len(tests)} focused tests passed')
+          PY
+          cmp -s suso.ado install/suso.ado
+          cmp -s suso.sthlp install/suso.sthlp
+          git diff --check
+
+      - name: Commit finalized production changes
+        run: |
+          rm -f complete-debug.txt finalize-debug.txt \
+            tools/finalize_paradata_skip_integrity.py \
+            .github/workflows/finalize-paradata-skip-integrity.yml \
+            .github/workflows/complete-paradata-skip-integrity.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Finalize paradata skip-integrity fix and documentation'
+          git push origin HEAD:fix/paradata-skip-integrity
