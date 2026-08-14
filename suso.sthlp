@@ -1,6 +1,5 @@
 {smcl}
-{* *! version 1.5.0  17jun2026}{...}
-{viewerdialog suso "dialog suso"}{...}
+{* *! version 1.7.12 RUNKEYMISSFIX  13aug2026}{...}
 {vieweralsosee "[D] import" "help import"}{...}
 {vieweralsosee "" "--"}{...}
 {viewerjumpto "Syntax" "suso##syntax"}{...}
@@ -44,7 +43,7 @@ Quick utilities (no {it:verb}):
 {p 8 15 2}
 {cmd:suso} {opt ping}{p_end}
 {p 8 15 2}
-{cmd:suso} {opt doctor}{p_end}
+{cmd:suso} {opt doctor} [{cmd:,} {opt strict}]{p_end}
 {p 8 15 2}
 {cmd:suso} {opt login}{p_end}
 {p 8 15 2}
@@ -56,7 +55,7 @@ Quick utilities (no {it:verb}):
 {p 8 15 2}
 {cmd:suso} {opt about}{p_end}
 {p 8 15 2}
-{cmd:suso} {opt raw} {it:path} [{cmd:,} {opt method(verb)} {opt q:uery(string)} {opt body(json)} {opt todata} ...]
+{cmd:suso} {opt raw} {it:path} [{cmd:,} {opt method(verb)} {opt q:uery(string)} {opt body(json)} {opt todata} {opt savefile(path)} {opt replace} ...]
 
 {pstd}
 where {it:noun} is one of {cmd:assignment}, {cmd:interview}, {cmd:questionnaire},
@@ -187,7 +186,7 @@ the first thing to add when a call behaves unexpectedly.
 {pstd}{bf:Connection and utilities}{p_end}
 {synoptset 30 tabbed}{...}
 {synopt :{cmd:suso ping}}test connectivity and credentials{p_end}
-{synopt :{cmd:suso doctor}}check Java runtime and locate {cmd:suso.jar}{p_end}
+{synopt :{cmd:suso doctor}}check Java/runtime/JAR compatibility; {opt strict} returns nonzero on failure{p_end}
 {synopt :{cmd:suso login}}prompt for the API user and password (masked){p_end}
 {synopt :{cmd:suso config}}set or {cmd:show}/{cmd:clear} the session configuration{p_end}
 {synopt :{cmd:suso about}}show package version{p_end}
@@ -261,10 +260,10 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:load} {opt file()}}load a previously downloaded paradata {cmd:.zip}/{cmd:.tab} offline ({opt unzipw()}){p_end}
 {synopt :{cmd:timing}}collapse events to one row per {opt by(interview)} (default), {opt by(question)} or {opt by(interviewer)} ({opt gapmins()} {opt fastsecs()} {opt allroles}){p_end}
 {synopt :{cmd:flags}}per-interview red flags + interviewer league table ({opt minactive()} {opt burstshare()} {opt nightshare()} {opt churn()} {opt zcut()} {opt top()} {opt saving()}){p_end}
-{synopt :{cmd:skips}}gate flips: skip-triggered answer-removal cascades ({opt cascade()} {opt window()} {opt top()} {opt saving()}); {opt qx(file.html)} names the questions, {opt messages(file.txt)} writes an email-ready action list, and {opt html(file.html)} writes a shareable, printable Skip Violation Review page for the vendor/field supervisor{p_end}
+{synopt :{cmd:skips}}historical answer-removal runs with final-state review ({opt cascade()} {opt window()} {opt top()} {opt saving()} {opt vars()}); {opt qx(file.html)} supplies inherited questionnaire logic and wording, {opt data(file.dta)} checks final values, {opt messages(file.txt)} writes a review list, and {opt html(file.html)} writes a simplified page that separates cases needing verification from resolved history{p_end}
 {synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch) with drill-down and CSV export, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
-{synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report), Skip violations (supervisor review), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option{p_end}
+{synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report), Skip/removal review (supervisor review), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option{p_end}
 {synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values; {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130); the dashboard itself defaults its interview-status scope to {bf:fieldwork done} (completed + rejected + approved) so preloaded records that never became interviews do not inflate item nonresponse, and shows a live verdict strip plus a plain-language legend (asked / viol / unans / bad codes); an {it:if} qualifier restricts it by any expression ({cmd:check if lf_responsive==1, ...}); {opt filters(varlist)} adds live Filter variable {c 45} value dropdowns to the dashboard for the named numeric variables (up to 20 distinct values each, 40 in total){p_end}
 {synoptline}
 
@@ -317,7 +316,7 @@ data is preserved/restored. Example: {cmd:suso backup , dir("C:/archive/srilanka
 {synopt :{cmd:workspace assign} {opt userids()} {opt works:paces()}}assign users to workspaces ({opt mode()} {opt supervisor()}){p_end}
 {synopt :{cmd:settings get}}server global notice{p_end}
 {synopt :{cmd:settings set} {opt message()}}set the global notice{p_end}
-{synopt :{cmd:settings clear}}clear the global notice{p_end}
+{synopt :{cmd:settings clear} {opt confirm}}clear the global notice (destructive){p_end}
 {synopt :{cmd:statistics questionnaires}}questionnaires available for reporting{p_end}
 {synopt :{cmd:statistics questions}}reportable questions for {opt guid()} {opt qver()}{p_end}
 {synopt :{cmd:statistics report} {opt question()}}tabulation report ({opt exporttype()} {opt saving()} {opt query()}){p_end}
@@ -398,15 +397,23 @@ legacy {cmd:timestamp}/{cmd:offset} columns).
 {cmd:timing} collapses the events. With {opt by(interview)} (the default) you get one
 row per interview: answer counts, removals, validation errors, rejections, work
 sessions, wall-clock span, {bf:active time} (every inter-event gap capped at
-{opt gapmins(30)} minutes and Paused{it:->}Resumed intervals zeroed), median and p90
+{opt gapmins(30)} minutes and Paused/completed/session-boundary intervals zeroed), median and p90
 seconds per answer, the share of answers arriving in under {opt fastsecs(2)} seconds,
 the share answered at night (22:00{hline 1}05:59, device-local time), answer churn and
 pace. {opt by(question)} instead ranks questionnaire variables by median seconds to
 answer (slowest first {hline 1} instrument diagnostics), and {opt by(interviewer)}
-pools per interviewer. Supervisor, HQ and API traffic is excluded from all timing metrics
-(counts such as rejections still use every event): the Interviewer role is matched by
-name when the {cmd:role} column is text, and otherwise inferred empirically as the
-modal role code on {cmd:Completed} events; {opt allroles} disables the exclusion.
+pools per interviewer. Milliseconds in {cmd:timestamp_utc} are preserved. Initial
+CAPI preload {cmd:AnswerSet} events at {cmd:InterviewCreated} time are retained for
+answer history but excluded from behaviour counts, timing, overlap, night work and
+churn. Supervisor, HQ and API traffic is likewise excluded: documented role labels
+and codes are mapped directly, with a Completed-event fallback only for unknown
+legacy role codes. {opt allroles} deliberately disables the role exclusion.
+
+{pstd}
+If {opt reduced} was used for the server export, the loaded data carry a reduced
+marker and every analysis prints a warning. Reduced paradata omits event context
+that can affect adjacency, enablement and timing; use a full export for acceptance
+or disciplinary review.
 
 {pstd}
 {cmd:flags} builds the interview table (if events are in memory) and raises six flags
@@ -422,21 +429,32 @@ league table, and leaves one row per interview in memory ({cmd:f_*} dummies plus
 dashboard; {opt saving()} writes it directly.
 
 {pstd}
-{cmd:skips} answers the skip-check question the way paradata can. The Survey
-Solutions engine enforces enablement at capture time, so a disabled question
-can never carry an answer; the abuse that {bf:does} happen is the {bf:gate flip}:
-the interviewer changes a filter/gate answer and the engine cascades
-{cmd:AnswerRemoved} through the section it disables {hline 1} sometimes a
-legitimate correction, sometimes workload avoidance or fabrication cleanup.
-{cmd:skips} detects every run of {opt cascade(3)} or more consecutive
-{cmd:AnswerRemoved} events that starts within {opt window(60)} seconds of an
-{cmd:AnswerSet} (the trigger), names the trigger variable, and reports: the gate
-variables wiping the most answers survey-wide, the worst interviews, and an
-interviewer league table by cascade rate. It leaves one row per interview
-({cmd:n_cascades}, {cmd:casc_removed}, {cmd:n_triggers}, {cmd:wipe_share}) that
-merges 1:1 on {cmd:interview__id} with the {cmd:flags} table. For enabled-but-
-unanswered counts (item nonresponse), {cmd:suso interview stats , id()} returns
-the server's own {cmd:NotAnsweredCount} per interview.
+{cmd:skips} detects historical runs of {opt cascade(3)} or more consecutive
+{cmd:AnswerRemoved} events in the untouched paradata stream. A run must be compact
+and lie within {opt window(60)} seconds of a nearby {cmd:AnswerSet} immediately
+before or after it. With {opt qx()}, questionnaire enabling conditions are used to
+test both the preceding and following answer events and identify a questionnaire-linked gate when supported; without that evidence the nearby answer
+is reported as timing-only, never as proven causation. Raw removal events are not
+assumed to describe the current interview: for every affected question the command
+checks its last paradata event and separates questions re-answered later, questions
+still ending in {cmd:AnswerRemoved}, and unknown final states. Split-column main
+export questions (including checkbox/combobox multi-select and text-list families
+such as {cmd:q__1 q__2}) are resolved back to their parent paradata variable.
+Ordered/ranked or presentation-ambiguous split families are labelled not
+evaluable rather than compared under an assumed export shape. Rejection is advised
+only after the final export confirms that a question is actually blank and the
+final questionnaire logic says it should be asked.
+
+{pstd}
+{opt vars()} is applied only after runs have been constructed on the full event
+stream. It filters which completed runs are reported (matching affected questions or either nearby gate candidate); it never drops intervening
+events before adjacency is evaluated. The output keeps backward-compatible
+{cmd:casc_removed} and {cmd:r(nwiped)} as removal-event counts and adds
+{cmd:casc_questions}, {cmd:casc_open}, {cmd:casc_reanswered},
+{cmd:casc_unknown}, and {cmd:r(naffectedquestions)} for final-state-aware review.
+The one-row-per-interview result merges 1:1 on {cmd:interview__id} with the
+{cmd:flags} table. For enabled-but-unanswered counts, use the final-data
+{cmd:check} audit or {cmd:suso interview stats , id()}.
 
 {pstd}
 {cmd:report} is the recommended first look: run it straight after {cmd:get}/{cmd:load}
@@ -464,7 +482,7 @@ night flag. Sensitivity presets (Standard / Lenient / Strict) sit above the full
 threshold panel. The page also keeps the KPI cards, flag counts, duration and
 answer-speed histograms, answers by hour, fieldwork volume, the enumerator league
 table (now with a vs-team speed ratio and overlap minutes), question timing, and
-the gate variables wiping answers. Records with no interviewer activity
+nearby or questionnaire-linked answer variables associated with historical removal runs. Records with no interviewer activity
 (API-preloaded grid points) are counted separately and excluded from all figures.
 It manages the event data internally and leaves the combined per-record QC table
 {hline 1} timing metrics, {cmd:f_*} flags at the defaults, cascade counts, the new
@@ -476,29 +494,23 @@ started interviews) the per-interview hour/gap detail is omitted and the
 night-window and fast-seconds controls fall back to build-time values.
 
 {pstd}
-{cmd:skips} ends with a supervisor action list, and its shareable review page
-({opt html()}) groups the action cases by gate question (with per-gate totals:
-cases, answers erased, interviews, enumerators), shows the gate{c 39}s old {c 45}{c 62} new
-values recovered from the answer history, the interview key for Headquarters,
-and a per-case decision line; when a chained flip erased the gate itself, the
-card says so instead of listing the gate among its own casualties.
-{cmd:skips} ends with a supervisor action list: one message per violation stating
-the interview, the enumerator, when it happened, which gate variable was changed
-(and to what value), how many later answers the skip logic erased, and what to do
-about it. Point {opt qx()} at the questionnaire HTML that Survey Solutions includes
-with every data export and each message also carries the question wording, its
-section, and its own enabling condition; {opt messages()} writes the list to a plain
-text file ready to paste into an email to the vendor. {cmd:report , qx()} shows the
-same action list in the interactive report. {cmd:qx} on its own loads the parsed
-questionnaire as a dataset for browsing. {cmd:check} closes the loop on the data
-side: it translates the questionnaire{c 39}s C# enabling conditions to Stata (the
-common patterns; untranslatable ones are listed, never guessed), normalises the
-Survey Solutions missing sentinels, and audits the exported main file record by
-record. Conditions whose numeric referents are themselves unanswered are scored
-undetermined and excluded from both counts, matching C# null semantics rather
-than Stata{c 39}s missing-is-infinity rule. skips watches the paradata stream for
-mid-interview gate flips; check audits the final exported state that analysts
-actually receive.
+The {opt html()} review page separates cases into two plain-language sections.
+{bf:Cases needing verification} contains only histories with at least one affected
+question that still appears removed or has an unknown final paradata state.
+{bf:Resolved history - no action} contains fully re-answered cases and is collapsed
+by default. A group labelled {bf:Cause not identified} means that no questionnaire
+relationship was found; the nearest answer event appears only in Technical details.
+A label of {bf:Questionnaire link} means only that the affected questions' conditions
+mention that variable; the interview history still needs review. Raw event counts,
+question text, conditions, and variable names are placed
+under expandable technical details. The page does not say that answers are
+currently empty merely because an earlier removal event exists, and the size of a
+historical run does not by itself create an action flag.
+Point {opt qx()} at the questionnaire HTML for question wording and
+questionnaire-link review; {opt messages()} writes the same evidence to a plain-text review
+file. {cmd:report , qx()} embeds it in the interactive report. {cmd:check} then
+audits the final exported data against the questionnaire, complementing the
+historical event-stream evidence from {cmd:skips}.
 
 {pstd}
 Thresholds are deliberately conservative defaults for face-to-face firm surveys;
@@ -561,7 +573,12 @@ the target before adding {opt confirm} in a do-file.
 {synopt:{cmd:r(jobid)}}export job id (after {cmd:export start}){p_end}
 {synopt:{cmd:r(nevents)}, {cmd:r(nints)}}events and interviews loaded ({cmd:paradata get}/{cmd:load}){p_end}
 {synopt:{cmd:r(nflagged)}, {cmd:r(n_}{it:flag}{cmd:)}}flagged interviews, and count per flag ({cmd:paradata flags}){p_end}
-{synopt:{cmd:r(ncascades)}, {cmd:r(nwiped)}}skip cascades and answers wiped ({cmd:paradata skips}){p_end}
+{synopt:{cmd:r(ncascades)}, {cmd:r(nwiped)}}historical removal runs and AnswerRemoved-event count ({cmd:paradata skips}){p_end}
+{synopt:{cmd:r(naffectedquestions)}}distinct affected question-within-run cases{p_end}
+{synopt:{cmd:r(nreanswered)}, {cmd:r(nopen)}, {cmd:r(nunknown)}}affected questions re-answered later, still ending in AnswerRemoved, or with unknown final state{p_end}
+{synopt:{cmd:r(nfinalanswered)}, {cmd:r(nexpectedblank)}}affected instances answered in the supplied final export or correctly blank because disabled{p_end}
+{synopt:{cmd:r(nanswereddisabled)}, {cmd:r(nblankenabled)}}answers present while disabled or final blanks while enabled{p_end}
+{synopt:{cmd:r(nlogicunknown)}, {cmd:r(nnotindata)}, {cmd:r(nfinalcheck)}}effective logic unknown, absent from supplied data/roster export, and total instances requiring review{p_end}
 {synopt:{cmd:r(report)}}path of the written HTML report ({cmd:paradata report}){p_end}
 {synopt:{cmd:r(}{it:field}{cmd:)}}each scalar field of a single-object response, lowercased{p_end}
 {synoptline}
@@ -596,7 +613,7 @@ in {cmd:r()}.
 {pstd}Paradata QC: pull the event log, flag suspicious interviews, keep the tables:{p_end}
 {p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
 {p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
-{p 8 12 2}{cmd:. suso paradata skips , qx("English_Global_informal2026.html") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata skips , qx("English_Global_informal2026.html") data("informal_2026.dta") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata check , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_codebook.dta") html("qc_dashboard.html") replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata suite , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_suite.html") replace}{p_end}
 {p 8 12 2}{cmd:. save para_events, replace}{p_end}
@@ -613,6 +630,24 @@ in {cmd:r()}.
 {pstd}
 {cmd:suso examples} prints these and more inside Stata.
 
+
+{title:Skip/removal review readability}
+
+{pstd}
+Version 1.7.3 separates unresolved final-state checks from fully re-answered
+history. Only unresolved cases enter {bf:Cases needing verification}; resolved
+histories are collapsed under {bf:Resolved history - no action}. Unlinked nearby
+answer events are no longer presented as candidate gates or causes, and technical
+event detail is collapsed by default.
+
+{title:Paradata suite path and cascade hotfix}
+
+{pstd}
+Version 1.7.2 fixes an {cmd:invalid file specification} error that could occur
+inside the Behaviour tab when a compact {cmd:AnswerRemoved} run was detected.
+The suite also normalises Windows path separators and reports which tab failed
+while restoring the original paradata events in memory.
+
 {marker requirements}{...}
 {title:Requirements}
 
@@ -626,6 +661,66 @@ elsewhere, point to it with {cmd:suso config , jar(}{it:path}{cmd:)}.
 {cmd:suso} requires a Survey Solutions {bf:API user} (not Headquarters or
 Administrator credentials). All settings are session-only globals; only the
 optional audit log is written to disk.
+
+
+
+{title:Missing run-key and audit fixes (RUNKEYMISSFIX)}
+
+{pstd}
+Version 1.7.12 includes the v1.7.11 audit corrections: it preserves paradata
+milliseconds; excludes initial CAPI preloads
+and non-interviewer edits from behavioural denominators; retains full responsible
+names; parses VariableSet/Enabled/Disabled parameters; breaks active time at
+workflow session boundaries; and safely resolves supported split-column
+final-export variables while marking ambiguous shapes not evaluable.
+Per-variable final-data joins now exclude using-only interviews, preventing
+{cmd:vars()}-restricted Behaviour reports from creating rows with a missing
+{cmd:sk_run} and failing with return code 459.
+Paradata preparation also rejects non-string or blank {cmd:interview__id}
+values immediately with a source-data diagnostic.
+The ZIP extractor now rejects traversal and symlink escapes, streams entries,
+checks sizes/CRC, and commits files atomically. Downloads also commit atomically;
+307/308 redirects preserve method/body; raw DELETE is blocked unless
+{opt allowdestructive} is supplied; timeout options remain in documented
+milliseconds; and failed data requests restore the dataset that was in memory.
+
+{pstd}
+{cmd:suso doctor, strict} is an automation-safe install gate and returns
+{cmd:r(ok)}, {cmd:r(ado_build)}, {cmd:r(backend_build)}, and
+{cmd:r(java_version)}. For this release
+the backend must report {cmd:1.7.11-AUDITFIX}.
+
+{title:Run-level merge reliability fix (RUNMERGEFIX)}
+
+{pstd}
+Version 1.7.10 removes all internal merges keyed directly by
+{cmd:interview__id sk_run}. Historical-state, final-data, and current-value
+lookups now use an explicitly constructed and uniqueness-checked run key. The
+questionnaire-adjudicated trigger remains in the one-row-per-run detail table
+and is no longer merged back onto the multi-row event stream. This prevents the
+Stata error {cmd:variables interview__id sk_run do not uniquely identify
+observations in the using data} while preserving interview-level cascade counts.
+
+{title:Removal-run map merge hotfix (RUNMAPFIX)}
+
+{pstd}
+RUNMAPFIX freezes the questionnaire-adjudicated answer-variable map while the
+skip-detail data are still one row per interview and removal run.  This prevents
+later final-data reshaping from leaving duplicate {cmd:interview__id sk_run}
+keys and fixes the suite failure
+{cmd:variables interview__id sk_run do not uniquely identify observations in the using data}.
+The Java backend is unchanged from {cmd:1.7.9-STATEFIX}.
+
+{title:Historical versus final answer values (v1.7.9)}
+
+{pstd}
+Removal-review cards now label nearby AnswerSet transitions as {bf:historical}
+events and separately display the current value from {opt data()}. A historical
+change is never presented as the final interview value. When the final export
+returns to the earlier value, the report says so explicitly. Questionnaire
+relationships also follow calculated-variable dependencies, and final
+enablement translation handles Survey Solutions single {cmd:&}/{cmd:|} logical
+operators and null-safe equality comparisons more accurately.
 
 {marker author}{...}
 {title:Author}
@@ -656,3 +751,68 @@ Survey Solutions product.
 Online: {browse "https://docs.mysurvey.solutions/headquarters/api/api-r-package/":Survey Solutions API documentation}{p_end}
 {pstd}
 Help:  {helpb javacall}, {helpb import}, {helpb shell}{p_end}
+
+
+{title:Exact answer transitions in removal-history cards}
+
+{pstd}
+Version 1.7.4 reconstructs the candidate {cmd:AnswerSet} using its exact event
+order and the exact question instance, including the optional roster address.
+Cards distinguish: an observed value change, the same value recorded again, a
+first-observed answer, and an answer re-entered after an {cmd:AnswerRemoved}
+event. For categorical questions, the numeric code is accompanied by its label
+when available in {opt qx()}.
+
+{pstd}
+The relationship block is separate from the event trace. A questionnaire
+relationship means that at least one affected question's enabling condition
+references the answer-event variable; it does not prove causation. Questions
+present in the questionnaire with no effective enabling condition are labelled ordinary
+questionnaire questions and are never automatically classified as service fields. Section and subsection conditions are now inherited before that classification is made.
+
+
+{title:Final-data enablement adjudication (v1.7.9)}
+
+{pstd}
+Version 1.7.9 ({bf:STATEFIX}) moves hierarchy-aware questionnaire parsing and
+condition translation into the packaged Java bridge. This avoids a Mata
+load-time compilation failure ({cmd:r(3000)}) present in the withdrawn 1.7.5
+build while retaining inherited section, subsection, and item conditions.
+
+
+{pstd}
+When {opt data()} and {opt qx()} are supplied to {cmd:suso paradata skips},
+{cmd:report}, or {cmd:suite}, the removal review now evaluates the final export
+against the effective questionnaire condition inherited from the section,
+subsection/group, and question itself. A final blank is automatically resolved
+when any parent condition is false. It is placed in the verification queue only
+when it is blank while enabled, answered while disabled, the effective condition cannot be evaluated, or
+the question instance is absent from the supplied export. Roster instances require
+the corresponding roster export and are identified separately.
+
+{pstd}
+For example, a question with item condition {cmd:b0==1} inside a subsection
+conditioned on {cmd:lf_responsive==1} is disabled when
+{cmd:lf_responsive==0}, even if {cmd:b0} is itself blank. The report therefore
+does not flag that expected blank as missing.
+
+
+{title:Relative questionnaire paths}
+
+{pstd}
+Version 1.7.9 resolves {opt qx()} paths against Stata's {cmd:c(pwd)} before
+calling Java. This is required because the JVM working directory may differ from
+Stata's working directory. Both Windows backslashes and forward slashes are
+accepted, including paths with spaces.
+
+{title:Java backend compatibility (v1.7.9)}
+
+{pstd}
+The bundled {cmd:suso.jar} is compiled against the Stata 14-compatible SFI
+method signatures, which Stata documents as forward compatible with newer
+releases.  Install {cmd:suso.ado} and {cmd:suso.jar} from the same package.
+After replacing the package, run {cmd:discard} before the first call.
+
+{pstd}
+{cmd:suso doctor} reports both the ado build and the Java backend build. For
+this release the backend must report {cmd:1.7.11-AUDITFIX}.
