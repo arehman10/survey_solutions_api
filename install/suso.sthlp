@@ -750,7 +750,7 @@ Survey Solutions product.
 {pstd}
 Online: {browse "https://docs.mysurvey.solutions/headquarters/api/api-r-package/":Survey Solutions API documentation}{p_end}
 {pstd}
-Help:  {helpb javacall}, {helpb import}, {helpb shell}{p_end}
+Help:  {helpb survEye}, {helpb javacall}, {helpb import}, {helpb shell}{p_end}
 
 
 {title:Exact answer transitions in removal-history cards}
