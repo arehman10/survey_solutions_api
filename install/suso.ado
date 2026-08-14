@@ -1,4 +1,4 @@
-*! suso v1.7.0 build 2026-07-02-SCRUB  (paradata module: timing, flags, skips+messages+review page, dynamic report, qx parser, data check dashboard, tabbed QC suite; export get)
+*! suso v1.7.12 build 2026-08-13-RUNKEYMISSFIX  (missing run-key fix plus prior audit corrections; see help)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -42,12 +42,25 @@ string scalar suso_urlencode(string scalar s)
 
 string scalar suso_jsonesc(string scalar s)
 {
-    s = subinstr(s, "\", "\\")
-    s = subinstr(s, char(34), "\" + char(34))
-    s = subinstr(s, char(13), "\r")
-    s = subinstr(s, char(10), "\n")
-    s = subinstr(s, char(9),  "\t")
-    return(s)
+    real scalar i, c
+    string scalar out, ch, hex
+    out = ""
+    hex = "0123456789ABCDEF"
+    for (i=1; i<=strlen(s); i++) {
+        ch = substr(s,i,1)
+        c = ascii(ch)
+        if      (c==34) out = out + "\" + char(34)
+        else if (c==92) out = out + "\\"
+        else if (c==8)  out = out + "\b"
+        else if (c==9)  out = out + "\t"
+        else if (c==10) out = out + "\n"
+        else if (c==12) out = out + "\f"
+        else if (c==13) out = out + "\r"
+        else if (c<32)  out = out + "\u00" + substr(hex,floor(c/16)+1,1) + ///
+            substr(hex,mod(c,16)+1,1)
+        else            out = out + ch
+    }
+    return(out)
 }
 end
 
@@ -56,6 +69,9 @@ end
 *===============================================================================
 program suso, rclass
     version 14.2
+    * Every routed command starts with a clean request body. Callers that need a
+    * body set it after their syntax/validation checks.
+    capture macro drop SUSO_BODY_REQ
     gettoken noun 0 : 0, parse(" ,")
     local noun = strlower(`"`noun'"')
 
@@ -95,6 +111,7 @@ program suso, rclass
     if inlist("`noun'","config","doctor","ping","raw","version","about") {
         if "`noun'"=="version" | "`noun'"=="about" {
             _suso_about
+            return add
             exit
         }
         _suso_`noun' `macval(0)'
@@ -138,11 +155,16 @@ program _suso_config, rclass
         MAXrows(integer 0) AUDITfile(string) GUID(string) QVER(integer 0)      ///
         EXPORTPw(string) SHOW CLEAR ]
 
+    if "`insecure'"!="" & "`noinsecure'"!="" {
+        di as err "suso config: specify only one of insecure or noinsecure."
+        exit 198
+    }
+
     if "`clear'"!="" {
         capture macro drop SUSO_BASE SUSO_WS SUSO_USER SUSO_PWD SUSO_TOKEN          ///
             SUSO_AUTHTYPE SUSO_PROXYHOST SUSO_PROXYPORT SUSO_PROXYUSER SUSO_PROXYPWD ///
             SUSO_INSECURE SUSO_CONNTO SUSO_READTO SUSO_MAXROWS SUSO_AUDIT            ///
-            SUSO_GUID SUSO_QVER SUSO_EXPORTPWD
+            SUSO_GUID SUSO_QVER SUSO_EXPORTPWD SUSO_JAR
         di as txt "suso: configuration cleared for this session."
         exit
     }
@@ -164,8 +186,10 @@ program _suso_config, rclass
     if "`proxypass'"!="" global SUSO_PROXYPWD  "`proxypass'"
     if "`insecure'"!=""  global SUSO_INSECURE  "1"
     if "`noinsecure'"!="" global SUSO_INSECURE "0"
-    if `conntimeout'>0   global SUSO_CONNTO  = `conntimeout'*1000
-    if `readtimeout'>0   global SUSO_READTO  = `readtimeout'*1000
+    * These options and the Java backend both use milliseconds. Do not scale
+    * them again here (older builds accidentally multiplied them by 1,000).
+    if `conntimeout'>0   global SUSO_CONNTO  "`conntimeout'"
+    if `readtimeout'>0   global SUSO_READTO  "`readtimeout'"
     if `maxrows'>0       global SUSO_MAXROWS "`maxrows'"
     if "`auditfile'"!="" global SUSO_AUDIT   "`auditfile'"
     if "`guid'"!=""      global SUSO_GUID    "`guid'"
@@ -175,7 +199,8 @@ program _suso_config, rclass
     _suso_init
 
     if "`insecure'"!="" {
-        di as err "suso: WARNING — TLS certificate/hostname verification is DISABLED for this session."
+        di as err "suso: WARNING — TLS certificate-chain verification is DISABLED for this session."
+        di as err "      Hostname matching remains enabled; this mode is scoped to suso's HTTP client."
         di as err "      Use this only as a last resort behind the corporate proxy. Prefer importing"
         di as err "      the WBG root CA into your Stata JVM trust store (see the README)."
     }
@@ -202,7 +227,7 @@ program _suso_showconfig
     if `"$SUSO_EXPORTPWD"'!="" di as txt "  export pw   : " as res "********"
     di as txt "  jar         : " as res cond("$SUSO_JAR"=="","(auto-locate on adopath)","$SUSO_JAR")
     if "$SUSO_PROXYHOST"!="" di as txt "  proxy       : " as res "$SUSO_PROXYHOST:$SUSO_PROXYPORT"
-    di as txt "  TLS verify  : " as res cond("$SUSO_INSECURE"=="1","DISABLED (insecure)","on")
+    di as txt "  TLS chain   : " as res cond("$SUSO_INSECURE"=="1","DISABLED (hostname still checked)","verified")
     di as txt "  timeouts ms : " as res "connect=$SUSO_CONNTO  read=$SUSO_READTO"
     di as txt "  max rows    : " as res "$SUSO_MAXROWS"
     local af "$SUSO_AUDIT"
@@ -211,9 +236,9 @@ program _suso_showconfig
     di as txt "{hline 62}"
 end
 
-program _suso_about
+program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.0 (build 2026-07-02-SCRUB)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.12 (build 2026-08-13-RUNKEYMISSFIX)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -223,17 +248,25 @@ program _suso_about
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
+    return local version "1.7.12"
+    return local build "2026-08-13-RUNKEYMISSFIX"
+    return local expected_backend "1.7.11-AUDITFIX"
 end
 
 *===============================================================================
 * Diagnostics
 *===============================================================================
-program _suso_doctor
+program _suso_doctor, rclass
     version 14.2
+    syntax [, STRICT]
+    local ok 1
+    local backend ""
+    local javaver ""
     di as txt _n "{hline 62}"
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
+    di as txt "  ado code build : " as res "1.7.12-RUNKEYMISSFIX"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -241,23 +274,40 @@ program _suso_doctor
     di as txt "Java backend"
     capture _suso_jar
     if _rc {
+        local ok 0
         di as err "  suso.jar      : NOT FOUND — put it on the adopath or set -suso config , jar(...)-"
     }
     else {
         di as txt "  suso.jar      : " as res "$SUSO_JAR"
         capture noisily javacall org.worldbank.suso.Stata jvm , classpath("$SUSO_JAR")
         if _rc {
+            local ok 0
             di as err "  javacall      : FAILED (rc=`=_rc') — is Java available to Stata? See {help java}."
         }
         else if "$SUSO_JAVAOK"=="1" {
+            local backend "$SUSO_JARBUILD"
+            local javaver "$SUSO_JAVAVER"
             di as txt "  Java 11+      : " as res "yes  ($SUSO_JAVAVER)"
+            di as txt "  backend build : " as res cond("$SUSO_JARBUILD"=="","(not reported)","$SUSO_JARBUILD")
+            if "$SUSO_JARBUILD"!="1.7.11-AUDITFIX" {
+                local ok 0
+                di as err "  WARNING       : suso.ado and suso.jar are from different builds."
+                di as err "                  Reinstall both files from the same v1.7.12 package, then restart Stata."
+            }
         }
         else {
+            local ok 0
+            local javaver "$SUSO_JAVAVER"
             di as err "  Java 11+      : NO ($SUSO_JAVAVER) — PATCH operations require Java 11 or newer."
         }
     }
     _suso_showconfig
-    capture macro drop SUSO_JAVAVER SUSO_JAVAOK
+    return scalar ok = `ok'
+    return local ado_build "1.7.12-RUNKEYMISSFIX"
+    return local backend_build "`backend'"
+    return local java_version "`javaver'"
+    capture macro drop SUSO_JAVAVER SUSO_JAVAOK SUSO_JARBUILD
+    if "`strict'"!="" & !`ok' exit 459
 end
 
 program _suso_ping, rclass
@@ -356,7 +406,13 @@ program _suso_gql, rclass
     mata: st_global("SUSO_GQL_NODEPATH",   st_local("nodepath"))
     global SUSO_GQL_TODATA = cond("`todata'"!="","1","0")
     global SUSO_VERBOSE    = cond("`verbose'"!="","1","0")
-    if "`todata'"!="" clear
+    tempfile __suso_prior_gql
+    local __suso_hadprior 0
+    if "`todata'"!="" {
+        capture quietly save `"`__suso_prior_gql'"'
+        if !_rc local __suso_hadprior 1
+        clear
+    }
     capture noisily javacall org.worldbank.suso.Stata gql , classpath("$SUSO_JAR")
     local jrc = _rc
     local rc    "$SUSO_RC"
@@ -372,14 +428,17 @@ program _suso_gql, rclass
     capture macro drop SUSO_GQL_BODY SUSO_GQL_OPERATIONS SUSO_GQL_MAP SUSO_UP_FILE ///
         SUSO_UP_NAME SUSO_GQL_NODEPATH SUSO_GQL_TODATA SUSO_VERBOSE
     if `jrc' {
+        if `__suso_hadprior' capture quietly use `"`__suso_prior_gql'"', clear
         di as err "suso: the Java call failed (Stata rc=`jrc'). See:  suso doctor"
         exit `jrc'
     }
     if "`rc'"=="" {
+        if `__suso_hadprior' capture quietly use `"`__suso_prior_gql'"', clear
         di as err "suso: no response from the Java backend."
         exit 459
     }
     if "`rc'"!="0" {
+        if `__suso_hadprior' capture quietly use `"`__suso_prior_gql'"', clear
         di as err `"suso: `macval(msg)'"'
         exit 459
     }
@@ -723,8 +782,11 @@ program _suso_backup, rclass
             local title = Title[`i']
             local tag = ustrregexra(`"`title'"', "[^A-Za-z0-9._-]+", "_")
             local tag = ustrregexra(`"`tag'"', "^_+|_+$", "")
-            if length(`"`tag'"') > 60 local tag = substr(`"`tag'"',1,60)
-            local stub "`tag'_v`ver'"
+            if "`tag'"=="" local tag "questionnaire"
+            if length(`"`tag'"') > 40 local tag = substr(`"`tag'"',1,40)
+            local gid = lower(subinstr("`guid'","-","",.))
+            * The GUID makes filenames collision-proof when titles/versions match.
+            local stub "`tag'_`gid'_v`ver'"
 
             if "`noquestionnaires'"=="" {
                 capture suso questionnaire document , guid(`guid') qver(`ver') saving(`"`dir'/questionnaires/`stub'_document.json"') replace
@@ -788,12 +850,8 @@ end
 
 program _suso_jar
     if "$SUSO_JAR"=="" {
-        * 1) anywhere on the adopath
-        capture findfile suso.jar
-        if !_rc global SUSO_JAR "`r(fn)'"
-    }
-    if "$SUSO_JAR"=="" {
-        * 2) right next to suso.ado
+        * 1) Prefer the JAR installed beside the ado that Stata actually loaded.
+        * This avoids pairing a new ado with a duplicate, stale backend.
         capture findfile suso.ado
         if !_rc {
             local ad = subinstr(`"`r(fn)'"', "\", "/", .)
@@ -809,6 +867,11 @@ program _suso_jar
                 }
             }
         }
+    }
+    if "$SUSO_JAR"=="" {
+        * 2) anywhere else on the adopath
+        capture findfile suso.jar
+        if !_rc global SUSO_JAR "`r(fn)'"
     }
     if "$SUSO_JAR"=="" {
         * 3) standard Stata folders
@@ -890,7 +953,13 @@ program _suso_call, rclass
     local _brq : copy global SUSO_BODY_REQ
     if `:length local _brq'==0 global SUSO_BODY_REQ ""
 
-    if "`todata'"!="" clear
+    tempfile __suso_prior_data
+    local __suso_hadprior 0
+    if "`todata'"!="" {
+        capture quietly save `"`__suso_prior_data'"'
+        if !_rc local __suso_hadprior 1
+        clear
+    }
 
     capture noisily javacall org.worldbank.suso.Stata run , classpath("$SUSO_JAR")
     local jrc = _rc
@@ -910,17 +979,20 @@ program _suso_call, rclass
     }
 
     if `jrc' {
+        if `__suso_hadprior' capture quietly use `"`__suso_prior_data'"', clear
         _suso_clearbridge
         di as err "suso: the Java call failed (Stata rc=`jrc')."
         di as err "      Check suso.jar and that Stata runs Java 11+ :  suso doctor"
         exit `jrc'
     }
     if "`rc'"=="" {
+        if `__suso_hadprior' capture quietly use `"`__suso_prior_data'"', clear
         _suso_clearbridge
         di as err "suso: no response from the Java backend (it may not have executed)."
         exit 459
     }
     if "`rc'"!="0" {
+        if `__suso_hadprior' capture quietly use `"`__suso_prior_data'"', clear
         _suso_clearbridge
         di as err `"suso: `macval(msg)'"'
         exit 459
@@ -966,7 +1038,9 @@ program _suso_todate
         if _rc continue
         local lbl : variable label `v'
         tempvar t
-        quietly gen double `t' = clock(subinstr(substr(`v',1,19),"T"," ",1), "YMDhms")
+        quietly gen double `t' = clock(subinstr(substr(`v',1,23),"T"," ",1), "YMDhms")
+        quietly replace `t' = clock(subinstr(substr(`v',1,19),"T"," ",1), "YMDhms") ///
+            if missing(`t') & `v'!=""
         quietly drop `v'
         quietly rename `t' `v'
         format `v' %tcCCYY-NN-DD_HH:MM:SS
@@ -994,12 +1068,17 @@ program _suso_getall, rclass
     if "`all'"=="" & `single'==0 local single 1
 
     if "`mode'"=="rows" local pos = cond(`offset'>=0, `offset', 0)
-    else                local pos = cond(`page'>=0, `page', 1)
+    else if `page'>=0    local pos = `page'
+    else if `offset'>=0  local pos = `offset'
+    else                 local pos = 1
 
     local maxrows = real("$SUSO_MAXROWS")
     if `maxrows'<=0 local maxrows 100000
 
-    tempfile acc
+    tempfile acc __suso_getall_prior
+    local __suso_hadprior 0
+    capture quietly save `"`__suso_getall_prior'"'
+    if !_rc local __suso_hadprior 1
     local got 0
     local total .
     local first 1
@@ -1009,10 +1088,25 @@ program _suso_getall, rclass
         if "`q'"!="" local q "`q'&"
         local q "`q'`pageparam'=`pos'&`sizeparam'=`size'"
 
-        _suso_call , method(GET) path(`path') query(`q') todata arraykey(`arraykey') `rootopt' `vopt'
+        capture noisily _suso_call , method(GET) path(`path') query(`q') todata ///
+            arraykey(`arraykey') `rootopt' `vopt'
+        if _rc {
+            local callrc = _rc
+            if `__suso_hadprior' capture quietly use `"`__suso_getall_prior'"', clear
+            else clear
+            exit `callrc'
+        }
         local n = r(nobs)
         if "`n'"=="" local n 0
         if !missing(r(totalcount)) local total = r(totalcount)
+
+        * A valid empty response has no variables, so there is no first page to
+        * save as an accumulator. Return the empty dataset cleanly.
+        if `first' & `n'==0 {
+            return scalar nobs = 0
+            if !missing(`total') return scalar totalcount = `total'
+            exit
+        }
 
         if `first' {
             quietly save `"`acc'"', replace
@@ -1024,9 +1118,12 @@ program _suso_getall, rclass
             quietly use `"`acc'"', clear
             capture quietly append using `"`pg'"'
             if _rc {
-                di as txt "suso: stopping pagination (column types differ across pages); returning rows so far."
-                quietly save `"`acc'"', replace
-                continue, break
+                local arc = _rc
+                di as err "suso: pagination failed because column types differ across pages."
+                di as err "      No partial result is being returned (append rc=`arc')."
+                if `__suso_hadprior' capture quietly use `"`__suso_getall_prior'"', clear
+                else clear
+                exit 459
             }
             quietly save `"`acc'"', replace
         }
@@ -1150,16 +1247,29 @@ program _suso_raw, rclass
     version 14.2
     syntax anything(name=path id="path"), [ METHOD(string) Query(string)       ///
         CType(string) ACCept(string) TODATA ARRAYkey(string) SAVEfile(string)  ///
-        BODY(string) ROOT ALLOWdestructive VERBOSE ]
+        BODY(string) ROOT ALLOWdestructive VERBOSE REPLACE ]
     if "`method'"=="" local method GET
+    local method = strupper(strtrim("`method'"))
     if `"`body'"'!="" global SUSO_BODY_REQ `"`body'"'
     local allowopt = cond("`allowdestructive'"!="","allow","")
-    local destopt  = cond("`allowdestructive'"!="","destructive","")
+    * DELETE is destructive independently of whether permission was granted.
+    local destopt  = cond("`method'"=="DELETE","destructive","")
     local rootopt  = cond("`root'"!="","root","")
     local vopt     = cond("`verbose'"!="","verbose","")
     local todopt   = cond("`todata'"!="","todata","")
+    if `"`savefile'"'!="" & "`replace'"=="" {
+        capture confirm file `"`savefile'"'
+        if !_rc {
+            di as err `"suso raw: savefile already exists: `savefile'"'
+            di as err "          Re-run with replace to overwrite it."
+            exit 602
+        }
+    }
     _suso_call , method(`method') path(`path') query(`query') ct(`ctype') acc(`accept') ///
         `todopt' arraykey(`arraykey') savefile(`savefile') `rootopt' `destopt' `allowopt' `vopt'
+    if "`method'"=="DELETE" {
+        _suso_audit , action("raw DELETE") target(`"`path'"') http("`r(http)'")
+    }
     return add
 end
 
@@ -1329,9 +1439,15 @@ program _suso_assignment, rclass
 
     if "`verb'"=="audio" {
         syntax , ID(string) [ ON OFF VERBOSE ]
-        if "`on'"=="" & "`off'"=="" {
-            di as err "suso: specify -on- or -off-."
+        if "`on'"!="" & "`off'"!="" {
+            di as err "suso: specify only one of -on- or -off-."
             exit 198
+        }
+        if "`on'"=="" & "`off'"=="" {
+            _suso_call , method(GET) path(/api/v1/assignments/`id'/recordAudio) `verbose'
+            di as txt "Assignment `id': audio recording Enabled=" as res `"`r(enabled)'"'
+            return add
+            exit
         }
         local en = cond("`on'"!="","true","false")
         global SUSO_BODY_REQ `"{"Enabled":`en'}"'
@@ -1471,7 +1587,8 @@ program _suso_interview, rclass
         }
         if "`rid'"!="" global SUSO_BODY_REQ `"{"ResponsibleId":"`rid'"}"'
         else {
-            _suso_jsonesc `"`rnm'"' ; global SUSO_BODY_REQ `"{"ResponsibleName":"`r(js)'"}"'
+            _suso_jsonesc `"`rnm'"'
+            global SUSO_BODY_REQ `"{"ResponsibleName":"`r(js)'"}"'
         }
         _suso_call , method(PATCH) path(/api/v1/interviews/`id'/`verb') `verbose'
         di as txt "suso: interview `id' `verb' OK (HTTP `r(http)')."
@@ -1593,6 +1710,10 @@ program _suso_questionnaire, rclass
 
     if "`verb'"=="audio" {
         syntax [, GUID(string) QVER(integer 0) GET ON OFF VERBOSE ]
+        if ("`on'"!="" & "`off'"!="") | ("`get'"!="" & ("`on'"!="" | "`off'"!="")) {
+            di as err "suso: use get, on, or off — only one at a time."
+            exit 198
+        }
         _suso_gq "`guid'" "`qver'"
         _suso_needq "`guid'"
         if `qver'<=0 {
@@ -2113,8 +2234,12 @@ program _suso_settings, rclass
         exit
     }
     if "`verb'"=="clear" {
-        syntax [, VERBOSE]
-        _suso_call , method(DELETE) path(/api/v1/settings/globalnotice) `verbose'
+        syntax [, CONFIRM VERBOSE]
+        _suso_block , action("Clear the workspace-wide global notice") `confirm'
+        _suso_call , method(DELETE) path(/api/v1/settings/globalnotice) ///
+            destructive allow `verbose'
+        _suso_audit , action("settings globalnotice clear") ///
+            target("$SUSO_WS") http("`r(http)'")
         di as txt "suso: global notice cleared (HTTP `r(http)')."
         return add
         exit
@@ -2191,7 +2316,7 @@ end
 *   suso paradata load     load a local paradata .zip / .tab (offline)
 *   suso paradata timing   event data -> per-interview / question / interviewer
 *   suso paradata flags    per-interview red flags + interviewer league table
-*   suso paradata skips    gate flips: skip-triggered answer-removal cascades
+*   suso paradata skips    historical AnswerRemoved runs + final-state review
 *   suso paradata report   one-page self-contained HTML QC report with figures
 *   suso paradata qx       parse the exported questionnaire HTML (text, skips, validations)
 *   suso paradata check    evaluate the skip logic + option values against exported data
@@ -2328,6 +2453,11 @@ program _suso_para_get, rclass
     return local unzipdir `"`xdir'"'
 
     _suso_para_load , dir(`"`xdir'"')
+    if "`reduced'"!="" {
+        char _dta[suso_paradata_reduced] 1
+        di as err "suso paradata: reduced export loaded. Omitted enable/validity events can"
+        di as err "                 change adjacency and timing context; prefer full paradata for QC."
+    }
     return add
     di as txt "suso paradata: archive kept at " as res `"`zip'"'
     di as txt "               reload offline anytime:  {bf:suso paradata load , file(...)}"
@@ -2419,7 +2549,7 @@ program _suso_para_load, rclass
     di as txt "    {bf:suso paradata report}   one-page QC report with figures (recommended first look)"
     di as txt "    {bf:suso paradata flags}    behaviour red flags per interview + interviewer league"
     di as txt "    {bf:suso paradata timing}   durations & answer speed (by interview / question / interviewer)"
-    di as txt "    {bf:suso paradata skips}    gate flips that wiped answers (skip abuse / bad filters)"
+    di as txt "    {bf:suso paradata skips}    historical AnswerRemoved runs, nearby/linked answer variables, and final-state review"
     di as txt "  tip: timing/flags/skips replace the loaded events — {bf:save events.dta} first if you plan"
     di as txt "       to iterate on thresholds; {bf:report} takes care of this by itself."
     return scalar nevents = _N
@@ -2432,9 +2562,16 @@ program _suso_para_prep
     version 14.2
     if `"`: char _dta[suso_paradata]'"'=="events" exit    // already prepared
 
-    capture confirm variable interview__id
+    capture confirm string variable interview__id
     if _rc {
-        di as err "suso paradata: no interview__id column — this does not look like a Survey Solutions paradata file."
+        di as err "suso paradata: no string interview__id column — this does not look like a Survey Solutions paradata file."
+        exit 459
+    }
+    quietly count if strtrim(interview__id)==""
+    if r(N)>0 {
+        local nblank = r(N)
+        di as err "suso paradata: `nblank' event row(s) have a missing/blank interview__id."
+        di as err "                 Repair or remove those source rows before running paradata QC."
         exit 459
     }
     * legacy column names
@@ -2458,6 +2595,7 @@ program _suso_para_prep
         else    quietly gen double para_ord = order
     }
     else quietly gen double para_ord = _n
+    quietly replace para_ord = para_seq if missing(para_ord)
     label variable para_seq "paradata: file row (tiebreak)"
     label variable para_ord "paradata: event order within interview"
 
@@ -2475,7 +2613,11 @@ program _suso_para_prep
     }
     capture confirm string variable `tsvar'
     if !_rc {
-        quietly gen double para_ts = clock(subinstr(substr(`tsvar',1,19),"T"," ",1), "YMDhms")
+        * Official paradata timestamps include milliseconds. Preserve the first
+        * three fractional digits; the whole-second fallback supports old files.
+        quietly gen double para_ts = clock(subinstr(substr(`tsvar',1,23),"T"," ",1), "YMDhms")
+        quietly replace para_ts = clock(subinstr(substr(`tsvar',1,19),"T"," ",1), "YMDhms") ///
+            if missing(para_ts) & `tsvar'!=""
         quietly count if missing(para_ts) & `tsvar'!=""
         if r(N)>0 di as txt "suso paradata: note — " as res "`=r(N)'" as txt " event(s) had unparseable timestamps (left missing)."
     }
@@ -2523,6 +2665,9 @@ program _suso_para_prep
     quietly gen byte para_rst = (para_ev=="restarted")
     quietly gen byte para_rej = (strpos(para_ev,"rejectedby")==1)
     quietly gen byte para_pau = (para_ev=="paused")
+    quietly gen byte para_vset = (para_ev=="variableset")
+    quietly gen byte para_ven  = (para_ev=="variableenabled")
+    quietly gen byte para_vdis = (para_ev=="variabledisabled")
     label variable para_ev  "paradata: event (lowercase)"
     label variable para_ans "AnswerSet"
     label variable para_rem "AnswerRemoved"
@@ -2531,18 +2676,61 @@ program _suso_para_prep
     label variable para_rst "Restarted"
     label variable para_rej "Rejected (SV/HQ)"
     label variable para_pau "Paused"
+    label variable para_vset "VariableSet"
+    label variable para_ven  "VariableEnabled"
+    label variable para_vdis "VariableDisabled"
 
-    * question variable name = first ||-token of parameters (answers/comments only)
+    * Parse event parameters into variable, answer value and optional roster
+    * address. Official SuSo formats are:
+    *   AnswerSet     varname||value||OptionalRosterAddress
+    *   AnswerRemoved varname||OptionalRosterAddress
+    *   Variable*     varname||value||OptionalRosterAddress
+    * The question-instance key prevents values from different roster rows from
+    * being combined when reconstructing an exact answer transition.
     capture confirm string variable parameters
     if !_rc {
-        tempvar pp
-        quietly gen long `pp' = strpos(parameters, "||")
-        quietly gen para_var = cond(`pp'>0, substr(parameters,1,`pp'-1), parameters) ///
-            if para_ans | para_rem | para_ev=="commentset"
-        * SuSo quotes the parameters field when answers contain special characters;
-        * with bindquote(nobind) the opening quote sticks to the variable name
-        quietly replace para_var = substr(para_var,2,.) if substr(para_var,1,1)==char(34)
-        label variable para_var "paradata: question variable"
+        tempvar pc quoted p1 rest p2 isqevent
+        quietly gen strL `pc' = parameters
+        quietly gen byte `quoted' = substr(`pc',1,1)==char(34) & ///
+            substr(`pc',length(`pc'),1)==char(34) & length(`pc')>=2
+        quietly replace `pc' = substr(`pc',2,length(`pc')-2) if `quoted'
+        quietly replace `pc' = substr(`pc',2,.) if substr(`pc',1,1)==char(34)
+        quietly gen long `p1' = strpos(`pc', "||")
+        quietly gen strL `rest' = substr(`pc',`p1'+2,.) if `p1'>0
+        quietly gen long `p2' = strpos(`rest', "||") if `p1'>0
+        quietly gen byte `isqevent' = para_ans | para_rem | para_inv | ///
+            strpos(para_ev,"declaredvalid")>0 | para_ev=="commentset" | ///
+            para_vset | para_ven | para_vdis
+
+        quietly gen str80 para_var = cond(`p1'>0, substr(`pc',1,`p1'-1), `pc') ///
+            if `isqevent'
+        quietly gen strL para_val = ""
+        quietly replace para_val = cond(`p2'>0, substr(`rest',1,`p2'-1), `rest') ///
+            if (para_ans | para_vset | para_ven | para_vdis) & `p1'>0
+
+        quietly gen str160 para_roster = ""
+        quietly replace para_roster = substr(`rest',`p2'+2,160) ///
+            if (para_ans | para_vset | para_ven | para_vdis) & `p2'>0
+        quietly replace para_roster = substr(`rest',1,160) ///
+            if (para_rem | para_inv | strpos(para_ev,"declaredvalid")>0) & `p1'>0
+        quietly replace para_roster = substr(`rest',`p2'+2,160) ///
+            if para_ev=="commentset" & `p2'>0
+        quietly replace para_roster = strtrim(para_roster)
+        quietly replace para_roster = substr(para_roster,1,length(para_roster)-1) ///
+            if length(para_roster)>0 & substr(para_roster,-1,1)==char(34)
+
+        quietly gen str244 para_qkey = substr(para_var + ///
+            cond(para_roster!="", "||" + para_roster, ""), 1, 244) ///
+            if para_var!=""
+        quietly gen str244 para_qdisp = substr(para_var + ///
+            cond(para_roster!="", " [roster " + para_roster + "]", ""), 1, 244) ///
+            if para_var!=""
+
+        label variable para_var    "paradata: question variable"
+        label variable para_val    "paradata: answer/calculated-variable value"
+        label variable para_roster "paradata: optional roster address"
+        label variable para_qkey   "paradata: question-instance key"
+        label variable para_qdisp  "paradata: question instance (display)"
     }
 
     char _dta[suso_paradata] events
@@ -2561,6 +2749,9 @@ program _suso_para_need
             di as err "suso paradata: no paradata `kind' table in memory."
         }
         exit 459
+    }
+    if "`kind'"=="events" & `"`: char _dta[suso_paradata_reduced]'"'=="1" {
+        di as err "suso paradata: WARNING — this is a reduced export; some event context is absent."
     }
     * self-heal: a crashed earlier run can leave temp-named columns behind; a later
     * -tempvar- may be issued the same name and its -gen- would then fail with r(110)
@@ -2608,67 +2799,82 @@ program _suso_para_derive, rclass
     local gapsecs = `gapmins'*60
     capture drop para_role
     * derived columns from a previous (possibly interrupted) run
-    capture drop para_ivw para_resp para_gap para_prevp para_brk para_act        ///
-        para_ansgap para_fast para_night para_tivw para_one
+    capture drop para_ivw para_resp para_gap para_prevp para_prevcmp para_brk   ///
+        para_act para_ansgap para_fast para_night para_tivw para_one            ///
+        para_preload para_fieldans para_fieldrem para_fieldcmp para_fieldrst
 
-    * Interviewer-role detection. SuSo writes role either as text ("Interviewer")
-    * or as a numeric code that varies by version. If no text match, infer the
-    * interviewer code empirically: interviews are Completed on the tablet, so
-    * the modal role on Completed events identifies the interviewer role.
+    * Interviewer-role detection. Map the documented labels/codes directly so
+    * a Supervisor/HQ/API-only extract can never become interviewer traffic.
+    * For genuinely unknown legacy codes only, use Completed events as fallback.
     local rolenote "all roles (no role column)"
     quietly gen byte para_ivw = 1
     capture confirm variable role
     if !_rc & "`allroles'"=="" {
         capture confirm string variable role
         if !_rc quietly gen para_role = lower(strtrim(role))
-        else    quietly gen para_role = strofreal(role)
-        quietly count if para_role=="interviewer"
+        else    quietly gen para_role = lower(strtrim(strofreal(role,"%18.0g")))
+        tempvar knownrole
+        quietly gen byte `knownrole' = inlist(para_role,"interviewer","1",      ///
+            "supervisor","2","headquarter","headquarters","3") |            ///
+            inlist(para_role,"administrator","4","api","api user","5","0")
+        quietly count if `knownrole'
         if r(N)>0 {
-            quietly replace para_ivw = (para_role=="interviewer")
-            local rolenote "Interviewer-role events"
+            quietly replace para_ivw = inlist(para_role,"interviewer","1")
+            local rolenote "Interviewer-role events (documented role mapping)"
         }
         else {
-            * Survey Solutions documents numeric role 1 = Interviewer
-            quietly count if para_role=="1"
-            local __r1 = r(N)
-            quietly count if para_role!="" & para_role!="1"
-            if `__r1'>0 & r(N)>0 {
-                quietly replace para_ivw = (para_role=="1")
-                local rolenote "Interviewer-role events (documented role code 1)"
+            local rcode ""
+            quietly count if para_cmp
+            if r(N)>0 {
+                preserve
+                quietly keep if para_cmp & para_role!=""
+                if _N>0 {
+                    quietly contract para_role
+                    gsort -_freq para_role
+                    local rcode = para_role[1]
+                }
+                restore
             }
-            else if `__r1'>0 local rolenote "all roles (role column has a single value)"
+            if "`rcode'"!="" {
+                quietly replace para_ivw = (para_role=="`rcode'")
+                local rolenote `"interviewer role inferred as legacy code `rcode' (modal role on Completed events)"'
+            }
             else {
-                local rcode ""
-                quietly count if para_cmp
-                if r(N)>0 {
-                    preserve
-                    quietly keep if para_cmp & para_role!=""
-                    if _N>0 {
-                        quietly contract para_role
-                        gsort -_freq para_role
-                        local rcode = para_role[1]
-                    }
-                    restore
-                }
-                quietly count if para_role!="" & para_role!="`rcode'"
-                if "`rcode'"!="" & r(N)>0 {
-                    quietly replace para_ivw = (para_role=="`rcode'")
-                    local rolenote `"interviewer role inferred as code `rcode' (modal role on Completed events)"'
-                }
-                else if "`rcode'"!="" local rolenote "all roles (role column has a single value)"
-                else local rolenote "all roles (no Completed events to infer the interviewer role)"
+                quietly replace para_ivw = 0
+                local rolenote "no interviewer role found"
             }
         }
     }
     if "`allroles'"!="" local rolenote "all roles (allroles)"
 
+    * CAPI preload values arrive as AnswerSet events at InterviewCreated time,
+    * before the tablet's first field session. Keep them in history/final-state
+    * reconstruction, but exclude them from interviewer behaviour metrics.
+    tempvar created firststart
+    quietly egen double `created' = min(cond(para_ev=="interviewcreated",para_tsu,.)), ///
+        by(interview__id)
+    quietly egen double `firststart' = min(cond(inlist(para_ev,"resumed",       ///
+        "restarted","receivedbyinterviewer"),para_ord,.)), by(interview__id)
+    quietly gen byte para_preload = para_ans & para_ivw & !missing(`created') & ///
+        para_tsu==`created' & (missing(`firststart') | para_ord<`firststart')
+    quietly gen byte para_fieldans = para_ans & para_ivw & !para_preload
+    quietly gen byte para_fieldrem = para_rem & para_ivw
+    quietly gen byte para_fieldcmp = para_cmp & para_ivw
+    quietly gen byte para_fieldrst = para_rst & para_ivw
+    label variable para_preload  "initial CAPI preload AnswerSet"
+    label variable para_fieldans "interviewer AnswerSet (preload excluded)"
+    label variable para_fieldrem "interviewer AnswerRemoved"
+    label variable para_fieldcmp "interviewer Completed"
+    label variable para_fieldrst "interviewer Restarted"
+
     * responsible: at the last answer event, else at the last event
-    quietly gen para_resp = ""
+    quietly gen str244 para_resp = ""
     capture confirm string variable responsible
     if !_rc {
-        tempvar isa
-        quietly gen byte `isa' = para_ans & para_ivw
-        quietly bysort interview__id (`isa' para_ord para_seq): replace para_resp = responsible[_N]
+        tempvar resppri
+        quietly gen byte `resppri' = para_ivw + para_fieldans
+        quietly bysort interview__id (`resppri' para_ord para_seq): ///
+            replace para_resp = responsible[_N]
     }
 
     * gaps within the interviewer-role event stream of each interview
@@ -2678,26 +2884,44 @@ program _suso_para_derive, rclass
     quietly bysort interview__id para_ivw (para_ord para_seq): ///
         gen byte para_prevp = (para_pau[_n-1]==1) if para_ivw & _n>1
     quietly replace para_prevp = 0 if missing(para_prevp)
+    quietly bysort interview__id para_ivw (para_ord para_seq): ///
+        gen byte para_prevcmp = (para_cmp[_n-1]==1) if para_ivw & _n>1
+    quietly replace para_prevcmp = 0 if missing(para_prevcmp)
 
-    quietly gen byte   para_brk = para_ivw & !missing(para_gap) & (para_prevp | para_gap>`gapsecs')
+    * Only a productive/current work event can open a session. A trailing Paused
+    * event after Completed is terminal bookkeeping, not a phantom new session.
+    tempvar canwork cumwork
+    quietly gen byte `canwork' = para_ivw & (para_fieldans | para_fieldrem |  ///
+        para_inv | inlist(para_ev,"resumed","restarted",                    ///
+        "receivedbyinterviewer"))
+    quietly bysort interview__id (para_ord para_seq): gen long `cumwork' = sum(`canwork')
+    quietly gen byte para_brk = para_ivw & `canwork' & (`cumwork'==1 |       ///
+        (!missing(para_gap) & (para_prevp | para_prevcmp |                  ///
+        inlist(para_ev,"resumed","restarted","receivedbyinterviewer") |   ///
+        para_gap>`gapsecs')))
     quietly gen double para_act = cond(para_ivw & !missing(para_gap), ///
-                                       cond(para_prevp, 0, min(para_gap,`gapsecs')), 0)
-    quietly gen double para_ansgap = para_gap if para_ans & para_ivw & !para_brk & !missing(para_gap)
+        cond(para_prevp | para_prevcmp | inlist(para_ev,"resumed", ///
+        "restarted","receivedbyinterviewer"),0,min(para_gap,`gapsecs')),0)
+    quietly gen double para_ansgap = para_gap if para_fieldans & !para_brk &    ///
+        !missing(para_gap)
     * a repeat AnswerSet on the same variable (multi-select taps, list items,
     * immediate revisions) is not a newly reached question - keep it out of the
     * answer-speed clock so tapping through a checklist cannot look like speeding
     capture confirm variable para_var
     if !_rc {
+        local __akey para_var
+        capture confirm variable para_qkey
+        if !_rc local __akey para_qkey
         tempvar sameav lastav prevav
-        quietly gen `sameav' = para_var if para_ans & para_ivw
+        quietly gen `sameav' = `__akey' if para_fieldans
         quietly bysort interview__id para_ivw (para_ord para_seq): gen `lastav' = `sameav'
         quietly by interview__id para_ivw: replace `lastav' = `lastav'[_n-1] if `lastav'=="" & _n>1
         quietly by interview__id para_ivw: gen `prevav' = `lastav'[_n-1] if _n>1
-        quietly replace para_ansgap = . if para_ans & para_var!="" & `prevav'==para_var
+        quietly replace para_ansgap = . if para_fieldans & `__akey'!="" & `prevav'==`__akey'
         quietly drop `sameav' `lastav' `prevav'
     }
     quietly gen byte   para_fast   = (para_ansgap<`fastsecs') if !missing(para_ansgap)
-    quietly gen byte   para_night  = para_ans & para_ivw & !missing(para_tsl) & ///
+    quietly gen byte   para_night  = para_fieldans & !missing(para_tsl) & ///
                                      (hh(para_tsl)>=22 | hh(para_tsl)<6)
     quietly gen double para_tivw   = para_tsu if para_ivw
     quietly gen byte   para_one    = 1
@@ -2731,7 +2955,7 @@ program _suso_para_timing, rclass
             di as err "suso paradata timing: no parameters column in this paradata (reduced export?) — cannot time questions."
             exit 459
         }
-        quietly keep if para_ans & para_ivw & para_var!=""
+        quietly keep if para_fieldans & para_var!=""
         if _N==0 {
             di as err "suso paradata timing: no AnswerSet events to time."
             exit 2000
@@ -2774,8 +2998,8 @@ program _suso_para_timing, rclass
         }
         tempvar tag
         quietly bysort responsible interview__id: gen byte `tag' = (_n==1)
-        collapse (sum) n_interviews=`tag' n_events=para_one n_answers=para_ans       ///
-            n_removed=para_rem active_s=para_act n_fast=para_fast n_night=para_night ///
+        collapse (sum) n_interviews=`tag' n_events=para_one n_answers=para_fieldans  ///
+            n_removed=para_fieldrem active_s=para_act n_fast=para_fast n_night=para_night ///
             (count) n_timed=para_ansgap (p50) ans_med_s=para_ansgap                  ///
             (p90) ans_p90_s=para_ansgap, by(responsible) fast
         quietly gen double active_hr   = active_s/3600
@@ -2801,8 +3025,10 @@ program _suso_para_timing, rclass
     }
 
     * ---------------- by(interview): the canonical QC table ---------------------
-    collapse (sum) n_events=para_one n_answers=para_ans n_removed=para_rem          ///
-        n_invalid=para_inv n_completed=para_cmp n_restarted=para_rst                ///
+    collapse (sum) n_events=para_one n_answers=para_fieldans n_removed=para_fieldrem ///
+        n_answers_all=para_ans n_removed_all=para_rem n_preload=para_preload         ///
+        n_invalid=para_inv n_completed=para_fieldcmp n_restarted=para_fieldrst     ///
+        n_completed_all=para_cmp n_restarted_all=para_rst                          ///
         n_rejected=para_rej n_breaks=para_brk active_s=para_act                     ///
         n_fast=para_fast n_night=para_night                                         ///
         (count) n_timed=para_ansgap                                                 ///
@@ -2812,12 +3038,14 @@ program _suso_para_timing, rclass
 
     quietly gen double active_min  = active_s/60
     quietly gen double span_min    = cond(!missing(ti0), (ti1-ti0)/60000, (t_last-t_first)/60000)
-    quietly gen double sessions    = n_breaks + 1
+    quietly gen byte started = (n_answers>0 | n_removed>0 | n_completed>0 | n_restarted>0)
+    * Session-start events themselves are boundaries; the first one is session
+    * one, not a break plus an extra phantom session.
+    quietly gen double sessions = cond(started,max(1,n_breaks),0)
     quietly gen double fast_share  = n_fast/n_timed    if n_timed>0
     quietly gen double night_share = n_night/n_answers if n_answers>0
     quietly gen double churn       = n_removed/max(n_answers,1)
     quietly gen double pace_apm    = n_answers/active_min if active_min>0
-    quietly gen byte   started     = (n_timed>0 | n_completed>0 | active_min>0)
     quietly drop active_s ti0 ti1 n_breaks n_fast n_night
 
     format t_first t_last %tcCCYY-NN-DD_HH:MM:SS
@@ -2826,11 +3054,16 @@ program _suso_para_timing, rclass
     label variable interview__id "interview id"
     label variable responsible   "interviewer (at last answer)"
     label variable n_events      "paradata events"
-    label variable n_answers     "AnswerSet events"
-    label variable n_removed     "AnswerRemoved events"
+    label variable n_answers     "interviewer AnswerSet (preload excluded)"
+    label variable n_removed     "interviewer AnswerRemoved"
+    label variable n_answers_all "AnswerSet events (all roles, incl. preload)"
+    label variable n_removed_all "AnswerRemoved events (all roles)"
+    label variable n_preload     "initial preload AnswerSet events"
     label variable n_invalid     "validation-error events"
     label variable n_completed   "Completed events"
     label variable n_restarted   "Restarted events"
+    label variable n_completed_all "Completed events (all roles)"
+    label variable n_restarted_all "Restarted events (all roles)"
     label variable n_rejected    "rejections (SV+HQ)"
     label variable n_timed       "answers with a timed gap"
     label variable sessions      "work sessions"
@@ -2843,7 +3076,8 @@ program _suso_para_timing, rclass
     label variable churn         "AnswerRemoved / AnswerSet"
     label variable pace_apm      "answers per active minute"
     label variable started       "fieldwork started (any interviewer activity)"
-    order interview__id responsible started n_events n_answers n_removed n_invalid          ///
+    order interview__id responsible started n_events n_answers n_removed n_preload          ///
+        n_answers_all n_removed_all n_invalid                                      ///
         n_completed n_restarted n_rejected sessions span_min active_min             ///
         ans_med_s ans_p90_s fast_share night_share churn pace_apm t_first t_last
     sort interview__id
@@ -3010,19 +3244,555 @@ program _suso_para_flags, rclass
     }
 end
 
-* ---- skips: gate flips & skip-triggered answer-removal cascades ----------------
-* A "cascade" = a run of >= cascade() consecutive AnswerRemoved events that
-* starts within window() seconds of an AnswerSet (the trigger). This is the
-* paradata signature of a skip flip: the interviewer changes a gate/filter
-* answer and Survey Solutions wipes the section it disables. The engine
-* enforces enablement at capture time, so this — not "answered while
-* disabled" — is the skip check that paradata supports.
+* ---- final-data adjudication for affected question instances -----------------
+* Input using-file: one row per interview x removal-run x question instance.
+* Output: exact final-data state and effective enablement classification.
+program _suso_para_casefinal, rclass
+    version 14.2
+    syntax using/ , DATA(string) SAVing(string) [ QXMETA(string) ]
+    confirm file `"`using'"'
+    confirm file `"`data'"'
+
+    tempfile CASES IDS FD META ACC VC ONE
+    quietly use `"`using'"', clear
+    foreach v in interview__id sk_run affected_var affected_roster affected_qkey affected_qdisp {
+        capture confirm variable `v', exact
+        if _rc {
+            di as err "suso paradata: internal final-data check is missing `v'."
+            exit 459
+        }
+    }
+    quietly save `"`CASES'"'
+
+    preserve
+        quietly keep interview__id
+        quietly duplicates drop
+        quietly save `"`IDS'"'
+    restore
+
+    * Restrict the final export to interviews that appear in the removal cases.
+    quietly use `"`data'"', clear
+    capture confirm string variable interview__id
+    if _rc {
+        di as err "suso paradata skips: data() must contain string interview__id."
+        exit 459
+    }
+    quietly merge m:1 interview__id using `"`IDS'"', keep(match) nogenerate
+    tempvar __dup
+    quietly bysort interview__id: gen byte `__dup' = _N>1
+    quietly count if `__dup'
+    if r(N)>0 {
+        di as txt "  data(): duplicate interview__id rows found; using the first row per interview for the main-export final-state check."
+        quietly bysort interview__id: keep if _n==1
+    }
+    quietly drop `__dup'
+    quietly save `"`FD'"'
+
+    * Merge inherited questionnaire conditions onto every affected variable.
+    quietly use `"`CASES'"', clear
+    if `"`qxmeta'"'!="" {
+        preserve
+            quietly use `"`qxmeta'"', clear
+            quietly keep qx_var qx_type qx_section qx_subsection qx_section_enable ///
+                qx_group_enable qx_item_enable qx_enable qx_enable_deps          ///
+                qx_calc qx_section_tri qx_group_tri qx_item_tri
+            quietly bysort qx_var: keep if _n==1
+            quietly rename qx_var affected_var
+            quietly gen byte qx_known = 1
+            quietly save `"`META'"'
+        restore
+        quietly merge m:1 affected_var using `"`META'"', keep(master match) nogenerate
+    }
+    capture confirm variable qx_known
+    if _rc quietly gen byte qx_known = 0
+    foreach v in qx_type qx_section qx_subsection qx_section_enable qx_group_enable ///
+        qx_item_enable qx_enable qx_enable_deps qx_calc qx_section_tri            ///
+        qx_group_tri qx_item_tri {
+        capture confirm variable `v', exact
+        if _rc quietly gen strL `v' = ""
+    }
+    quietly replace qx_known = 0 if missing(qx_known)
+    quietly save `"`CASES'"', replace
+    quietly levelsof affected_var, local(avars) clean
+
+    * Empty accumulator with the same identifying fields.
+    quietly use `"`CASES'"', clear
+    quietly keep if 0
+    quietly gen byte final_status = .
+    quietly gen byte final_answered = .
+    quietly gen byte final_enabled = .
+    quietly gen double final_enable_tri = .
+    quietly gen strL final_note = ""
+    quietly save `"`ACC'"', replace
+
+    foreach v of local avars {
+        quietly use `"`CASES'"', clear
+        quietly keep if affected_var=="`v'"
+        if _N==0 continue
+        local qknown = qx_known[1]
+        local secraw `"`=qx_section_enable[1]'"'
+        local grpraw `"`=qx_group_enable[1]'"'
+        local itemraw `"`=qx_item_enable[1]'"'
+        local secexpr `"`=qx_section_tri[1]'"'
+        local grpexpr `"`=qx_group_tri[1]'"'
+        local itemexpr `"`=qx_item_tri[1]'"'
+        local qtype `"`=lower(qx_type[1])'"'
+        local ismulti = strpos(`"`qtype'"',"multi")>0 | strpos(`"`qtype'"',"multy")>0
+        local isyesno = strpos(`"`qtype'"',"yes/no")>0 | strpos(`"`qtype'"',"yesno")>0
+        local iscombo = strpos(`"`qtype'"',"combo")>0
+        local isordered = strpos(`"`qtype'"',"ordered")>0 | strpos(`"`qtype'"',"rank")>0
+
+        * Roster instances require the corresponding roster export, not the main
+        * one-row-per-interview file supplied to suite data().
+        preserve
+            quietly keep if affected_roster!=""
+            if _N>0 {
+                quietly gen byte final_status = 6
+                quietly gen byte final_answered = .
+                quietly gen byte final_enabled = .
+                quietly gen double final_enable_tri = .
+                quietly gen strL final_note = "roster instance - check the corresponding roster export"
+                quietly append using `"`ACC'"'
+                quietly save `"`ACC'"', replace
+            }
+        restore
+        quietly keep if affected_roster==""
+        if _N==0 continue
+        quietly save `"`VC'"', replace
+
+        quietly use `"`FD'"', clear
+        local splitvars ""
+        capture confirm variable `v', exact
+        if _rc {
+            capture unab splitvars : `v'__*
+            if _rc {
+                quietly use `"`VC'"', clear
+                quietly gen byte final_status = 5
+                quietly gen byte final_answered = .
+                quietly gen byte final_enabled = .
+                quietly gen double final_enable_tri = .
+                quietly gen strL final_note = "variable not found in supplied data() file"
+                quietly append using `"`ACC'"'
+                quietly save `"`ACC'"', replace
+                continue
+            }
+        }
+
+        if `"`splitvars'"'=="" {
+            capture confirm numeric variable `v'
+            if !_rc quietly gen byte final_answered = !missing(`v')
+            else quietly gen byte final_answered = (`v'!="" & `v'!="##N/A##")
+        }
+        else {
+            * Split exports have two distinct shapes. Checkbox multi-selects
+            * use 0/1 option dummies; combobox/ordered multi-selects and list
+            * questions store values in their members. Detect an unexpected
+            * non-dummy family conservatively when presentation metadata is old.
+            local splitvalues = `iscombo' | `isordered'
+            if `ismulti' & !`isyesno' & !`splitvalues' {
+                tempvar __nondummy
+                quietly gen byte `__nondummy' = 0
+                foreach sv of local splitvars {
+                    capture confirm numeric variable `sv'
+                    if !_rc quietly replace `__nondummy' = 1 if ///
+                        !missing(`sv') & !inlist(`sv',0,1)
+                    else quietly replace `__nondummy' = 1 if !inlist( ///
+                        lower(strtrim(`sv')),"","0","1","false","true", ///
+                        "no","yes","##n/a##")
+                }
+                quietly count if `__nondummy'
+                if r(N)>0 local splitvalues 1
+                quietly drop `__nondummy'
+            }
+            quietly gen byte final_answered = 0
+            foreach sv of local splitvars {
+                capture confirm numeric variable `sv'
+                if !_rc {
+                    if `ismulti' & !`isyesno' & !`splitvalues' ///
+                        quietly replace final_answered = 1 if `sv'==1
+                    else quietly replace final_answered = 1 if !missing(`sv')
+                }
+                else {
+                    if `ismulti' & !`isyesno' & !`splitvalues' ///
+                        quietly replace final_answered = 1 if ///
+                        !inlist(lower(strtrim(`sv')),"","0","false","no","##n/a##")
+                    else quietly replace final_answered = 1 if `sv'!="" & `sv'!="##N/A##"
+                }
+            }
+        }
+
+        * Each hierarchy component is evaluated separately. Tri-state values use
+        * 0=false, 1=true, .5=unknown; AND is min(), so a known false parent
+        * correctly disables a child even when the child's own referent is blank.
+        foreach c in sec grp item {
+            local raw  `"``c'raw'"'
+            local expr `"``c'expr'"'
+            if `qknown'!=1 {
+                quietly gen double __`c'tri = .5
+            }
+            else if strtrim(`"`raw'"')=="" {
+                quietly gen double __`c'tri = 1
+            }
+            else if strtrim(`"`expr'"')=="" {
+                quietly gen double __`c'tri = .5
+            }
+            else {
+                capture quietly gen double __`c'tri = (`expr')
+                if _rc quietly gen double __`c'tri = .5
+                else quietly replace __`c'tri = .5 if missing(__`c'tri) | ///
+                    !inlist(__`c'tri,0,.5,1)
+            }
+        }
+        quietly gen double final_enable_tri = min(__sectri,__grptri,__itemtri)
+        quietly gen byte final_enabled = cond(final_enable_tri==.5,.,final_enable_tri)
+        quietly keep interview__id final_answered final_enabled final_enable_tri
+        quietly save `"`ONE'"', replace
+
+        quietly use `"`VC'"', clear
+        * ONE is built from all removal-case interviews that exist in data().
+        * For the current affected variable, VC can be a strict subset.  Never
+        * admit using-only rows here: they have no sk_run/affected identifiers
+        * and would corrupt the run-level accumulator.
+        quietly merge m:1 interview__id using `"`ONE'"', ///
+            keep(master match) gen(__fm)
+        quietly gen byte final_status = 5 if __fm==1
+        quietly replace final_status = 1 if __fm==3 & final_answered==1 & ///
+            (final_enabled==1 | missing(final_enabled))
+        quietly replace final_status = 7 if __fm==3 & final_answered==1 & final_enabled==0
+        quietly replace final_status = 2 if __fm==3 & final_answered==0 & final_enabled==0
+        quietly replace final_status = 3 if __fm==3 & final_answered==0 & final_enabled==1
+        quietly replace final_status = 4 if __fm==3 & final_answered==0 & missing(final_enabled)
+        quietly gen strL final_note = ""
+        quietly replace final_note = "answered in final data" if final_status==1
+        quietly replace final_note = "answered although final questionnaire logic disables it" if final_status==7
+        quietly replace final_note = "blank as expected - final questionnaire logic disables it" if final_status==2
+        quietly replace final_note = "blank although final questionnaire logic enables it" if final_status==3
+        quietly replace final_note = "blank and final enablement could not be evaluated" if final_status==4
+        quietly replace final_note = "interview not found in supplied data() file" if final_status==5
+        quietly drop __fm
+        quietly append using `"`ACC'"'
+        quietly save `"`ACC'"', replace
+    }
+
+    quietly use `"`ACC'"', clear
+    quietly sort interview__id sk_run affected_qdisp
+    quietly save `"`saving'"', replace
+    quietly count if final_status==1
+    return scalar n_answered = r(N)
+    quietly count if final_status==7
+    return scalar n_answereddisabled = r(N)
+    quietly count if final_status==2
+    return scalar n_expectedblank = r(N)
+    quietly count if inlist(final_status,3,4,5,6,7)
+    return scalar n_check = r(N)
+end
+
+* ---- final exported value for the nearby/linked AnswerSet ---------------------
+* The answer transition shown in a removal card is historical. This helper keeps
+* that event separate from the current value in the supplied final main export.
+program _suso_para_triggerfinal, rclass
+    version 14.2
+    syntax using/ , DATA(string) SAVing(string)
+    confirm file `"`using'"'
+    confirm file `"`data'"'
+
+    tempfile CASES IDS FD ACC VC ONE
+    quietly use `"`using'"', clear
+    foreach v in interview__id sk_run trigger trigger_roster trigval oldval qx_optmap qx_type {
+        capture confirm variable `v'
+        if _rc {
+            di as err "suso paradata: internal historical/final value check is missing `v'."
+            exit 459
+        }
+    }
+    quietly bysort interview__id sk_run: keep if _n==1
+    quietly save `"`CASES'"'
+
+    preserve
+        quietly keep interview__id
+        quietly duplicates drop
+        quietly save `"`IDS'"'
+    restore
+
+    quietly use `"`data'"', clear
+    capture confirm string variable interview__id
+    if _rc {
+        di as err "suso paradata skips: data() must contain string interview__id."
+        exit 459
+    }
+    quietly merge m:1 interview__id using `"`IDS'"', keep(match) nogenerate
+    tempvar __dup
+    quietly bysort interview__id: gen byte `__dup' = _N>1
+    quietly count if `__dup'
+    if r(N)>0 quietly bysort interview__id: keep if _n==1
+    quietly drop `__dup'
+    quietly save `"`FD'"'
+
+    quietly use `"`CASES'"', clear
+    quietly keep if 0
+    quietly gen byte trigger_final_status = .
+    quietly gen strL trigger_final_value = ""
+    quietly gen strL trigger_final_label = ""
+    quietly gen strL trigger_final_show = ""
+    quietly gen byte trigger_final_matches_event = .
+    quietly gen byte trigger_final_returns_old = .
+    quietly gen strL trigger_final_text = ""
+    quietly save `"`ACC'"', replace
+
+    quietly use `"`CASES'"', clear
+    quietly levelsof trigger, local(tvars) clean
+    foreach v of local tvars {
+        quietly use `"`CASES'"', clear
+        quietly keep if trigger=="`v'"
+        local qtype `"`=lower(qx_type[1])'"'
+        local ismulti = strpos(`"`qtype'"',"multi")>0 | strpos(`"`qtype'"',"multy")>0
+        local istextlist = strpos(`"`qtype'"',"text list")>0 | strpos(`"`qtype'"',"textlist")>0
+        local iscombo = strpos(`"`qtype'"',"combo")>0
+        local isordered = strpos(`"`qtype'"',"ordered")>0 | strpos(`"`qtype'"',"rank")>0
+
+        * Main exports have one row per interview and cannot identify roster rows.
+        preserve
+            quietly keep if trigger_roster!=""
+            if _N>0 {
+                quietly gen byte trigger_final_status = 4
+                quietly gen strL trigger_final_value = ""
+                quietly gen strL trigger_final_label = ""
+                quietly gen strL trigger_final_show = ""
+                quietly gen byte trigger_final_matches_event = .
+                quietly gen byte trigger_final_returns_old = .
+                quietly gen strL trigger_final_text = ///
+                    "Final export value was not checked because this is a roster instance; use the corresponding roster export."
+                quietly append using `"`ACC'"'
+                quietly save `"`ACC'"', replace
+            }
+        restore
+        quietly keep if trigger_roster==""
+        if _N==0 continue
+        quietly save `"`VC'"', replace
+
+        quietly use `"`FD'"', clear
+        local splitvars ""
+        capture confirm variable `v', exact
+        if _rc {
+            capture unab splitvars : `v'__*
+            if _rc {
+                quietly use `"`VC'"', clear
+                quietly gen byte trigger_final_status = 3
+                quietly gen strL trigger_final_value = ""
+                quietly gen strL trigger_final_label = ""
+                quietly gen strL trigger_final_show = ""
+                quietly gen byte trigger_final_matches_event = .
+                quietly gen byte trigger_final_returns_old = .
+                quietly gen strL trigger_final_text = ///
+                    "Final export value was not checked because the answer-event variable is not present in data()."
+                quietly append using `"`ACC'"'
+                quietly save `"`ACC'"', replace
+                continue
+            }
+        }
+
+        * Ordered/ranked multi-select families encode ranks against option-code
+        * suffixes, while old metadata may not identify whether a non-dummy
+        * family is ordered or combobox. Do not manufacture an exact value in
+        * either ambiguous case; return an explicit not-evaluable status.
+        local splitunsupported 0
+        local splitwhy ""
+        if `"`splitvars'"'!="" & `isordered' {
+            local splitunsupported 1
+            local splitwhy "ordered/ranked split multi-select export"
+        }
+        else if `"`splitvars'"'!="" & `ismulti' & !`iscombo' {
+            tempvar __nondummy
+            quietly gen byte `__nondummy' = 0
+            foreach sv of local splitvars {
+                capture confirm numeric variable `sv'
+                if !_rc quietly replace `__nondummy' = 1 if ///
+                    !missing(`sv') & !inlist(`sv',0,1)
+                else quietly replace `__nondummy' = 1 if !inlist( ///
+                    lower(strtrim(`sv')),"","0","1","false","true", ///
+                    "no","yes","##n/a##")
+            }
+            quietly count if `__nondummy'
+            if r(N)>0 {
+                local splitunsupported 1
+                local splitwhy "split multi-select export with unknown presentation"
+            }
+            quietly drop `__nondummy'
+        }
+        if `splitunsupported' {
+            quietly use `"`VC'"', clear
+            quietly gen byte trigger_final_status = 6
+            quietly gen strL trigger_final_value = ""
+            quietly gen strL trigger_final_label = ""
+            quietly gen strL trigger_final_show = ""
+            quietly gen byte trigger_final_matches_event = .
+            quietly gen byte trigger_final_returns_old = .
+            quietly gen strL trigger_final_text = ///
+                "Final export value was not compared because `splitwhy' cannot be reconstructed exactly without presentation metadata."
+            quietly append using `"`ACC'"'
+            quietly save `"`ACC'"', replace
+            continue
+        }
+
+        if `"`splitvars'"'=="" {
+            capture confirm numeric variable `v'
+            if !_rc quietly gen strL trigger_final_value = ///
+                cond(missing(`v'), "", strtrim(string(`v', "%21.0g")))
+            else quietly gen strL trigger_final_value = ///
+                cond(`v'=="" | `v'=="##N/A##", "", `v')
+        }
+        else {
+            * Reconstruct the documented parent value. Checkbox multi-select
+            * dummies contribute their option-code suffix; combobox slots and
+            * ordinary split values contribute their cell value. Text lists use
+            * a vertical bar, while categorical values use commas.
+            local splitsep = cond(`istextlist',"|",",")
+            quietly gen strL trigger_final_value = ""
+            foreach sv of local splitvars {
+                local suffix = substr("`sv'",length("`v'")+3,.)
+                tempvar svtxt take
+                capture confirm numeric variable `sv'
+                if !_rc {
+                    quietly gen strL `svtxt' = cond(missing(`sv'),"",      ///
+                        strtrim(string(`sv',"%21.0g")))
+                    if `ismulti' & !`iscombo' {
+                        quietly gen byte `take' = (`sv'==1) if !missing(`sv')
+                        quietly replace `svtxt' = "`suffix'" if `take'==1
+                        quietly replace `svtxt' = "" if `take'!=1
+                    }
+                }
+                else {
+                    quietly gen strL `svtxt' = cond(`sv'=="" | `sv'=="##N/A##","",`sv')
+                    if `ismulti' & !`iscombo' {
+                        quietly gen byte `take' = !inlist(lower(strtrim(`sv')),"","0","false","no")
+                        quietly replace `svtxt' = "`suffix'" if `take'==1
+                        quietly replace `svtxt' = "" if `take'!=1
+                    }
+                }
+                quietly replace trigger_final_value = trigger_final_value +   ///
+                    cond(trigger_final_value!="" & `svtxt'!="","`splitsep'","") + `svtxt'
+                quietly drop `svtxt'
+                capture quietly drop `take'
+            }
+        }
+        quietly keep interview__id trigger_final_value
+        quietly save `"`ONE'"', replace
+
+        quietly use `"`VC'"', clear
+        * ONE contains every removal-case interview in the final export, while
+        * VC contains only runs whose selected trigger is `v'.  Keeping using-only
+        * rows would create observations with missing sk_run and make the final
+        * run-key isid fail (notably under vars() on heterogeneous interviews).
+        quietly merge m:1 interview__id using `"`ONE'"', ///
+            keep(master match) gen(__tf)
+        quietly gen byte trigger_final_status = 5 if __tf==1
+        quietly replace trigger_final_status = 2 if __tf==3 & trigger_final_value==""
+        quietly replace trigger_final_status = 1 if __tf==3 & trigger_final_value!=""
+        quietly gen strL trigger_final_label = ""
+        quietly gen strL __dummy_label = ""
+        mata: _suso_qx_apply_labels("trigger_final_value", "trigger_final_value", ///
+            "qx_optmap", "trigger_final_label", "__dummy_label")
+        quietly drop __dummy_label __tf
+        quietly gen strL trigger_final_show = trigger_final_value + ///
+            cond(trigger_final_label!="", " - " + trigger_final_label, "")
+
+        tempvar __fn __tn __on
+        quietly gen double `__fn' = real(trigger_final_value)
+        quietly gen double `__tn' = real(trigval)
+        quietly gen double `__on' = real(oldval)
+        quietly gen byte trigger_final_matches_event = .
+        quietly replace trigger_final_matches_event = ///
+            cond(!missing(`__fn') & !missing(`__tn'), `__fn'==`__tn', ///
+            trigger_final_value==trigval) if trigger_final_status==1
+        quietly gen byte trigger_final_returns_old = .
+        quietly replace trigger_final_returns_old = ///
+            cond(!missing(`__fn') & !missing(`__on'), `__fn'==`__on', ///
+            trigger_final_value==oldval) if trigger_final_status==1 & oldval!=""
+        if `ismulti' {
+            * Multi-select order is not semantically meaningful. Compare unique,
+            * sorted code sets so "1,3" and "3,1" match.
+            forvalues rr = 1/`=_N' {
+                if trigger_final_status[`rr']!=1 continue
+                local fset = subinstr(trigger_final_value[`rr'],","," ",.)
+                local eset = subinstr(trigval[`rr'],","," ",.)
+                local oset = subinstr(oldval[`rr'],","," ",.)
+                foreach which in f e o {
+                    local norm ""
+                    foreach token of local `which'set {
+                        local number = real("`token'")
+                        if !missing(`number') local token = strtrim(string(`number',"%21.0g"))
+                        local norm "`norm' `token'"
+                    }
+                    local `which'set = strtrim("`norm'")
+                }
+                local fset : list uniq fset
+                local eset : list uniq eset
+                local oset : list uniq oset
+                local fset : list sort fset
+                local eset : list sort eset
+                local oset : list sort oset
+                quietly replace trigger_final_matches_event = ("`fset'"=="`eset'") in `rr'
+                if oldval[`rr']!="" quietly replace trigger_final_returns_old = ///
+                    ("`fset'"=="`oset'") in `rr'
+            }
+        }
+
+        quietly gen strL trigger_final_text = ""
+        quietly replace trigger_final_text = trigger + ///
+            " = " + trigger_final_show + ". It matches the historical event value." ///
+            if trigger_final_status==1 & trigger_final_matches_event==1
+        quietly replace trigger_final_text = trigger + ///
+            " = " + trigger_final_show + ". The historical event was not final; " + ///
+            "the export returned to the earlier value." ///
+            if trigger_final_status==1 & trigger_final_matches_event==0 & ///
+            trigger_final_returns_old==1
+        quietly replace trigger_final_text = trigger + ///
+            " = " + trigger_final_show + ". This differs from the historical event value " + ///
+            trigval + "." if trigger_final_status==1 & ///
+            trigger_final_matches_event==0 & trigger_final_returns_old!=1
+        quietly replace trigger_final_text = trigger + ///
+            " is blank." if trigger_final_status==2
+        quietly replace trigger_final_text = ///
+            "Final export row was not found for this interview." if trigger_final_status==5
+
+        quietly append using `"`ACC'"'
+        quietly save `"`ACC'"', replace
+    }
+
+    quietly use `"`ACC'"', clear
+    quietly keep interview__id sk_run trigger_final_status trigger_final_value   ///
+        trigger_final_label trigger_final_show trigger_final_matches_event       ///
+        trigger_final_returns_old trigger_final_text
+    quietly sort interview__id sk_run
+    quietly by interview__id sk_run: keep if _n==1
+    quietly isid interview__id sk_run
+    quietly save `"`saving'"', replace
+    quietly count if trigger_final_status==1 & trigger_final_matches_event==0
+    return scalar ndifferent = r(N)
+    quietly count if trigger_final_status==1 & trigger_final_returns_old==1
+    return scalar nreturnedold = r(N)
+end
+
+* ---- skips: historical answer-removal runs and nearby/linked answers --------
+* A "cascade" is a compact run of >= cascade() consecutive AnswerRemoved events
+* near an AnswerSet. It is a screening signal, not proof of causation or proof
+* that the affected questions remain blank in the final interview.
 program _suso_para_skips, rclass
     version 14.2
     syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ///
-        QX(string) MESSages(string) HTML(string) DETail(string) VARS(string) FULL ]
+        QX(string) DATA(string) MESSages(string) HTML(string) DETail(string) VARS(string) ///
+        FULL ALLRoles ]
     _suso_para_need events
-    _suso_para_varsel , vars(`"`vars'"')
+    quietly _suso_para_derive , gapmins(30) fastsecs(2) `allroles'
+    if `"`qx'"'!=""   local qx   = subinstr(`"`qx'"',   "\", "/", .)
+    if `"`data'"'!="" local data = subinstr(`"`data'"', "\", "/", .)
+    if `"`data'"'!="" {
+        capture confirm file `"`data'"'
+        if _rc {
+            di as err `"suso paradata skips: final data file not found: `data'"'
+            exit 601
+        }
+    }
     if `cascade'<2 {
         di as err "suso paradata skips: cascade() is the minimum run of AnswerRemoved events; use 2 or more."
         exit 198
@@ -3032,17 +3802,25 @@ program _suso_para_skips, rclass
         exit 198
     }
 
-    * parse the questionnaire HTML first (question wording for the messages)
+    * Parse questionnaire metadata. qx_enable is the EFFECTIVE condition:
+    * section + subsection/group + item-level conditions. Keeping the components
+    * separately lets final-data adjudication apply three-valued logic correctly:
+    * a false parent condition disables a question even when a child referent is blank.
     local hasqx 0
-    tempfile QXT
+    tempfile QXT QXMETA
     if `"`qx'"'!="" {
         preserve
         _suso_para_qxload , file(`"`qx'"')
-        quietly keep qx_var qx_text qx_section qx_enable
+        quietly keep qx_var qx_type qx_text qx_section qx_subsection qx_enable  ///
+            qx_enable_deps qx_section_enable qx_group_enable qx_item_enable       ///
+            qx_calc qx_optmap qx_section_tri qx_group_tri qx_item_tri
         quietly bysort qx_var: keep if _n==1
+        quietly save `"`QXMETA'"'
         forvalues j = 1/`=_N' {
-            local en_`=qx_var[`j']' = substr(qx_enable[`j'], 1, 300)
-            local sec_`=qx_var[`j']' = substr(qx_section[`j'], 1, 40)
+            local known_`=qx_var[`j']' 1
+            local en_`=qx_var[`j']' = substr(qx_enable[`j'], 1, 1600)
+            local deps_`=qx_var[`j']' = substr(qx_enable_deps[`j'], 1, 4000)
+            local sec_`=qx_var[`j']' = substr(qx_section[`j'], 1, 80)
         }
         quietly rename qx_var trigger
         quietly save `"`QXT'"'
@@ -3055,63 +3833,133 @@ program _suso_para_skips, rclass
     if !_rc local hasvar 1
     if !`hasvar' di as txt "suso paradata skips: note — no parameters column (reduced export?); cascades are detected but trigger variables cannot be named."
 
-    capture drop sk_*
-
-    * responsible (same rule as timing: at the last answer, else at the last event)
-    quietly gen sk_resp = ""
-    capture confirm string variable responsible
-    if !_rc {
-        tempvar isa
-        quietly gen byte `isa' = para_ans
-        quietly bysort interview__id (`isa' para_ord para_seq): replace sk_resp = responsible[_N]
+    * Backfill question-instance fields when events were prepared by an older
+    * build. Exact roster-aware transitions require para_qkey/para_roster.
+    if `hasvar' {
+        capture confirm variable para_val
+        if _rc quietly gen strL para_val = ""
+        capture confirm variable para_roster
+        if _rc quietly gen str160 para_roster = ""
+        capture confirm variable para_qkey
+        if _rc {
+            quietly gen str244 para_qkey = para_var if para_var!=""
+            di as txt "  note: this prepared event table predates roster-aware keys; non-roster transitions remain exact, roster transitions should be rebuilt with {bf:suso paradata load}."
+        }
+        capture confirm variable para_qdisp
+        if _rc quietly gen str244 para_qdisp = para_var if para_var!=""
     }
 
-    * carry the most recent AnswerSet (variable + time + value) forward through the stream
-    if `hasvar' quietly gen sk_lastvar = para_var if para_ans
-    else        quietly gen sk_lastvar = "(unnamed)" if para_ans
-    quietly gen double sk_lastts = para_tsu if para_ans
-    quietly gen sk_lastval = ""
-    if `hasvar' {
-        capture confirm variable parameters
-        if !_rc {
-            tempvar pr p2
-            quietly gen strL `pr' = substr(parameters, strpos(parameters,"||")+2, .) ///
-                if para_ans & strpos(parameters,"||")>0
-            quietly gen long `p2' = strpos(`pr',"||")
-            quietly replace sk_lastval = substr(cond(`p2'>0, substr(`pr',1,`p2'-1), `pr'), 1, 60) if para_ans
+    capture drop sk_*
+    quietly gen byte sk_isrem = para_fieldrem
+
+    * vars() is an output filter only. Cascade construction must always use the
+    * untouched event stream; otherwise dropping intervening events changes
+    * adjacency and can manufacture a removal run that never occurred.
+    quietly gen byte sk_vsel = 1
+    if `"`vars'"'!="" & `hasvar' {
+        quietly replace sk_vsel = 0
+        foreach p of local vars {
+            quietly replace sk_vsel = 1 if (para_fieldans | para_fieldrem) & strmatch(para_var, "`p'")
         }
     }
-    quietly gen sk_actor = ""
+    else if `"`vars'"'!="" & !`hasvar' {
+        di as txt "  vars(): ignored because this reduced paradata has no question-variable names."
+    }
+
+    * Final state is computed per exact question instance (variable + roster
+    * address). Keep the full state history as well so the candidate AnswerSet can
+    * be described as changed, repeated, first observed, or re-entered.
+    tempfile FSTATE HSTATE
+    local hasfstate 0
+    local hashstate 0
+    if `hasvar' {
+        preserve
+        quietly keep if (para_ans | para_rem) & para_qkey!=""
+        if _N>0 {
+            quietly gen str16 hist_event = cond(para_ans,"answerset","answerremoved")
+            quietly gen strL hist_val = cond(para_ans,para_val,"")
+            quietly gen str244 trigger_qkey = para_qkey
+            quietly gen double hist_ord = para_ord
+            quietly gen double hist_seq = para_seq
+            quietly gen double hist_tsu = para_tsu
+            quietly keep interview__id trigger_qkey hist_event hist_val ///
+                hist_ord hist_seq hist_tsu
+            quietly save `"`HSTATE'"'
+            local hashstate 1
+        }
+        restore
+
+        preserve
+        quietly keep if (para_ans | para_rem) & para_qkey!=""
+        if _N>0 {
+            sort interview__id para_qkey para_ord para_seq
+            quietly by interview__id para_qkey: keep if _n==_N
+            quietly gen byte sk_finalans = para_ans
+            quietly keep interview__id para_qkey sk_finalans
+            quietly save `"`FSTATE'"'
+            local hasfstate 1
+        }
+        restore
+    }
+
+    * responsible (same rule as timing: at the last answer, else at the last event)
+    quietly gen str244 sk_resp = ""
     capture confirm string variable responsible
-    if !_rc quietly replace sk_actor = responsible
-    quietly gen sk_nextvar = sk_lastvar
-    quietly gen double sk_nextts = sk_lastts
-    quietly gen sk_nextval = sk_lastval
+    if !_rc {
+        tempvar resppri
+        quietly gen byte `resppri' = para_ivw + para_fieldans
+        quietly bysort interview__id (`resppri' para_ord para_seq): ///
+            replace sk_resp = responsible[_N]
+    }
+
+    * Carry the exact preceding and following AnswerSet through the stream.
+    * Along with the variable and value, retain roster address, instance key,
+    * event order, file-row tiebreaker, and timestamp.
+    if `hasvar' quietly gen str80 sk_lastvar = para_var if para_fieldans
+    else        quietly gen str80 sk_lastvar = "(unnamed)" if para_fieldans
+    quietly gen strL   sk_lastval    = para_val if para_fieldans
+    quietly gen str160 sk_lastroster = para_roster if para_fieldans
+    quietly gen str244 sk_lastqkey   = para_qkey if para_fieldans
+    quietly gen double sk_lastts     = para_tsu if para_fieldans
+    quietly gen double sk_lastord    = para_ord if para_fieldans
+    quietly gen double sk_lastseq    = para_seq if para_fieldans
+
+    quietly gen str120 sk_actor = ""
+    capture confirm string variable responsible
+    if !_rc quietly replace sk_actor = substr(responsible,1,120)
+
+    quietly gen str80  sk_nextvar    = sk_lastvar
+    quietly gen strL   sk_nextval    = sk_lastval
+    quietly gen str160 sk_nextroster = sk_lastroster
+    quietly gen str244 sk_nextqkey   = sk_lastqkey
+    quietly gen double sk_nextts     = sk_lastts
+    quietly gen double sk_nextord    = sk_lastord
+    quietly gen double sk_nextseq    = sk_lastseq
+
     quietly bysort interview__id (para_ord para_seq): ///
-        replace sk_lastvar = sk_lastvar[_n-1] if sk_lastvar=="" & _n>1
-    quietly by interview__id: replace sk_lastts = sk_lastts[_n-1] if missing(sk_lastts) & _n>1
-    quietly by interview__id: replace sk_lastval = sk_lastval[_n-1] if sk_lastval=="" & _n>1
-    * SuSo logs the removal run BEFORE the gate answer that caused it, so also
-    * carry the NEXT AnswerSet backward - it is usually the true gate
+        replace sk_lastvar = sk_lastvar[_n-1] if missing(sk_lastseq) & _n>1
+    quietly by interview__id: replace sk_lastval = sk_lastval[_n-1] if missing(sk_lastseq) & _n>1
+    quietly by interview__id: replace sk_lastroster = sk_lastroster[_n-1] if missing(sk_lastseq) & _n>1
+    quietly by interview__id: replace sk_lastqkey = sk_lastqkey[_n-1] if missing(sk_lastseq) & _n>1
+    quietly by interview__id: replace sk_lastts = sk_lastts[_n-1] if missing(sk_lastseq) & _n>1
+    quietly by interview__id: replace sk_lastord = sk_lastord[_n-1] if missing(sk_lastseq) & _n>1
+    quietly by interview__id: replace sk_lastseq = sk_lastseq[_n-1] if missing(sk_lastseq) & _n>1
+
+    * SuSo may record a removal run before the AnswerSet that triggered it, so
+    * carry the next AnswerSet backward as an equally explicit candidate.
     gsort interview__id -para_ord -para_seq
-    quietly by interview__id: replace sk_nextvar = sk_nextvar[_n-1] if sk_nextvar=="" & _n>1
-    quietly by interview__id: replace sk_nextts = sk_nextts[_n-1] if missing(sk_nextts) & _n>1
-    quietly by interview__id: replace sk_nextval = sk_nextval[_n-1] if sk_nextval=="" & _n>1
+    quietly by interview__id: replace sk_nextvar = sk_nextvar[_n-1] if missing(sk_nextseq) & _n>1
+    quietly by interview__id: replace sk_nextval = sk_nextval[_n-1] if missing(sk_nextseq) & _n>1
+    quietly by interview__id: replace sk_nextroster = sk_nextroster[_n-1] if missing(sk_nextseq) & _n>1
+    quietly by interview__id: replace sk_nextqkey = sk_nextqkey[_n-1] if missing(sk_nextseq) & _n>1
+    quietly by interview__id: replace sk_nextts = sk_nextts[_n-1] if missing(sk_nextseq) & _n>1
+    quietly by interview__id: replace sk_nextord = sk_nextord[_n-1] if missing(sk_nextseq) & _n>1
+    quietly by interview__id: replace sk_nextseq = sk_nextseq[_n-1] if missing(sk_nextseq) & _n>1
     sort interview__id para_ord para_seq
 
-    * lookups for the review page: answer history (old gate values) + interview keys
-    tempfile AVF SKKEY
-    local hasav 0
+    * Interview keys for the review page.
+    tempfile SKKEY
     local haskey 0
-    preserve
-    quietly keep if para_ans & sk_lastvar!="" & sk_lastvar!="(unnamed)"
-    if _N>0 {
-        local hasav 1
-        quietly keep interview__id sk_lastvar sk_lastval para_tsu
-        rename (sk_lastvar sk_lastval) (trigger av_val)
-        quietly save `"`AVF'"'
-    }
-    restore
     preserve
     quietly keep if para_ev=="keyassigned"
     capture confirm string variable parameters
@@ -3124,91 +3972,580 @@ program _suso_para_skips, rclass
     }
     restore
 
-    * runs of consecutive AnswerRemoved events
-    tempvar rise
-    quietly by interview__id: gen byte `rise' = para_rem & para_rem[_n-1]!=1
+    * Runs are constructed on the FULL event stream. The whole removal run must
+    * be compact, and a candidate gate may be the nearest AnswerSet immediately
+    * before OR after the run (SuSo versions differ in event ordering).
+    sort interview__id para_ord para_seq
+    tempvar rise rmin rmax rspan dtprev dtnext prevnear nextnear
+    quietly by interview__id: gen byte `rise' = sk_isrem & sk_isrem[_n-1]!=1
     quietly by interview__id: gen double sk_run = sum(`rise')
-    quietly bysort interview__id sk_run para_rem (para_ord para_seq): ///
-        gen long sk_len = _N if para_rem
-    quietly by interview__id sk_run para_rem: gen byte sk_first = (_n==1) & para_rem
+    quietly bysort interview__id sk_run sk_isrem (para_ord para_seq): ///
+        gen long sk_len = _N if sk_isrem
+    quietly by interview__id sk_run sk_isrem: gen byte sk_first = (_n==1) & sk_isrem
+    quietly egen double `rmin' = min(cond(sk_isrem, para_tsu, .)), by(interview__id sk_run)
+    quietly egen double `rmax' = max(cond(sk_isrem, para_tsu, .)), by(interview__id sk_run)
+    quietly gen double `rspan' = `rmax' - `rmin'
+    quietly gen double `dtprev' = para_tsu - sk_lastts if sk_first
+    quietly gen double `dtnext' = sk_nextts - `rmax' if sk_first
+    quietly gen byte `prevnear' = sk_first & sk_len>=`cascade' & !missing(sk_len) ///
+        & inrange(`dtprev', 0, `window'*1000) & `rspan'<=`window'*1000 & sk_lastvar!=""
+    quietly gen byte `nextnear' = sk_first & sk_len>=`cascade' & !missing(sk_len) ///
+        & inrange(`dtnext', 0, `window'*1000) & `rspan'<=`window'*1000 & sk_nextvar!=""
+    quietly gen byte sk_prevnear = `prevnear'
+    quietly gen byte sk_nextnear = `nextnear'
+    quietly gen byte sk_useprev = sk_prevnear & (!sk_nextnear | (`dtprev'<=`dtnext'))
+    quietly gen byte sk_casc1 = sk_prevnear | sk_nextnear
+    tempvar runiscasc
+    quietly egen byte `runiscasc' = max(sk_casc1), by(interview__id sk_run)
+    quietly gen byte sk_casc = sk_isrem & `runiscasc'
+    quietly gen str80 sk_trig = cond(sk_useprev, sk_lastvar, sk_nextvar) if sk_casc1
+    quietly gen strL sk_trigval = cond(sk_useprev, sk_lastval, sk_nextval) if sk_casc1
+    quietly gen str160 sk_trigroster = cond(sk_useprev, sk_lastroster, sk_nextroster) if sk_casc1
+    quietly gen str244 sk_trigqkey = cond(sk_useprev, sk_lastqkey, sk_nextqkey) if sk_casc1
+    quietly gen double sk_trigts = cond(sk_useprev, sk_lastts, sk_nextts) if sk_casc1
+    quietly gen double sk_trigord = cond(sk_useprev, sk_lastord, sk_nextord) if sk_casc1
+    quietly gen double sk_trigseq = cond(sk_useprev, sk_lastseq, sk_nextseq) if sk_casc1
+    foreach sv in sk_trig sk_trigval sk_trigroster sk_trigqkey {
+        quietly bysort interview__id sk_run (para_ord para_seq): ///
+            replace `sv' = `sv'[_n-1] if `sv'=="" & _n>1
+    }
+    foreach nv in sk_useprev sk_trigts sk_trigord sk_trigseq {
+        quietly bysort interview__id sk_run (para_ord para_seq): ///
+            replace `nv' = `nv'[_n-1] if missing(`nv') & _n>1
+    }
+    quietly replace sk_trig = "" if !sk_casc
+    quietly replace sk_trigval = "" if !sk_casc
+    quietly replace sk_trigroster = "" if !sk_casc
+    quietly replace sk_trigqkey = "" if !sk_casc
+    quietly replace sk_useprev = . if !sk_casc
+    quietly replace sk_trigts = . if !sk_casc
+    quietly replace sk_trigord = . if !sk_casc
+    quietly replace sk_trigseq = . if !sk_casc
 
-    * cascade test on the first removal of each run (missing-safe: . <= x is false)
-    quietly gen byte sk_casc1 = sk_first & sk_len>=`cascade' & !missing(sk_len)   ///
-        & (para_tsu - sk_lastts) <= `window'*1000 & sk_lastvar!=""
-    quietly by interview__id sk_run para_rem: gen byte sk_casc = (sk_casc1[1]==1) if para_rem
-    quietly replace sk_casc = 0 if missing(sk_casc)
-    quietly gen sk_trig = sk_lastvar if sk_casc1
-    quietly by interview__id sk_run para_rem: replace sk_trig = sk_trig[1] if sk_casc & para_rem
+    * Apply vars() only AFTER a run exists. Keep a run when either its candidate
+    * trigger or at least one affected question matches the requested patterns.
+    if `"`vars'"'!="" & `hasvar' {
+        tempvar remsel runsel trigsel runtrigsel
+        quietly gen byte `remsel' = sk_vsel & sk_isrem
+        quietly egen byte `runsel' = max(`remsel'), by(interview__id sk_run)
+        quietly gen byte `trigsel' = 0
+        foreach p of local vars {
+            quietly replace `trigsel' = 1 if sk_casc1 & ///
+                ((sk_prevnear & strmatch(sk_lastvar, "`p'")) | ///
+                 (sk_nextnear & strmatch(sk_nextvar, "`p'")))
+        }
+        quietly egen byte `runtrigsel' = max(`trigsel'), by(interview__id sk_run)
+        quietly replace sk_casc1 = 0 if sk_casc1 & `runsel'==0 & `runtrigsel'==0
+        quietly replace sk_casc  = 0 if sk_casc  & `runsel'==0 & `runtrigsel'==0
+        quietly replace sk_trig = "" if !sk_casc
+        quietly replace sk_trigval = "" if !sk_casc
+        quietly replace sk_trigroster = "" if !sk_casc
+        quietly replace sk_trigqkey = "" if !sk_casc
+        quietly replace sk_trigts = . if !sk_casc
+        quietly replace sk_trigord = . if !sk_casc
+        quietly replace sk_trigseq = . if !sk_casc
+    }
+
+    * Determine the final state of each distinct question INSTANCE affected by
+    * each run. Roster rows with the same variable name remain separate.
+    if `hasfstate' {
+        quietly merge m:1 interview__id para_qkey using `"`FSTATE'"', ///
+            keep(master match) nogenerate
+    }
+    else quietly gen byte sk_finalans = .
+    tempvar qtag
+    if `hasvar' {
+        quietly egen byte `qtag' = tag(interview__id sk_run para_qkey) ///
+            if sk_casc & sk_isrem & para_qkey!=""
+        quietly replace `qtag' = 0 if missing(`qtag')
+        quietly gen byte sk_qtag = `qtag'
+    }
+    else quietly gen byte sk_qtag = sk_casc
+    quietly gen byte sk_reanswered = sk_qtag & sk_finalans==1
+    quietly gen byte sk_open       = sk_qtag & sk_finalans==0
+    quietly gen byte sk_unknown    = sk_qtag & missing(sk_finalans)
+
+    * One row per affected question instance. This is later compared with the
+    * supplied final export and the effective questionnaire logic.
+    tempfile CASEV FINALV FINALCASE FINALINT
+    local hascasev 0
+    if `hasvar' {
+        preserve
+        quietly keep if sk_qtag
+        quietly keep interview__id sk_run para_var para_roster para_qkey para_qdisp
+        quietly rename (para_var para_roster para_qkey para_qdisp)               ///
+            (affected_var affected_roster affected_qkey affected_qdisp)
+        quietly save `"`CASEV'"'
+        local hascasev 1
+        restore
+    }
 
     quietly count if sk_casc1
     local ncasc = r(N)
     quietly count if sk_casc
-    local nwiped = r(N)
+    local nwiped = r(N)                 // backward-compatible: removal-event count
+    local nremevents = `nwiped'
+    quietly count if sk_qtag
+    local naffectedqall = r(N)          // distinct question-within-run cases
+    quietly count if sk_reanswered
+    local nreansweredall = r(N)
+    quietly count if sk_open
+    local nopenall = r(N)
+    quietly count if sk_unknown
+    local nunknownall = r(N)
 
-    * ---- cascade-level detail: who, when, trigger value, and the erased variables --
+    * ---- cascade-level detail: exact candidate transition + affected states ----
     local hasdet 0
+    local hasfinaldata 0
+    local nfinalansweredall 0
+    local nanswereddisabledall 0
+    local nexpectedblankall 0
+    local nblankenabledall 0
+    local nlogicunknownall 0
+    local nnotindataall 0
+    local nfinalcheckall = `nopenall' + `nunknownall'
     tempfile skdet
     if `ncasc'>0 {
         local hasdet 1
         preserve
         quietly keep if sk_casc
-        quietly gen sk_val = sk_lastval
         sort interview__id sk_run para_ord para_seq
         quietly by interview__id sk_run: gen long sk_k = _n
+
+        * Build distinct, roster-aware lists for all affected instances and for
+        * each final-state bucket shown to supervisors.
+        quietly gen strL sk_wvars = ""
         quietly gen strL sk_wl = ""
+        quietly gen strL sk_wr = ""
+        quietly gen strL sk_wo = ""
+        quietly gen strL sk_wu = ""
         if `hasvar' {
-            quietly by interview__id sk_run: replace sk_wl =                     ///
-                cond(sk_k==1, para_var, cond(sk_k<=8, sk_wl[_n-1]+", "+para_var, sk_wl[_n-1]))
+            quietly by interview__id sk_run: replace sk_wvars = ///
+                cond(_n==1, cond(sk_qtag, para_var, ""), ///
+                cond(sk_qtag, sk_wvars[_n-1] + cond(sk_wvars[_n-1]=="", "", ", ") + para_var, sk_wvars[_n-1]))
+            quietly by interview__id sk_run: replace sk_wl = ///
+                cond(_n==1, cond(sk_qtag, para_qdisp, ""), ///
+                cond(sk_qtag, sk_wl[_n-1] + cond(sk_wl[_n-1]=="", "", ", ") + para_qdisp, sk_wl[_n-1]))
+            quietly by interview__id sk_run: replace sk_wr = ///
+                cond(_n==1, cond(sk_reanswered, para_qdisp, ""), ///
+                cond(sk_reanswered, sk_wr[_n-1] + cond(sk_wr[_n-1]=="", "", ", ") + para_qdisp, sk_wr[_n-1]))
+            quietly by interview__id sk_run: replace sk_wo = ///
+                cond(_n==1, cond(sk_open, para_qdisp, ""), ///
+                cond(sk_open, sk_wo[_n-1] + cond(sk_wo[_n-1]=="", "", ", ") + para_qdisp, sk_wo[_n-1]))
+            quietly by interview__id sk_run: replace sk_wu = ///
+                cond(_n==1, cond(sk_unknown, para_qdisp, ""), ///
+                cond(sk_unknown, sk_wu[_n-1] + cond(sk_wu[_n-1]=="", "", ", ") + para_qdisp, sk_wu[_n-1]))
         }
-        collapse (last) wl=sk_wl avar=sk_nextvar aval=sk_nextval               ///
-            (max) ats=sk_nextts tend=para_tsu                                    ///
-            (count) nrem=sk_k (min) ts0=para_tsu                                 ///
-            (first) trigger=sk_trig trigval=sk_val actor=sk_actor resp=sk_resp,  ///
-            by(interview__id sk_run) fast
-        quietly replace avar = "" if missing(ats) | (ats - tend) > `window'*1000
-        * adjudicate the gate against the questionnaire skip conditions:
-        * conf 2 = erased questions depend on the NEXT answer (true gate, re-attributed)
-        * conf 1 = they depend on the previous answer (original attribution stands)
-        * conf 0 = neither (timing-only); allsvc = erased items have no conditions
+
+        collapse (last) wvars=sk_wvars wl=sk_wl wl_reanswered=sk_wr             ///
+            wl_open=sk_wo wl_unknown=sk_wu                                      ///
+            avar=sk_nextvar aval=sk_nextval aroster=sk_nextroster               ///
+            aqkey=sk_nextqkey aord=sk_nextord aseq=sk_nextseq ats=sk_nextts     ///
+            pvar=sk_lastvar pval=sk_lastval proster=sk_lastroster               ///
+            pqkey=sk_lastqkey pord=sk_lastord pseq=sk_lastseq pts=sk_lastts     ///
+            (max) tend=para_tsu                                                  ///
+            (count) nrem=sk_k (sum) nqrem=sk_qtag nreanswered=sk_reanswered    ///
+            nopen=sk_open nunknown=sk_unknown (min) ts0=para_tsu                ///
+            (first) trigger=sk_trig trigval=sk_trigval                          ///
+            trigger_roster=sk_trigroster trigger_qkey=sk_trigqkey              ///
+            trigger_tsu=sk_trigts trigger_ord=sk_trigord trigger_seq=sk_trigseq ///
+            useprev=sk_useprev prevok=sk_prevnear nextok=sk_nextnear            ///
+            actor=sk_actor resp=sk_resp, by(interview__id sk_run) fast
+
+        * Only candidates that passed the bounded proximity test may adjudicate a run.
+        quietly replace pvar = "" if prevok!=1
+        quietly replace pval = "" if pvar==""
+        quietly replace proster = "" if pvar==""
+        quietly replace pqkey = "" if pvar==""
+        quietly replace pord = . if pvar==""
+        quietly replace pseq = . if pvar==""
+        quietly replace pts = . if pvar==""
+        quietly replace avar = "" if nextok!=1 | missing(ats) | (ats-tend)<0 | ///
+            (ats-tend)>`window'*1000
+        quietly replace aval = "" if avar==""
+        quietly replace aroster = "" if avar==""
+        quietly replace aqkey = "" if avar==""
+        quietly replace aord = . if avar==""
+        quietly replace aseq = . if avar==""
+        quietly replace ats = . if avar==""
+
+        * Questionnaire metadata distinguishes five relationship cases:
+        *   1 linked candidate; 2 conditions exist but do not reference it;
+        *   3 known questions with no item-level condition shown; 4 variables absent from preview;
+        *   5 a mixture of known and absent variables.
         quietly gen byte conf = 0
-        quietly gen byte allsvc = 0
+        quietly gen int nqknown = 0
+        quietly gen int nqcond = 0
+        quietly gen int nqabsent = 0
+        quietly gen int nlinked = 0
+        quietly gen int nlinked_direct = 0
+        quietly gen int nlinked_indirect = 0
+        quietly gen byte reltype = 2
         if `hasqx' {
             forvalues r = 1/`=_N' {
-                local wlw = subinstr(wl[`r'], ",", " ", .)
+                local wlw = subinstr(wvars[`r'], ",", " ", .)
                 local av = avar[`r']
-                local bv = trigger[`r']
-                local hitA 0
-                local hitB 0
-                local nz 0
+                local pv = pvar[`r']
+                local up = useprev[`r']
+                local hitAd 0
+                local hitAi 0
+                local hitPd 0
+                local hitPi 0
+                local nknown 0
+                local ncond 0
+                local nabs 0
                 foreach w of local wlw {
+                    if `"`known_`w''"'=="1" local ++nknown
+                    else local ++nabs
                     local ee `"`en_`w''"'
                     if `"`ee'"'=="" continue
-                    local ++nz
-                    if "`av'"!="" & ustrregexm(`"`ee'"', "`av'") local hitA 1
-                    if ustrregexm(`"`ee'"', "`bv'") local hitB 1
+                    local ++ncond
+                    local dd `"`deps_`w''"'
+                    if "`av'"!="" {
+                        if ustrregexm(`"`ee'"', "(^|[^A-Za-z0-9_])`av'([^A-Za-z0-9_]|$)") local ++hitAd
+                        else if ustrregexm(`"`dd'"', "(^|[^A-Za-z0-9_])`av'([^A-Za-z0-9_]|$)") local ++hitAi
+                    }
+                    if "`pv'"!="" {
+                        if ustrregexm(`"`ee'"', "(^|[^A-Za-z0-9_])`pv'([^A-Za-z0-9_]|$)") local ++hitPd
+                        else if ustrregexm(`"`dd'"', "(^|[^A-Za-z0-9_])`pv'([^A-Za-z0-9_]|$)") local ++hitPi
+                    }
                 }
-                if `hitA' {
+                local hitA = `hitAd' + `hitAi'
+                local hitP = `hitPd' + `hitPi'
+                quietly replace nqknown = `nknown' in `r'
+                quietly replace nqcond = `ncond' in `r'
+                quietly replace nqabsent = `nabs' in `r'
+
+                if `hitA'>0 & (`hitP'==0 | `up'==0) {
                     quietly replace conf = 2 in `r'
+                    quietly replace nlinked = `hitA' in `r'
+                    quietly replace nlinked_direct = `hitAd' in `r'
+                    quietly replace nlinked_indirect = `hitAi' in `r'
                     quietly replace trigger = avar[`r'] in `r'
-                    quietly replace trigval = substr(aval[`r'],1,60) in `r'
+                    quietly replace trigval = aval[`r'] in `r'
+                    quietly replace trigger_roster = aroster[`r'] in `r'
+                    quietly replace trigger_qkey = aqkey[`r'] in `r'
+                    quietly replace trigger_tsu = ats[`r'] in `r'
+                    quietly replace trigger_ord = aord[`r'] in `r'
+                    quietly replace trigger_seq = aseq[`r'] in `r'
+                    quietly replace useprev = 0 in `r'
                 }
-                else if `hitB' quietly replace conf = 1 in `r'
-                if `nz'==0 quietly replace allsvc = 1 in `r'
+                else if `hitP'>0 {
+                    quietly replace conf = 1 in `r'
+                    quietly replace nlinked = `hitP' in `r'
+                    quietly replace nlinked_direct = `hitPd' in `r'
+                    quietly replace nlinked_indirect = `hitPi' in `r'
+                    quietly replace trigger = pvar[`r'] in `r'
+                    quietly replace trigval = pval[`r'] in `r'
+                    quietly replace trigger_roster = proster[`r'] in `r'
+                    quietly replace trigger_qkey = pqkey[`r'] in `r'
+                    quietly replace trigger_tsu = pts[`r'] in `r'
+                    quietly replace trigger_ord = pord[`r'] in `r'
+                    quietly replace trigger_seq = pseq[`r'] in `r'
+                    quietly replace useprev = 1 in `r'
+                }
             }
         }
+        quietly gen byte linkmode = 0
+        quietly replace linkmode = 1 if nlinked_direct>0 & nlinked_indirect==0
+        quietly replace linkmode = 2 if nlinked_direct==0 & nlinked_indirect>0
+        quietly replace linkmode = 3 if nlinked_direct>0 & nlinked_indirect>0
+        quietly replace reltype = 6 if !`hasqx'
+        quietly replace reltype = 1 if conf>0
+        quietly replace reltype = 3 if conf==0 & nqknown==nqrem & nqcond==0 & nqrem>0 & `hasqx'
+        quietly replace reltype = 4 if conf==0 & nqknown==0 & nqrem>0 & `hasqx'
+        quietly replace reltype = 5 if conf==0 & nqknown>0 & nqknown<nqrem & `hasqx'
+        quietly gen byte allsvc = reltype==4
+        quietly gen byte allalways = reltype==3
+        quietly gen byte mixedqx = reltype==5
+
         if `hasqx' {
             quietly merge m:1 trigger using `"`QXT'"', keep(master match) nogenerate
         }
+        else {
+            quietly gen str60 qx_type = ""
+            quietly gen strL qx_text = ""
+            quietly gen strL qx_section = ""
+            quietly gen strL qx_enable = ""
+            quietly gen strL qx_optmap = ""
+        }
+
+        * The questionnaire-adjudicated trigger remains in the one-row-per-run
+        * detail table. It is not merged back onto the multi-row event stream: that
+        * merge is unnecessary for interview-level counts and was a repeated source
+        * of fragile run-key failures on large real paradata exports.
+
+        * Exact value history for the chosen AnswerSet and question instance.
+        quietly gen str16 prev_event = ""
+        quietly gen strL prev_value = ""
+        quietly gen double prev_ord = .
+        quietly gen double prev_seq = .
+        quietly gen double prev_tsu = .
+        quietly gen strL oldval = ""
+        tempfile DETBASE PREVSTATE PREVANS
+        quietly save `"`DETBASE'"'
+        local hasprevstate 0
+        local hasprevans 0
+        if `hashstate' {
+            quietly keep interview__id sk_run trigger_qkey trigger_ord trigger_seq
+            quietly drop if trigger_qkey=="" | missing(trigger_ord)
+            if _N>0 {
+                quietly joinby interview__id trigger_qkey using `"`HSTATE'"', unmatched(none)
+                quietly keep if hist_ord<trigger_ord | ///
+                    (hist_ord==trigger_ord & hist_seq<trigger_seq)
+                if _N>0 {
+                    quietly sort interview__id sk_run hist_ord hist_seq
+                    quietly by interview__id sk_run: keep if _n==_N
+                    quietly rename hist_event prev_event
+                    quietly rename hist_val prev_value
+                    quietly rename hist_ord prev_ord
+                    quietly rename hist_seq prev_seq
+                    quietly rename hist_tsu prev_tsu
+                    quietly gen str244 __suso_runkey = interview__id + "|" + ///
+                        strtrim(string(sk_run,"%21.0g"))
+                    quietly keep __suso_runkey prev_event prev_value ///
+                        prev_ord prev_seq prev_tsu
+                    quietly bysort __suso_runkey: keep if _n==1
+                    quietly isid __suso_runkey
+                    quietly save `"`PREVSTATE'"'
+                    local hasprevstate 1
+                }
+            }
+
+            quietly use `"`DETBASE'"', clear
+            quietly keep interview__id sk_run trigger_qkey trigger_ord trigger_seq
+            quietly drop if trigger_qkey=="" | missing(trigger_ord)
+            if _N>0 {
+                quietly joinby interview__id trigger_qkey using `"`HSTATE'"', unmatched(none)
+                quietly keep if hist_event=="answerset" & ///
+                    (hist_ord<trigger_ord | (hist_ord==trigger_ord & hist_seq<trigger_seq))
+                if _N>0 {
+                    quietly sort interview__id sk_run hist_ord hist_seq
+                    quietly by interview__id sk_run: keep if _n==_N
+                    quietly rename hist_val oldval
+                    quietly gen str244 __suso_runkey = interview__id + "|" + ///
+                        strtrim(string(sk_run,"%21.0g"))
+                    quietly keep __suso_runkey oldval
+                    quietly bysort __suso_runkey: keep if _n==1
+                    quietly isid __suso_runkey
+                    quietly save `"`PREVANS'"'
+                    local hasprevans 1
+                }
+            }
+        }
+        quietly use `"`DETBASE'"', clear
+        quietly gen str244 __suso_runkey = interview__id + "|" + ///
+            strtrim(string(sk_run,"%21.0g"))
+        quietly isid __suso_runkey
+        if `hasprevstate' quietly merge 1:1 __suso_runkey using `"`PREVSTATE'"', ///
+            update replace nogenerate
+        if `hasprevans' quietly merge 1:1 __suso_runkey using `"`PREVANS'"', ///
+            update replace nogenerate
+        quietly drop __suso_runkey
+
+        quietly gen byte transition = 0
+        quietly replace transition = 1 if trigger_qkey!="" & prev_event=="" & trigval!=""
+        quietly replace transition = 2 if prev_event=="answerset" & oldval!=trigval
+        quietly replace transition = 3 if prev_event=="answerset" & oldval==trigval
+        quietly replace transition = 4 if prev_event=="answerremoved" & trigval!=""
+
+        quietly gen strL oldlabel = ""
+        quietly gen strL newlabel = ""
+        mata: _suso_qx_apply_labels("oldval", "trigval", "qx_optmap", "oldlabel", "newlabel")
+        quietly gen strL oldshow = oldval + cond(oldlabel!="", " - " + oldlabel, "")
+        quietly gen strL newshow = trigval + cond(newlabel!="", " - " + newlabel, "")
+        quietly gen strL trigger_display = trigger + ///
+            cond(trigger_roster!="", " [roster " + trigger_roster + "]", "")
+        quietly gen str40 trigger_when = ""
+        quietly replace trigger_when = string(trigger_tsu/86400000, "%tdDD_Mon_CCYY") + ///
+            " " + string(trigger_tsu, "%tcHH:MM:SS") + " UTC" if !missing(trigger_tsu)
+        quietly gen str40 transition_status = "Historical event not reconstructed"
+        quietly replace transition_status = "Historical first observed value" if transition==1
+        quietly replace transition_status = "Historical value change" if transition==2
+        quietly replace transition_status = "Historical repeated value" if transition==3
+        quietly replace transition_status = "Historical re-entry after removal" if transition==4
+        quietly gen strL transition_text = ///
+            "Exact historical answer transition could not be reconstructed from the available paradata."
+        quietly replace transition_text = cond(trigger_when!="", "At " + trigger_when + ", ", "") + ///
+            trigger_display + " was recorded as " + newshow + ///
+            "; no earlier state event for this question instance was found." if transition==1
+        quietly replace transition_text = cond(trigger_when!="", "At " + trigger_when + ", ", "") + ///
+            trigger_display + " changed from " + oldshow + " to " + newshow + ///
+            ". This describes that historical AnswerSet, not necessarily the final exported value." ///
+            if transition==2
+        quietly replace transition_text = cond(trigger_when!="", "At " + trigger_when + ", ", "") + ///
+            trigger_display + " was recorded again as " + newshow + ///
+            "; the value did not change at that event." if transition==3
+        quietly replace transition_text = cond(trigger_when!="", "At " + trigger_when + ", ", "") + ///
+            trigger_display + " was re-entered as " + newshow + " after being cleared" + ///
+            cond(oldshow!="", "; the earlier recorded value was " + oldshow, "") + "." ///
+            if transition==4
+
+        * Compare every affected question instance with the FINAL export and the
+        * inherited questionnaire logic. This removes false positives where the
+        * final value is blank precisely because the final screening state disables it.
+        tempfile DETTRANS
+        quietly save `"`DETTRANS'"'
+        if `"`data'"'!="" & `hascasev' {
+            local qxopt ""
+            if `hasqx' local qxopt `"qxmeta(`"`QXMETA'"')"'
+            quietly _suso_para_casefinal using `"`CASEV'"', data(`"`data'"') ///
+                saving(`"`FINALV'"') `qxopt'
+            local hasfinaldata 1
+
+            quietly use `"`FINALV'"', clear
+            quietly gen byte __fa = final_status==1
+            quietly gen byte __ad = final_status==7
+            quietly gen byte __eb = final_status==2
+            quietly gen byte __be = final_status==3
+            quietly gen byte __lu = final_status==4
+            quietly gen byte __nd = inlist(final_status,5,6)
+            quietly gen byte __ck = inlist(final_status,3,4,5,6,7)
+            quietly gen strL __la = cond(__fa,affected_qdisp,"")
+            quietly gen strL __ld = cond(__ad,affected_qdisp,"")
+            quietly gen strL __le = cond(__eb,affected_qdisp,"")
+            quietly gen strL __lb = cond(__be,affected_qdisp,"")
+            quietly gen strL __ll = cond(__lu,affected_qdisp,"")
+            quietly gen strL __ln = cond(__nd,affected_qdisp,"")
+            quietly gen strL __lc = cond(__ck,affected_qdisp,"")
+            quietly sort interview__id sk_run affected_qdisp
+            foreach z in la ld le lb ll ln lc {
+                quietly by interview__id sk_run: replace __`z' = ///
+                    cond(_n==1,__`z',cond(__`z'!="",__`z'[_n-1] + ///
+                    cond(__`z'[_n-1]=="","",", ") + __`z',__`z'[_n-1]))
+            }
+            quietly collapse (sum) n_final_answered=__fa                    ///
+                n_answered_disabled=__ad n_expected_blank=__eb                  ///
+                n_blank_enabled=__be n_logic_unknown=__lu n_notindata=__nd      ///
+                n_final_check=__ck (last) wl_final_answered=__la                ///
+                wl_answered_disabled=__ld wl_expected_blank=__le                ///
+                wl_blank_enabled=__lb wl_logic_unknown=__ll                     ///
+                wl_notindata=__ln wl_final_check=__lc,                          ///
+                by(interview__id sk_run) fast
+            quietly summarize n_final_answered
+            local nfinalansweredall = r(sum)
+            quietly summarize n_answered_disabled
+            local nanswereddisabledall = r(sum)
+            quietly summarize n_expected_blank
+            local nexpectedblankall = r(sum)
+            quietly summarize n_blank_enabled
+            local nblankenabledall = r(sum)
+            quietly summarize n_logic_unknown
+            local nlogicunknownall = r(sum)
+            quietly summarize n_notindata
+            local nnotindataall = r(sum)
+            quietly summarize n_final_check
+            local nfinalcheckall = r(sum)
+            quietly gen str244 __suso_runkey = interview__id + "|" + ///
+                strtrim(string(sk_run,"%21.0g"))
+            quietly bysort __suso_runkey: keep if _n==1
+            quietly isid __suso_runkey
+            quietly save `"`FINALCASE'"', replace
+
+            tempfile FINALCASEMAP
+            quietly keep __suso_runkey n_final_answered n_answered_disabled ///
+                n_expected_blank n_blank_enabled n_logic_unknown n_notindata ///
+                n_final_check wl_final_answered wl_answered_disabled ///
+                wl_expected_blank wl_blank_enabled wl_logic_unknown ///
+                wl_notindata wl_final_check
+            quietly save `"`FINALCASEMAP'"', replace
+
+            quietly use `"`DETTRANS'"', clear
+            quietly gen str244 __suso_runkey = interview__id + "|" + ///
+                strtrim(string(sk_run,"%21.0g"))
+            quietly isid __suso_runkey
+            quietly merge 1:1 __suso_runkey using `"`FINALCASEMAP'"', ///
+                keep(master match) nogenerate
+            quietly drop __suso_runkey
+        }
+        else quietly use `"`DETTRANS'"', clear
+
+        * Keep the historical AnswerSet separate from the value in the final
+        * export. A transition such as 1 -> 6 may be an intermediate event even
+        * when the current exported value has subsequently returned to 1.
+        tempfile DETFINAL TRIGFINAL
+        quietly save `"`DETFINAL'"', replace
+        if `"`data'"'!="" {
+            quietly _suso_para_triggerfinal using `"`DETFINAL'"', ///
+                data(`"`data'"') saving(`"`TRIGFINAL'"')
+            tempfile TRIGFINALMAP
+            quietly use `"`TRIGFINAL'"', clear
+            quietly gen str244 __suso_runkey = interview__id + "|" + ///
+                strtrim(string(sk_run,"%21.0g"))
+            quietly bysort __suso_runkey: keep if _n==1
+            quietly isid __suso_runkey
+            quietly keep __suso_runkey trigger_final_status trigger_final_value ///
+                trigger_final_label trigger_final_show trigger_final_matches_event ///
+                trigger_final_returns_old trigger_final_text
+            quietly save `"`TRIGFINALMAP'"', replace
+
+            quietly use `"`DETFINAL'"', clear
+            quietly gen str244 __suso_runkey = interview__id + "|" + ///
+                strtrim(string(sk_run,"%21.0g"))
+            quietly isid __suso_runkey
+            quietly merge 1:1 __suso_runkey using `"`TRIGFINALMAP'"', ///
+                keep(master match) nogenerate
+            quietly drop __suso_runkey
+        }
+        else quietly use `"`DETFINAL'"', clear
+        foreach v in trigger_final_status trigger_final_matches_event            ///
+            trigger_final_returns_old {
+            capture confirm variable `v'
+            if _rc quietly gen byte `v' = .
+        }
+        foreach v in trigger_final_value trigger_final_label trigger_final_show  ///
+            trigger_final_text {
+            capture confirm variable `v'
+            if _rc quietly gen strL `v' = ""
+        }
+
+        quietly gen byte final_data_checked = `hasfinaldata'
+        foreach v in n_final_answered n_answered_disabled n_expected_blank      ///
+            n_blank_enabled n_logic_unknown n_notindata n_final_check {
+            capture confirm variable `v'
+            if _rc quietly gen long `v' = 0
+            quietly replace `v' = 0 if missing(`v')
+        }
+        foreach v in wl_final_answered wl_answered_disabled wl_expected_blank   ///
+            wl_blank_enabled wl_logic_unknown wl_notindata wl_final_check {
+            capture confirm variable `v'
+            if _rc quietly gen strL `v' = ""
+        }
+        quietly replace n_final_check = nopen+nunknown if !final_data_checked
+        quietly replace wl_final_check = strtrim(wl_open + ///
+            cond(wl_open!="" & wl_unknown!="", ", ", "") + wl_unknown) ///
+            if !final_data_checked
+
         quietly save `"`skdet'"'
         if `"`detail'"'!="" quietly copy `"`skdet'"' `"`detail'"', replace
         restore
+
+        * Final-data counts for the Behaviour dashboard and saved skip table.
+        if `hasfinaldata' {
+            preserve
+                quietly use `"`FINALCASE'"', clear
+                quietly collapse (sum) casc_finalanswered=n_final_answered       ///
+                    casc_answered_disabled=n_answered_disabled                   ///
+                    casc_expectedblank=n_expected_blank                          ///
+                    casc_blank_enabled=n_blank_enabled                           ///
+                    casc_logicunknown=n_logic_unknown casc_notindata=n_notindata ///
+                    casc_finalcheck=n_final_check, by(interview__id) fast
+                quietly gen byte casc_datachecked = 1
+                quietly save `"`FINALINT'"', replace
+            restore
+        }
+
+        * No run-level lookup is merged back to the event stream. Interview-level
+        * cascade counts below are invariant to candidate re-attribution; the detailed
+        * review and trigger summary use the adjudicated one-row-per-run table.
     }
 
     * ---- stage 1: collapse to (interview x trigger) — everything below is small,
     *      so the multi-million-row events are copied/sorted exactly once ----
-    collapse (sum) n_answers=para_ans n_removed=para_rem n_cascades=sk_casc1     ///
-        casc_removed=sk_casc (first) responsible=sk_resp,                        ///
-        by(interview__id sk_trig) fast
+    collapse (sum) n_answers=para_fieldans n_removed=para_fieldrem n_cascades=sk_casc1 ///
+        casc_removed=sk_casc casc_questions=sk_qtag casc_open=sk_open            ///
+        casc_reanswered=sk_reanswered casc_unknown=sk_unknown                    ///
+        (first) responsible=sk_resp, by(interview__id sk_trig) fast
     tempfile sk1
     quietly save `"`sk1'"'
 
@@ -3216,47 +4553,75 @@ program _suso_para_skips, rclass
     di as res "  suso paradata skips" as txt "   (cascade = >=`cascade' removals within `window's of an answer)"
     di as txt "{hline 72}"
 
-    * ---- survey-level: which gate variables get flipped? ----
-    if `hasvar' & `ncasc'>0 {
-        quietly keep if sk_trig!=""
-        collapse (sum) n_flips=n_cascades wiped=casc_removed                     ///
-            (count) n_ints=n_cascades, by(sk_trig) fast
-        gsort -wiped -n_flips sk_trig
-        local k = min(10, _N)
-        tempname SKT
-        matrix `SKT' = J(`k', 3, 0)
-        local trigret ""
-        di as txt "  trigger variables wiping the most answers (top `k'):"
-        di as txt "  {ul:variable                }  {ul:flips}  {ul:interviews}  {ul:answers wiped}"
-        forvalues i = 1/`k' {
-            local vv : di %-24s abbrev(sk_trig[`i'],24)
-            local nf : di %5.0f n_flips[`i']
-            local ni : di %10.0f n_ints[`i']
-            local wp : di %13.0f wiped[`i']
-            di as txt "  " as res "`vv'" as txt "  `nf'  `ni'  `wp'"
-            local trigret `"`trigret' `=sk_trig[`i']'"'
-            matrix `SKT'[`i',1] = n_flips[`i']
-            matrix `SKT'[`i',2] = n_ints[`i']
-            matrix `SKT'[`i',3] = wiped[`i']
+    * ---- survey-level: adjudicated answer variables recurring across runs -------
+    if `hasvar' & `ncasc'>0 & `hasdet' {
+        quietly use `"`skdet'"', clear
+        quietly keep if trigger!=""
+        if _N>0 {
+            quietly gen byte __one = 1
+            quietly bysort trigger interview__id: gen byte __itag = (_n==1)
+            quietly collapse (sum) n_flips=__one wiped=nrem n_ints=__itag, ///
+                by(trigger) fast
+            quietly rename trigger sk_trig
+            gsort -wiped -n_flips sk_trig
+            local k = min(10, _N)
+            tempname SKT
+            matrix `SKT' = J(`k', 3, 0)
+            local trigret ""
+            di as txt "  nearby or questionnaire-linked answer variables associated with the most removal events (top `k'):"
+            di as txt "  {ul:variable                }  {ul:runs}  {ul:interviews}  {ul:removal events}"
+            forvalues i = 1/`k' {
+                local vv : di %-24s abbrev(sk_trig[`i'],24)
+                local nf : di %5.0f n_flips[`i']
+                local ni : di %10.0f n_ints[`i']
+                local wp : di %13.0f wiped[`i']
+                di as txt "  " as res "`vv'" as txt "  `nf'  `ni'  `wp'"
+                local trigret `"`trigret' `=sk_trig[`i']'"'
+                matrix `SKT'[`i',1] = n_flips[`i']
+                matrix `SKT'[`i',2] = n_ints[`i']
+                matrix `SKT'[`i',3] = wiped[`i']
+            }
+            return local triggers `"`trigret'"'
+            return matrix triggers_stats = `SKT'
         }
-        return local triggers `"`trigret'"'
-        return matrix triggers_stats = `SKT'
         quietly use `"`sk1'"', clear
     }
 
     * ---- stage 2: one row per interview ----
     quietly gen byte sk_tg = (sk_trig!="")
-    collapse (sum) n_answers n_removed n_cascades casc_removed n_triggers=sk_tg  ///
+    collapse (sum) n_answers n_removed n_cascades casc_removed casc_questions    ///
+        casc_open casc_reanswered casc_unknown n_triggers=sk_tg                    ///
         (first) responsible, by(interview__id) fast
+    if `hasfinaldata' quietly merge 1:1 interview__id using `"`FINALINT'"', ///
+        keep(master match) nogenerate
+    foreach v in casc_finalanswered casc_answered_disabled casc_expectedblank  ///
+        casc_blank_enabled casc_logicunknown casc_notindata casc_finalcheck       ///
+        casc_datachecked {
+        capture confirm variable `v'
+        if _rc quietly gen long `v' = 0
+        quietly replace `v' = 0 if missing(`v')
+    }
     quietly gen double wipe_share = casc_removed/max(n_answers,1)
     label variable interview__id "interview id"
     label variable responsible   "interviewer (at last answer)"
     label variable n_answers     "AnswerSet events"
     label variable n_removed     "AnswerRemoved events (all)"
-    label variable n_cascades    "skip cascades (gate flips)"
-    label variable casc_removed  "answers wiped by cascades"
-    label variable n_triggers    "distinct gate variables flipped"
-    label variable wipe_share    "wiped / answers set"
+    label variable n_cascades    "historical AnswerRemoved cascades"
+    label variable casc_removed    "AnswerRemoved events in detected cascades"
+    label variable casc_questions  "distinct question-within-run cases affected"
+    label variable casc_open       "affected questions whose final event is AnswerRemoved"
+    label variable casc_reanswered "affected questions re-answered later"
+    label variable casc_unknown      "affected questions with unknown paradata final state"
+    label variable casc_finalanswered "affected questions answered in final data"
+    label variable casc_answered_disabled "final answers present while disabled"
+    label variable casc_expectedblank  "final blanks expected because disabled"
+    label variable casc_blank_enabled  "final blanks while enabled"
+    label variable casc_logicunknown   "final blanks with enablement unknown"
+    label variable casc_notindata      "affected instances absent from supplied data"
+    label variable casc_finalcheck     "affected instances needing final-data review"
+    label variable casc_datachecked    "final data and inherited logic evaluated"
+    label variable n_triggers          "distinct nearby or questionnaire-linked answer variables"
+    label variable wipe_share      "removal events / answers set"
     format wipe_share %5.2f
     sort interview__id
     char _dta[suso_paradata] skips
@@ -3264,15 +4629,22 @@ program _suso_para_skips, rclass
     quietly count if n_cascades>0
     local naff = r(N)
     local nints = _N
-    di as txt "  cascades " as res "`ncasc'" as txt "  |  answers wiped " as res "`nwiped'" ///
+    di as txt "  cascades " as res "`ncasc'" as txt "  |  question-run cases affected " as res "`naffectedqall'" ///
+        as txt "  |  removal events " as res "`nwiped'" as txt "  |  re-answered later " as res "`nreansweredall'" ///
         as txt "  |  interviews affected " as res "`naff'" as txt " of " as res "`nints'"
+    if `hasfinaldata' di as txt "  final export: answered " as res "`nfinalansweredall'" ///
+        as txt "  |  blank as expected (disabled) " as res "`nexpectedblankall'" ///
+        as txt "  |  answered while disabled " as res "`nanswereddisabledall'" ///
+        as txt "  |  blank while enabled " as res "`nblankenabledall'" ///
+        as txt "  |  logic/data unresolved " as res "`=`nlogicunknownall'+`nnotindataall''"
+    else di as txt "  no data() supplied: action triage falls back to paradata final state."
 
     * ---- top interviews ----
     if `naff'>0 {
         gsort -casc_removed -n_cascades interview__id
         local k = min(`top', `naff')
-        di as txt _n "  interviews wiping the most answers (top `k'):"
-        di as txt "  {ul:interview}  {ul:interviewer }  {ul:cascades}  {ul:wiped}  {ul:gates}  {ul:wiped/set}"
+        di as txt _n "  interviews with the largest historical removal runs (top `k'):"
+        di as txt "  {ul:interview}  {ul:interviewer }  {ul:cascades}  {ul:removal events}  {ul:answer vars}  {ul:removed/set}"
         forvalues i = 1/`k' {
             local id8 = substr(interview__id[`i'],1,8)
             local rsp : di %-12s abbrev(responsible[`i'],12)
@@ -3297,7 +4669,7 @@ program _suso_para_skips, rclass
             gsort -casc_share -wiped responsible
             local k = min(10, _N)
             di as txt _n "  interviewers, by share of interviews with a cascade (top `k'):"
-            di as txt "  {ul:interviewer     }  {ul:ints}  {ul:w/ cascade}  {ul:share}  {ul:flips}  {ul:wiped}"
+            di as txt "  {ul:interviewer     }  {ul:ints}  {ul:w/ cascade}  {ul:share}  {ul:flips}  {ul:removal events}"
             forvalues i = 1/`k' {
                 local rsp : di %-16s abbrev(responsible[`i'],16)
                 local ni : di %4.0f n_ints[`i']
@@ -3311,7 +4683,7 @@ program _suso_para_skips, rclass
         }
     }
     di as txt _n "  A cascade can be a legitimate correction; systematic patterns by the"
-    di as txt "  same interviewer or the same gate variable are what warrant review."
+    di as txt "  unresolved final states and repeated questionnaire-linked patterns warrant review."
     di as txt "  data in memory = one row per interview; merge on interview__id with"
     di as txt "  the {bf:suso paradata flags} table for a combined QC file."
     di as txt "{hline 72}"
@@ -3323,7 +4695,7 @@ program _suso_para_skips, rclass
     if `hasdet' {
         preserve
         quietly use `"`skdet'"', clear
-        gsort -nrem interview__id sk_run
+        gsort -nqrem -nrem interview__id sk_run
         local hasqxt 0
         capture confirm variable qx_text
         if !_rc local hasqxt 1
@@ -3333,126 +4705,157 @@ program _suso_para_skips, rclass
         quietly gen byte selferased = 0
         quietly gen strL wlc = wl
         forvalues r = 1/`=_N' {
-            local wlw = subinstr(wl[`r'], ",", " ", .)
+            local wlw = subinstr(wvars[`r'], ",", " ", .)
             local trg = trigger[`r']
             local selfr 0
-            local seen ""
-            local out ""
             local secs ""
             foreach w of local wlw {
-                if "`w'"=="`trg'" & "`trg'"!="" {
-                    local selfr 1
-                    continue
-                }
-                if strpos(" `seen' ", " `w' ")>0 continue
-                local seen "`seen' `w'"
-                local k 0
-                foreach w2 of local wlw {
-                    if "`w2'"=="`w'" local ++k
-                }
-                local out "`out'`=cond("`out'"=="","",", ")'`w'`=cond(`k'>1," x`k'","")'"
+                if "`w'"=="`trg'" & "`trg'"!="" local selfr 1
                 if `hasqxt' {
                     local ss `"`sec_`w''"'
                     if `"`ss'"'!="" & strpos(`"|`secs'|"', `"|`ss'|"')==0 local secs `"`secs'|`ss'"'
                 }
             }
-            quietly replace wlc = "`out'" in `r'
             quietly replace selferased = `selfr' in `r'
             local nsc = length(`"`secs'"') - length(subinstr(`"`secs'"', "|", "", .))
             if `nsc'>0 quietly replace nsecs = `nsc' in `r'
         }
-        tempvar ti tr sameA
+        * Case severity is based on the FINAL export when data() is supplied.
+        * Blank-but-disabled questions are resolved, not action items. Without
+        * data(), retain the conservative paradata-only fallback.
         quietly bysort interview__id: gen long __ncint = _N
-        quietly egen long __wint = total(nrem), by(interview__id)
-        quietly egen byte __smax = max(nsecs), by(interview__id)
-        quietly bysort trigger interview__id: gen byte `ti' = _n==1
-        quietly bysort trigger resp: gen byte `tr' = _n==1
-        quietly egen long __sint = total(`ti'), by(trigger)
-        quietly egen long __sres = total(`tr'), by(trigger)
+        quietly egen long __wint = total(nqrem), by(interview__id)
         quietly bysort interview__id trigger: gen long __same = _N
         quietly gen str1 tier = "C"
-        quietly gen strL why = "confirmed honest gate correction"
-        quietly replace why = "review/approval reset" if conf==0 & allsvc==1
-        quietly replace tier = "V" if conf==0 & allsvc==0
-        quietly replace why = "unconfirmed - check the interview history" if conf==0 & allsvc==0
-        quietly replace tier = "V" if allsvc==1 & nrem>=20
-        quietly replace why = "large service-field wipe - confirm the final log" if allsvc==1 & nrem>=20
-        quietly replace tier = "V" if __same>=2
-        quietly replace why = "repeated flips of the same code - confirm the final value" if __same>=2
-        quietly replace tier = "C" if __sint>=3 & __sres>=2
-        quietly replace why = "systemic workflow churn" if __sint>=3 & __sres>=2
-        quietly replace tier = "A" if __ncint>=3 | __wint>=50 | nsecs>=3
-        quietly replace why = "restructured after completion" if tier=="A"
-        quietly egen byte `sameA' = max(tier=="A"), by(resp)
-        quietly replace why = "same enumerator - review together" if `sameA' & tier=="V"
-        quietly replace tier = "A" if `sameA' & why=="same enumerator - review together"
-        capture quietly drop `ti' `tr' `sameA' __ncint __wint __smax __sint __sres __same
+        quietly gen strL why = "Resolved - historical removal only"
+
+        quietly replace why = "Resolved - final export is consistent with final questionnaire logic" ///
+            if final_data_checked & n_final_check==0
+        quietly replace tier = "V" if final_data_checked & n_final_check>0
+        quietly replace why = "Check final data - " + strofreal(n_answered_disabled) + ///
+            " answered while disabled; " + strofreal(n_blank_enabled) + ///
+            " blank while enabled; " + strofreal(n_logic_unknown) + ///
+            " logic unknown; " + strofreal(n_notindata) + " not in supplied data" ///
+            if final_data_checked & n_final_check>0
+
+        quietly replace why = "Resolved - all affected questions were answered again" ///
+            if !final_data_checked & nopen==0 & nunknown==0
+        quietly replace tier = "V" if !final_data_checked & (nopen>0 | nunknown>0)
+        quietly replace why = "Check final data - " + strofreal(nopen) + ///
+            " question(s) still end in AnswerRemoved; " + strofreal(nunknown) + ///
+            " have unknown paradata state" if !final_data_checked & tier=="V"
+
+        * Priority is allowed only when unresolved final-data checks remain.
+        quietly replace tier = "A" if tier=="V" & ///
+            ((__ncint>=3 & n_final_check>=3) | __wint>=50 | nsecs>=3)
+        quietly replace why = "Priority check - multiple unresolved questions or sections" ///
+            if tier=="A"
+        capture quietly drop __ncint __wint __same
         quietly save `"`skdet'"', replace
         if `"`detail'"'!="" quietly copy `"`skdet'"' `"`detail'"', replace
-        * findings roll-up into locals
-        local invresps ""
-        local nver 0
-        local seenv ""
-        sort resp interview__id sk_run
-        forvalues r = 1/`=_N' {
-            if tier[`r']=="A" {
-                local rr = resp[`r']
-                if strpos(" `invresps' ", " `rr' ")==0 local invresps "`invresps' `rr'"
-                local __i8 = substr(interview__id[`r'],1,8)
-                if strpos(`"`inv_ids_`rr''"', "`__i8'")==0 {
-                    local inv_ids_`rr' "`inv_ids_`rr'' `__i8'"
-                }
-                local inv_w_`rr' = `inv_w_`rr'' + nrem[`r']
-            }
-            if tier[`r']=="V" {
-                local __i8 = substr(interview__id[`r'],1,8)
-                if strpos(" `seenv' ", " `__i8' ")==0 {
-                    local seenv "`seenv' `__i8'"
-                    local ++nver
-                    local ver_i_`nver' "`__i8'"
-                    local ver_r_`nver' = resp[`r']
-                    local ver_w_`nver' = why[`r']
-                }
-            }
-        }
-        local invresps = strtrim("`invresps'")
-        local ninv : word count `invresps'
+        * Findings roll-up. Keep names and interview lists in variables rather
+        * than embedding enumerator names in local-macro names (names may contain
+        * spaces or punctuation).
+        tempvar rg itag rtag reviewer rids rq ri vtag
+        quietly gen str120 `reviewer' = substr(cond(resp!="",resp,actor),1,120)
+        quietly egen long `rg' = group(`reviewer') if tier=="A" & `reviewer'!=""
+        quietly bysort `rg' interview__id: gen byte `itag' = (_n==1) if !missing(`rg')
+        quietly sort `rg' interview__id sk_run
+        quietly gen strL `rids' = ""
+        quietly by `rg': replace `rids' = ///
+            cond(_n==1, cond(`itag'==1,substr(interview__id,1,8),""), ///
+            cond(`itag'==1, strtrim(`rids'[_n-1] + " " + substr(interview__id,1,8)), `rids'[_n-1])) ///
+            if !missing(`rg')
+        quietly egen long `rq' = total(cond(tier=="A",nqrem,0)), by(`rg')
+        quietly egen long `ri' = total(cond(tier=="A",`itag',0)), by(`rg')
+        quietly by `rg': gen byte `rtag' = (_n==_N) if !missing(`rg')
+        quietly count if `rtag'==1
+        local ninv = r(N)
+
+        quietly sort interview__id sk_run
+        quietly by interview__id: gen byte `vtag' = tier=="V" & sum(tier=="V")==1
+        quietly count if `vtag'==1
+        local nver = r(N)
         quietly count if tier=="C"
         local nclr = r(N)
         local clrline ""
-        foreach w in "confirmed honest gate correction" "review/approval reset" "systemic workflow churn" {
+        foreach w in "Resolved - final export is consistent with final questionnaire logic" ///
+            "Resolved - all affected questions were answered again" ///
+            "Resolved - historical removal only" {
             quietly count if tier=="C" & why=="`w'"
             if r(N)>0 local clrline "`clrline'`=cond("`clrline'"=="","",", ")'`w' x`r(N)'"
         }
-        gsort -nrem interview__id sk_run
+        gsort -nqrem -nrem interview__id sk_run
         quietly gen strL m_head = "CASE " + strofreal(_n) + " of `ncasc'.  Interview " ///
             + interview__id + ".  Enumerator: " + cond(actor!="", actor, resp)          ///
-            + ".  On " + string(ts0/86400000, "%tdDD_Mon_CCYY") + " at "                ///
+            + ".  Removal run on " + string(ts0/86400000, "%tdDD_Mon_CCYY") + " at " ///
             + string(ts0, "%tcHH:MM") + " UTC."
-        quietly gen strL m_what = "WHAT HAPPENED: the answer to [" + trigger + "] was changed"
-        quietly replace m_what = m_what + " to " + char(34) + trigval + char(34) if trigval!=""
-        quietly replace m_what = m_what + " after " + strofreal(nrem)                   ///
-            + " later answer(s) had already been recorded. The skip logic then ERASED those " ///
-            + strofreal(nrem) + " answer(s)."
+        quietly gen strL m_event = "HISTORICAL ANSWER EVENT: " + transition_text
+        quietly gen strL m_finalevent = cond(trigger_final_text!="", ///
+            "CURRENT FINAL VALUE: " + trigger_final_text, "")
+        quietly gen strL m_rel = "RELATIONSHIP: no questionnaire relationship was established."
+        quietly replace m_rel = "RELATIONSHIP: " + strofreal(nlinked_direct) + ///
+            " affected question/roster instance(s) directly reference [" + trigger + ///
+            "] in their enabling conditions. This is a questionnaire relationship, not proof of cause." ///
+            if reltype==1 & linkmode==1
+        quietly replace m_rel = "RELATIONSHIP: " + strofreal(nlinked_indirect) + ///
+            " affected question/roster instance(s) depend indirectly on [" + trigger + ///
+            "] through one or more calculated variables. This is a questionnaire relationship, not proof of cause." ///
+            if reltype==1 & linkmode==2
+        quietly replace m_rel = "RELATIONSHIP: " + strofreal(nlinked_direct) + ///
+            " affected instance(s) reference [" + trigger + "] directly and " + ///
+            strofreal(nlinked_indirect) + " depend on it through calculated variables. " + ///
+            "This is a questionnaire relationship, not proof of cause." if reltype==1 & linkmode==3
+        quietly replace m_rel = "RELATIONSHIP: affected questionnaire questions have enabling conditions, but none references [" + ///
+            trigger + "]; it is the nearest AnswerSet only." if reltype==2
+        quietly replace m_rel = "RELATIONSHIP: affected items are ordinary questionnaire questions with no effective enabling condition. They are not service fields; [" + ///
+            trigger + "] is the nearest AnswerSet only." if reltype==3
+        quietly replace m_rel = "RELATIONSHIP: affected field names were not found in the parsed questionnaire metadata; [" + ///
+            trigger + "] is timing context only." if reltype==4
+        quietly replace m_rel = "RELATIONSHIP: affected items mix questionnaire questions and fields absent from questionnaire metadata; no causal link was established." if reltype==5
+        quietly replace m_rel = "RELATIONSHIP: questionnaire metadata was not supplied, so the relationship could not be assessed; the nearby AnswerSet is timing context only." if reltype==6
+
+        quietly gen strL m_what = "REMOVAL HISTORY: " + strofreal(nrem) + ///
+            " AnswerRemoved event(s) affected " + strofreal(nqrem) + ///
+            " distinct question/roster instance(s)."
+        quietly gen strL m_state = "CURRENT PARADATA STATE: " + strofreal(nreanswered) + ///
+            " answered again; " + strofreal(nopen) + " still end in AnswerRemoved; " + ///
+            strofreal(nunknown) + " have unknown state."
+        quietly replace m_state = "FINAL DATA ASSESSMENT: " + strofreal(n_final_answered) + ///
+            " answered; " + strofreal(n_expected_blank) + ///
+            " blank as expected because final logic disables them; " + ///
+            strofreal(n_answered_disabled) + " answered while disabled; " + ///
+            strofreal(n_blank_enabled) + " blank while enabled; " + ///
+            strofreal(n_logic_unknown) + " with logic unknown; " + ///
+            strofreal(n_notindata) + " not found in supplied data." if final_data_checked
+
         quietly gen strL m_q = ""
         quietly gen strL m_s = ""
         quietly gen strL m_e = ""
         if `hasqxt' {
-            quietly replace m_q = "QUESTION [" + trigger + "]: " + char(34)             ///
+            quietly replace m_q = "ANSWER-EVENT QUESTION [" + trigger + "]: " + char(34) ///
                 + substr(qx_text,1,160) + char(34) if qx_text!=""
             quietly replace m_s = "SECTION: " + substr(qx_section,1,60) if qx_section!=""
-            quietly replace m_e = "This question is itself asked only when: "           ///
-                + substr(qx_enable,1,120) if qx_enable!=""
+            quietly replace m_e = "This answer-event question is asked only when: " + ///
+                substr(qx_enable,1,120) if qx_enable!=""
         }
-        quietly gen strL m_w = ""
-        quietly replace m_w = "ERASED ANSWERS: " + substr(wl,1,300) if wl!=""
-        quietly replace m_w = m_w + " ... and " + strofreal(nrem-8) + " more" if wl!="" & nrem>8
-        quietly gen strL m_c = ""
-        if `hasqxt' {
-            quietly replace m_c = "GATE CONFIRMED: the erased questions depend on [" + trigger + "] in the questionnaire skip logic." if conf>0
-            quietly replace m_c = "NOTE: the erased items carry no skip conditions (service/review fields) - this is a review/approval workflow reset, not enumerator skip abuse. No action needed with the enumerator." if conf==0 & allsvc==1
-            quietly replace m_c = "CAUTION: timing points to [" + trigger + "] but none of the erased questions depends on it - verify in the interview history before raising this with the enumerator." if conf==0 & allsvc==0
-        }
+        quietly gen strL m_w = "ALL AFFECTED ITEMS: " + wl if wl!=""
+        quietly gen strL m_res = "ANSWERED AGAIN: " + wl_reanswered if wl_reanswered!=""
+        quietly gen strL m_open = "CHECK IN FINAL DATA: " + wl_final_check if wl_final_check!=""
+        quietly gen strL m_expected = "BLANK AS EXPECTED (DISABLED): " + ///
+            wl_expected_blank if wl_expected_blank!=""
+        quietly gen strL m_finalanswered = "ANSWERED IN FINAL DATA: " + ///
+            wl_final_answered if wl_final_answered!=""
+
+        quietly gen strL m_a = "NO ACTION NEEDED: final values are either present or correctly blank under the final questionnaire logic." ///
+            if tier=="C" & final_data_checked
+        quietly replace m_a = "NO ACTION NEEDED: keep this as interview history only." ///
+            if tier=="C" & !final_data_checked
+        quietly replace m_a = "NEXT STEP: review only these unresolved items in the final export: " + ///
+            wl_final_check + ". Reject only when a value is blank AND the effective final logic evaluates to enabled." ///
+            if tier=="V"
+        quietly replace m_a = "PRIORITY CHECK: review these unresolved items and the exact history: " + ///
+            wl_final_check + "." if tier=="A"
         local k = min(`top', _N)
         local mh 0
         if `"`messages'"'!="" {
@@ -3466,34 +4869,39 @@ program _suso_para_skips, rclass
             tempname mf
             quietly file open `mf' using `"`messages'"', write replace text
             local mh 1
-            file write `mf' "PARADATA SKIP-VIOLATION REVIEW" _n
-            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.0)" _n
-            file write `mf' "Definition: a case is `cascade' or more answers erased by the skip logic within `window' seconds of an answer being changed." _n
-            file write `mf' "`ncasc' case(s) found, `nwiped' answers erased in total." _n
-            file write `mf' _n "BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention - `nclr' cases are routine and were auto-cleared." _n
-            foreach rr of local invresps {
-                local nids : word count `inv_ids_`rr''
-                file write `mf' _n "INVESTIGATE `rr': `nids' interview(s) heavily restructured, `inv_w_`rr'' answers erased across sections." _n
-                file write `mf' "  interviews:`inv_ids_`rr''" _n
-                file write `mf' "  do: open each in Headquarters. If there is no rejection immediately before the erasures, escalate." _n
+            file write `mf' "PARADATA SKIP/REMOVAL REVIEW" _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.12)" _n
+            file write `mf' "Definition: a case is `cascade' or more consecutive AnswerRemoved events in a compact run near an AnswerSet event." _n
+            file write `mf' "`ncasc' case(s) found; `nwiped' removal event(s); `naffectedqall' distinct question-run case(s) affected." _n
+            if `hasfinaldata' file write `mf' "Final export assessment: `nfinalansweredall' answered; `nanswereddisabledall' answered while disabled; `nexpectedblankall' blank as expected because disabled; `nfinalcheckall' require review." _n
+            else file write `mf' "No data() supplied; `nopenall' still end in AnswerRemoved and `nunknownall' have unknown paradata state." _n
+            file write `mf' _n "BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention - `nclr' cases are resolved and require no action." _n
+            forvalues r = 1/`=_N' {
+                if `rtag'[`r']!=1 continue
+                file write `mf' _n "INVESTIGATE " (`reviewer'[`r']) ": " (strofreal(`ri'[`r'])) " interview(s) with priority unresolved histories, " (strofreal(`rq'[`r'])) " questions affected across sections." _n
+                file write `mf' "  interviews: " (`rids'[`r']) _n
+                file write `mf' "  do: open each in Headquarters and review the exact answer transition, unresolved variables, and final export." _n
             }
-            forvalues v = 1/`nver' {
-                file write `mf' _n "VERIFY `ver_i_`v'' (`ver_r_`v''): `ver_w_`v''." _n
+            forvalues r = 1/`=_N' {
+                if `vtag'[`r']!=1 continue
+                file write `mf' _n "VERIFY " (substr(interview__id[`r'],1,8)) " (" (cond(resp[`r']!="",resp[`r'],actor[`r'])) "): " (why[`r']) "." _n
             }
             if `nclr'>0 file write `mf' _n "Auto-cleared as routine: `clrline'." _n
             file write `mf' _n "Case-by-case detail below is for reference only." _n
         }
         di as txt _n "  {hline 70}"
-        di as res "  BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention — `nclr' of `ncasc' cases are routine (auto-cleared)."
+        di as res "  BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention — `nclr' of `ncasc' cases are resolved (no action)."
         di as txt "  {hline 70}"
-        foreach rr of local invresps {
-            local nids : word count `inv_ids_`rr''
-            di as res "  INVESTIGATE  `rr'" as txt ": `nids' interview(s) heavily restructured, `inv_w_`rr'' answers erased."
-            di as txt "               ids:`inv_ids_`rr''"
-            di as txt "               do: open each in Headquarters — if no rejection immediately before the erasures, escalate."
+        forvalues r = 1/`=_N' {
+            if `rtag'[`r']!=1 continue
+            di as res "  INVESTIGATE  " (`reviewer'[`r']) as txt ": " (`ri'[`r']) " interview(s), " (`rq'[`r']) " unresolved questions."
+            di as txt "               ids: " (`rids'[`r'])
+            di as txt "               do: review the exact answer transition, unresolved variables, and final export."
         }
-        forvalues v = 1/`nver' {
-            di as res "  VERIFY       `ver_i_`v''" as txt "  `ver_r_`v'' — `ver_w_`v''"
+        forvalues r = 1/`=_N' {
+            if `vtag'[`r']!=1 continue
+            di as res "  VERIFY       " (substr(interview__id[`r'],1,8)) as txt "  " ///
+                (cond(resp[`r']!="",resp[`r'],actor[`r'])) " — " (why[`r'])
         }
         if `nclr'>0 di as txt "  cleared      `clrline'"
         if !`hasqxt' di as txt "  tip: add qx(questionnaire.html) for question wording and stronger triage."
@@ -3504,38 +4912,33 @@ program _suso_para_skips, rclass
         forvalues i = 1/`k' {
             di as txt ""
             di as res "  " m_head[`i']
+            di as txt "  " m_event[`i']
+            if m_finalevent[`i']!="" di as txt "  " m_finalevent[`i']
+            di as txt "  " m_rel[`i']
             di as txt "  " m_what[`i']
             if `mh' {
                 file write `mf' _n "----------------------------------------------------------------------" _n
                 file write `mf' (m_head[`i']) _n
+                file write `mf' (m_event[`i']) _n
+                if m_finalevent[`i']!="" file write `mf' (m_finalevent[`i']) _n
+                file write `mf' (m_rel[`i']) _n
                 file write `mf' (m_what[`i']) _n
             }
-            foreach mv in m_q m_s m_e m_w m_c {
+            foreach mv in m_state m_a m_q m_s m_e m_w m_res m_finalanswered m_expected m_open {
                 if `mv'[`i']!="" {
                     di as txt "  " `mv'[`i']
                     if `mh' file write `mf' (`mv'[`i']) _n
                 }
             }
-            di as txt "  ACTION: 1. Open this interview in Headquarters and check the changed question."
-            di as txt "          2. Ask the enumerator why it changed after the later questions were done."
-            di as txt "          3. If the NEW value is correct: REJECT the interview so the erased"
-            di as txt "             questions are asked again - they are empty now."
-            di as txt "          4. If the OLD value was correct: restore it and verify the answers below it."
-            if `mh' {
-                file write `mf' "ACTION: 1. Open this interview in Headquarters and check the changed question." _n
-                file write `mf' "        2. Ask the enumerator why it changed after the later questions were done." _n
-                file write `mf' "        3. If the NEW value is correct: REJECT the interview so the erased questions are asked again - they are empty now." _n
-                file write `mf' "        4. If the OLD value was correct: restore it and verify the answers below it." _n
-            }
         }
         if `mh' {
             file write `mf' _n "----------------------------------------------------------------------" _n
-            file write `mf' "General note: occasional cases are honest corrections. The pattern to challenge is the same gate variable erased across many interviews, or one enumerator producing many cases." _n
+            file write `mf' "General note: a historical removal run is not itself a problem. Review unresolved final states first; repeated questionnaire-linked patterns are secondary context." _n
             file close `mf'
             di as txt _n "  vendor/supervisor message file written: " as res `"`messages'"'
         }
 
-        * ---- shareable Skip Violation Review page (self-contained, printable) ------
+        * ---- shareable Skip/Removal Review page (self-contained, printable) --------
         if `"`html'"'!="" {
             if "`replace'"=="" {
                 capture confirm new file `"`html'"'
@@ -3554,48 +4957,27 @@ program _suso_para_skips, rclass
             quietly count if `g1' & trigger!=""
             local ngates = r(N)
             quietly gen long __w = nrem
-            collapse (count) flips=__w (sum) wiped=__w, by(trigger) fast
-            quietly drop if trigger==""
-            gsort -wiped -flips trigger
+            quietly gen str244 g_label = cond(reltype==1, ///
+                cond(linkmode==2,"Indirect questionnaire relationship: ", ///
+                cond(linkmode==3,"Direct and indirect questionnaire relationship: ", ///
+                "Direct questionnaire relationship: ")) + ///
+                cond(trigger!="",trigger,"(unknown)"), ///
+                cond(reltype==3, "Questionnaire questions with no item-level condition shown", ///
+                cond(reltype==4, "Fields outside questionnaire metadata", ///
+                cond(reltype==5, "Mixed questionnaire/external fields", ///
+                cond(reltype==6, "Questionnaire metadata not supplied", "Cause not identified")))))
+            collapse (count) flips=__w (sum) wiped=__w, by(g_label) fast
+            gsort -wiped -flips g_label
             quietly keep in 1/`=min(10,_N)'
             quietly save `"`GSUM'"'
-            * old value of the gate before the flip (answer-history lookup)
-            tempfile OVF
-            local hasov2 0
-            if `hasav' {
-                quietly use `"`DET1'"', clear
-                quietly keep interview__id sk_run trigger trigval ts0
-                quietly drop if trigger==""
-                if _N>0 {
-                    quietly joinby interview__id trigger using `"`AVF'"', unmatched(none)
-                    quietly keep if para_tsu <= ts0 + `window'*1000
-                    quietly bysort interview__id sk_run (para_tsu): gen long __n = _n
-                    quietly by interview__id sk_run: gen long __N = _N
-                    quietly keep if __n >= __N - 1
-                    quietly by interview__id sk_run: gen strL __last = av_val[_N]
-                    quietly gen strL oldval = ""
-                    quietly by interview__id sk_run: replace oldval =                 ///
-                        cond(_N>=2, cond(__last==trigval, av_val[1], __last),         ///
-                             cond(av_val!=trigval, av_val, "")) if _n==1
-                    quietly by interview__id sk_run: keep if _n==1
-                    quietly keep if oldval!=""
-                    if _N>0 {
-                        local hasov2 1
-                        quietly keep interview__id sk_run oldval
-                        quietly save `"`OVF'"'
-                    }
-                }
-            }
+            * Exact old/new transition is already stored in DET1.
             quietly use `"`DET1'"', clear
-            if `hasov2' quietly merge 1:1 interview__id sk_run using `"`OVF'"', keep(master match) nogenerate
-            capture confirm variable oldval
-            if _rc quietly gen strL oldval = ""
             if `haskey' quietly merge m:1 interview__id using `"`SKKEY'"', keep(master match) nogenerate
             capture confirm variable ikey
             if _rc quietly gen ikey = ""
-            gsort -nrem interview__id sk_run
+            gsort -nqrem -nrem interview__id sk_run
             * pre-built display columns: data reaches the file only via (exp)
-            quietly gen strL h_ac = cond(actor!="", actor, resp)
+            quietly gen str120 h_ac = substr(cond(actor!="", actor, resp),1,120)
             quietly gen strL h_tg = trigger
             quietly gen strL h_tv0 = trigval
             quietly gen strL h_qt = ""
@@ -3606,50 +4988,98 @@ program _suso_para_skips, rclass
                 quietly replace h_sc = substr(qx_section,1,80)
                 quietly replace h_en = substr(qx_enable,1,200)
             }
-            quietly gen strL h_wl = substr(wlc,1,400)
-            quietly gen strL h_ov0 = substr(oldval,1,60)
+            quietly gen strL h_wl = substr(wlc,1,600)
+            quietly gen strL h_event = transition_text
+            quietly gen str40 h_eventstatus = transition_status
+            quietly gen strL h_finalevent = trigger_final_text
+            quietly gen strL h_check = wl_final_check
+            quietly replace h_check = h_check + cond(h_check!="", " | ", "") + wl_unknown ///
+                if wl_unknown!=""
             quietly gen strL h_key = ikey
-            foreach v in h_ac h_tg h_tv0 h_qt h_sc h_en h_wl h_ov0 h_key {
+            quietly gen str100 h_gkey = cond(reltype==1, ///
+                cond(linkmode==2,"indirect:",cond(linkmode==3,"mixedlink:","direct:")) + trigger, ///
+                cond(reltype==3, "always", cond(reltype==4, "external", ///
+                cond(reltype==5, "mixed", cond(reltype==6, "noqx", "unlinked")))))
+            quietly gen str244 h_group = cond(reltype==1, ///
+                cond(linkmode==2,"Indirect questionnaire relationship: ", ///
+                cond(linkmode==3,"Direct and indirect questionnaire relationship: ", ///
+                "Direct questionnaire relationship: ")) + ///
+                cond(trigger!="",trigger,"(unknown)"), ///
+                cond(reltype==3, "Questionnaire questions with no item-level condition shown", ///
+                cond(reltype==4, "Fields outside questionnaire metadata", ///
+                cond(reltype==5, "Mixed questionnaire/external fields", ///
+                cond(reltype==6, "Questionnaire metadata not supplied", "Cause not identified")))))
+            foreach v in h_ac h_tg h_tv0 h_qt h_sc h_en h_wl h_event       ///
+                h_eventstatus h_finalevent h_check h_key h_group {
                 quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
             }
-            quietly gen strL h_open = "<div class=" + char(34) + "case" + cond(nrem>=5, " big", "") + char(34) + ">"
-            quietly gen strL h_chip = "<div class=" + char(34) + "chip" + char(34) + ">" + strofreal(nrem) + " erased</div>"
+
+            quietly gen str12 h_class = cond(tier=="A","priority", ///
+                cond(tier=="V","verify","resolved"))
+            quietly gen strL h_open = "<div class=" + char(34) + "case " + ///
+                h_class + char(34) + ">"
+            quietly gen strL h_chip = "<div class=" + char(34) + "chip " + ///
+                h_class + char(34) + ">Resolved - no action</div>" if tier=="C"
+            quietly replace h_chip = "<div class=" + char(34) + "chip " + ///
+                h_class + char(34) + ">Check final data - " + ///
+                strofreal(cond(final_data_checked,n_final_check,nopen+nunknown)) + ///
+                " question(s)</div>" if tier=="V"
+            quietly replace h_chip = "<div class=" + char(34) + "chip " + ///
+                h_class + char(34) + ">Priority check - " + ///
+                strofreal(cond(final_data_checked,n_final_check,nopen+nunknown)) + ///
+                " question(s)</div>" if tier=="A"
+
             quietly gen strL h_l1 = "<div class=" + char(34) + "c1" + char(34) + ">" ///
                 + cond(h_key!="", "<b class=" + char(34) + "mono" + char(34) + ">" + h_key + "</b> &nbsp;&middot;&nbsp; <span class=" + char(34) + "mono small" + char(34) + ">" + interview__id + "</span>", ///
                        "<span class=" + char(34) + "mono" + char(34) + ">" + interview__id + "</span>") ///
                 + " &nbsp;&middot;&nbsp; <b>" + h_ac + "</b> &nbsp;&middot;&nbsp; " ///
                 + string(ts0/86400000, "%tdDD_Mon_CCYY") + " " + string(ts0, "%tcHH:MM") + " UTC</div>"
-            quietly gen strL h_l2 = "<div class=" + char(34) + "c2" + char(34) + ">The answer to <b class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</b> was changed"
-            quietly replace h_l2 = h_l2 + " from &quot;" + h_ov0 + "&quot;" if h_ov0!="" & h_ov0!=h_tv0
-            quietly replace h_l2 = h_l2 + " to &quot;" + h_tv0 + "&quot;" if h_tv0!=""
-            quietly replace h_l2 = h_l2 + " after <b>" + strofreal(nrem) + "</b> later answers were recorded - the skip logic erased them.</div>"
+
+            quietly gen strL h_eventbox = "<div class=" + char(34) + "eventbox" + char(34) + "><div class=" + char(34) + "eventstatus" + char(34) + ">" + h_eventstatus + "</div><b>Historical answer event:</b> " + h_event
+            quietly replace h_eventbox = h_eventbox + "<div class=" + char(34) + "eventquestion" + char(34) + "><b>Question:</b> &quot;" + h_qt + "&quot;</div>" if h_qt!=""
+            quietly replace h_eventbox = h_eventbox + "</div>"
+            quietly gen strL h_finalbox = ""
+            quietly replace h_finalbox = "<div class=" + char(34) + "finalbox" + char(34) + "><b>Current final export:</b> " + h_finalevent + "</div>" if h_finalevent!=""
+            quietly gen strL h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>No questionnaire relationship found:</b> the answer event is shown only because it was nearest in the event sequence.</div>"
+            quietly replace h_rel = "<div class=" + char(34) + "relbox linked" + char(34) + "><b>Direct questionnaire relationship:</b> " + strofreal(nlinked_direct) + " affected question/roster instance(s) directly reference <span class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</span> in their enabling conditions. This does not prove cause by itself.</div>" if reltype==1 & linkmode==1
+            quietly replace h_rel = "<div class=" + char(34) + "relbox linked" + char(34) + "><b>Indirect questionnaire relationship:</b> " + strofreal(nlinked_indirect) + " affected question/roster instance(s) depend on <span class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</span> through calculated variables. This does not prove cause by itself.</div>" if reltype==1 & linkmode==2
+            quietly replace h_rel = "<div class=" + char(34) + "relbox linked" + char(34) + "><b>Direct and indirect questionnaire relationship:</b> " + strofreal(nlinked_direct) + " affected instance(s) reference <span class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</span> directly and " + strofreal(nlinked_indirect) + " depend on it through calculated variables. This does not prove cause by itself.</div>" if reltype==1 & linkmode==3
+            quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>No questionnaire relationship found:</b> affected questions have enabling conditions, but none references <span class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</span>.</div>" if reltype==2
+            quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>Questionnaire questions with no effective enabling condition:</b> these are ordinary questionnaire variables, not service fields. <span class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</span> is the nearest AnswerSet only.</div>" if reltype==3
+            quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>Fields outside questionnaire metadata:</b> none of the affected names was found in the parsed questionnaire. The nearby AnswerSet is timing context only.</div>" if reltype==4
+            quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>Mixed field types:</b> affected items include questionnaire questions and fields absent from questionnaire metadata. No causal link was established.</div>" if reltype==5
+            quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>Questionnaire relationship not assessed:</b> no questionnaire metadata was supplied. The nearby AnswerSet is timing context only.</div>" if reltype==6
+
+            quietly gen strL h_l2 = "<div class=" + char(34) + "c2" + char(34) + "><b>Removal history:</b> " + strofreal(nrem) + " AnswerRemoved event(s) affected <b>" + strofreal(nqrem) + "</b> distinct question/roster instance(s).</div>"
+            quietly gen strL h_state = "<div class=" + char(34) + "state resolved" + char(34) + "><b>Final data assessment:</b> " + strofreal(n_final_answered) + " answered; " + strofreal(n_expected_blank) + " blank as expected because disabled; 0 require review.</div>" if tier=="C" & final_data_checked
+            quietly replace h_state = "<div class=" + char(34) + "state resolved" + char(34) + "><b>Current paradata state:</b> all affected items were answered again.</div>" if tier=="C" & !final_data_checked
+            quietly replace h_state = "<div class=" + char(34) + "state verify" + char(34) + "><b>Final data assessment:</b> " + strofreal(n_final_answered) + " answered; " + strofreal(n_expected_blank) + " blank as expected because disabled; " + strofreal(n_answered_disabled) + " answered while disabled; " + strofreal(n_blank_enabled) + " blank while enabled; " + strofreal(n_logic_unknown) + " logic unknown; " + strofreal(n_notindata) + " not in supplied data.</div>" if tier=="V"
+            quietly replace h_state = "<div class=" + char(34) + "state priority" + char(34) + "><b>Final data assessment:</b> " + strofreal(n_final_answered) + " answered; " + strofreal(n_expected_blank) + " blank as expected because disabled; " + strofreal(n_final_check) + " require review.</div>" if tier=="A"
+
+            quietly gen strL h_do = "<div class=" + char(34) + "action resolved" + char(34) + "><b>No action needed.</b> Final values are present or correctly blank under the final questionnaire logic.</div>" if tier=="C" & final_data_checked
+            quietly replace h_do = "<div class=" + char(34) + "action resolved" + char(34) + "><b>No action needed.</b> Keep this only as interview history.</div>" if tier=="C" & !final_data_checked
+            quietly replace h_do = "<div class=" + char(34) + "action verify" + char(34) + "><b>Review only:</b> <span class=" + char(34) + "mono" + char(34) + ">" + h_check + "</span>. A blank value is actionable only when effective final logic says enabled.</div>" if tier=="V"
+            quietly replace h_do = "<div class=" + char(34) + "action priority" + char(34) + "><b>Priority review:</b> <span class=" + char(34) + "mono" + char(34) + ">" + h_check + "</span>. Also inspect the exact interview history.</div>" if tier=="A"
+
             quietly gen strL h_l3 = ""
-            quietly replace h_l3 = "<blockquote>" + h_tg + ": &quot;" + h_qt + "&quot;</blockquote>" if h_qt!=""
+            quietly replace h_l3 = "<blockquote><b>Answer-event question:</b> <span class=" + char(34) + "mono" + char(34) + ">" + h_tg + "</span>" + cond(h_qt!=""," &nbsp; &quot;" + h_qt + "&quot;","") + "</blockquote>" if h_tg!=""
             quietly gen strL h_l4 = ""
             quietly replace h_l4 = "Section: " + h_sc if h_sc!=""
             quietly replace h_l4 = h_l4 + cond(h_l4!="", " &nbsp;&middot;&nbsp; ", "") + "Asked only when: <span class=" + char(34) + "mono" + char(34) + ">" + h_en + "</span>" if h_en!=""
             quietly replace h_l4 = "<div class=" + char(34) + "meta" + char(34) + ">" + h_l4 + "</div>" if h_l4!=""
-            quietly gen strL h_l5 = ""
-            quietly replace h_l5 = "<div class=" + char(34) + "meta" + char(34) + ">Erased: <span class=" + char(34) + "mono" + char(34) + ">" + h_wl ///
-                + cond(nrem>8, " ... and " + strofreal(nrem-8) + " more", "") + "</span>" ///
-                + cond(selferased==1, " <span style=" + char(34) + "color:#7a5b00" + char(34) + ">(the gate itself was erased again by a follow-on flip - the value shown may not be final; check the history)</span>", "") ///
-                + "</div>" if h_wl!=""
-            quietly gen strL h_do = ""
-            quietly replace h_do = "<div class=" + char(34) + "meta do" + char(34) + ">Do: if &quot;" + h_tv0 + "&quot; is correct, <b>reject the interview</b> so the erased answers are re-asked (they are empty now); if " ///
-                + cond(h_ov0!="" & h_ov0!=h_tv0, "&quot;" + h_ov0 + "&quot;", "the old answer") ///
-                + " was correct, restore it and verify the section.</div>" if h_tv0!=""
-            quietly gen strL h_l6 = ""
-            if `hasqxt' {
-                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#1e6b34;font-weight:600" + char(34) + ">Gate confirmed: the erased questions depend on this variable.</div>" if conf>0
-                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#666" + char(34) + ">Review/approval workflow reset (erased items carry no skip conditions) - not enumerator skip abuse.</div>" if conf==0 & allsvc==1
-                quietly replace h_l6 = "<div class=" + char(34) + "meta" + char(34) + " style=" + char(34) + "color:#7a5b00;font-weight:600" + char(34) + ">Unconfirmed (timing only) - none of the erased questions depends on this variable; verify in the interview history first.</div>" if conf==0 & allsvc==0
-            }
+            quietly gen strL h_l5 = "<div class=" + char(34) + "meta" + char(34) + ">All affected items: <span class=" + char(34) + "mono" + char(34) + ">" + h_wl + cond(length(wlc)>600, " ...", "") + "</span></div>" if h_wl!=""
+            quietly gen strL h_fa = "<div class=" + char(34) + "meta linked" + char(34) + ">Answered in final data: <span class=" + char(34) + "mono" + char(34) + ">" + wl_final_answered + "</span></div>" if wl_final_answered!=""
+            quietly gen strL h_ad = "<div class=" + char(34) + "meta caution" + char(34) + ">Answered although disabled: <span class=" + char(34) + "mono" + char(34) + ">" + wl_answered_disabled + "</span></div>" if wl_answered_disabled!=""
+            quietly gen strL h_eb = "<div class=" + char(34) + "meta linked" + char(34) + ">Blank as expected because disabled: <span class=" + char(34) + "mono" + char(34) + ">" + wl_expected_blank + "</span></div>" if wl_expected_blank!=""
+            quietly gen strL h_l6 = "<div class=" + char(34) + "meta" + char(34) + ">AnswerSet order: " + string(trigger_ord,"%12.0g") + "; removal-run start: " + string(ts0,"%tcCCYY-NN-DD_HH:MM:SS") + "; raw removal events: " + strofreal(nrem) + ".</div>"
+            quietly gen strL h_tech = "<details class=" + char(34) + "tech" + char(34) + "><summary>Technical details</summary>" + h_l3 + h_l4 + h_l5 + h_fa + h_ad + h_eb + h_l6 + "</details>"
+            local ncheckall = `nfinalcheckall'
             local now = trim("`c(current_date)' `c(current_time)'")
             local wst ""
             if "$SUSO_WS"!="" local wst " — $SUSO_WS"
             tempname hf
             quietly file open `hf' using `"`html'"', write replace text
-            file write `hf' `"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Skip Violation Review</title><style>"' _n
+            file write `hf' `"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Skip Removal Review</title><style>"' _n
             file write `hf' `"body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f4f5f7;color:#1a1a1a}"' _n
             file write `hf' `".logobar{background:#fff;padding:10px 28px;border-bottom:1px solid #e0e0e0}"' _n
             file write `hf' `".logobar .wbtxt{font-size:13px;letter-spacing:.06em;color:#002244;font-weight:600}.logobar .wbtxt span{color:#8a8a8a;font-weight:400}"' _n
@@ -3657,85 +5087,93 @@ program _suso_para_skips, rclass
             file write `hf' `".wrap{max-width:900px;margin:0 auto;padding:16px 28px 40px}"' _n
             file write `hf' `".cards{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}"' _n
             file write `hf' `".card{flex:1 1 140px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 13px;border-top:3px solid #002244}"' _n
+            file write `hf' `".card.warn{border-top-color:#c48a00}.card.dim{border-top-color:#9aa7b5}"' _n
             file write `hf' `".card .v{font-size:20px;font-weight:700;color:#002244}.card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
             file write `hf' `".how{background:#fdf6e3;border:1px solid #ecd9a0;border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.55;margin:12px 0}"' _n
             file write `hf' `"h2{font-size:15px;color:#002244;border-bottom:2px solid #C9A227;padding-bottom:4px;margin:22px 0 8px}"' _n
             file write `hf' `"table{border-collapse:collapse;width:100%;font-size:12.5px;background:#fff}"' _n
             file write `hf' `"th{background:#002244;color:#fff;text-align:left;padding:6px 8px;font-weight:600}td{padding:5px 8px;border-bottom:1px solid #eef0f2}td.r,th.r{text-align:right}"' _n
-            file write `hf' `".case{background:#fff;border:1px solid #e3e6ea;border-left:4px solid #002244;border-radius:8px;padding:12px 16px;margin:10px 0;position:relative;page-break-inside:avoid}"' _n
-            file write `hf' `".case.big{border-left-color:#C9A227}"' _n
-            file write `hf' `".chip{position:absolute;top:10px;right:12px;background:#002244;color:#fff;border-radius:12px;font-size:11px;padding:3px 10px}"' _n
-            file write `hf' `".case.big .chip{background:#C9A227;color:#002244;font-weight:700}"' _n
-            file write `hf' `".c1{font-size:12.5px;color:#444;margin-right:90px}.c2{font-size:13.5px;margin-top:6px}"' _n
+            file write `hf' `".case{background:#fff;border:1px solid #e3e6ea;border-left:4px solid #7b8794;border-radius:8px;padding:12px 16px;margin:10px 0;position:relative;page-break-inside:avoid}"' _n
+            file write `hf' `".case.resolved{border-left-color:#2f7d4a}.case.verify{border-left-color:#c48a00}.case.priority{border-left-color:#a33}"' _n
+            file write `hf' `".chip{position:absolute;top:10px;right:12px;border-radius:12px;font-size:11px;padding:3px 10px;font-weight:700}"' _n
+            file write `hf' `".chip.resolved{background:#eaf5ec;color:#1e6b34;border:1px solid #bfe0c8}.chip.verify{background:#fdf6e3;color:#7a5b00;border:1px solid #ecd9a0}.chip.priority{background:#fbeaea;color:#8a1f1f;border:1px solid #e8bcbc}"' _n
+            file write `hf' `".c1{font-size:12.5px;color:#444;margin-right:190px}.c2{font-size:13.5px;margin-top:8px;line-height:1.45}"' _n
+            file write `hf' `".eventquestion{margin-top:5px;color:#44515f}.eventstatus{display:inline-block;margin:0 7px 4px 0;padding:2px 7px;border-radius:10px;background:#002244;color:#fff;font-size:10.5px;font-weight:700}.eventbox,.relbox,.finalbox{font-size:12.5px;line-height:1.5;border-radius:6px;padding:8px 10px;margin-top:7px;background:#f7f8fa;border:1px solid #e2e6ea}.finalbox{background:#edf5fb;border-color:#bfd4e5;color:#173b5e}.relbox.linked{background:#eef8f0;border-color:#cfe4d3}.state,.action{font-size:12.5px;line-height:1.45;border-radius:6px;padding:7px 10px;margin-top:7px}.state.resolved,.action.resolved{background:#eef7f0;color:#1e6b34}.state.verify,.action.verify{background:#fdf6e3;color:#6f5600}.state.priority,.action.priority{background:#fbeaea;color:#8a1f1f}"' _n
             file write `hf' `"blockquote{margin:8px 0;padding:8px 12px;background:#f7f8fa;border-left:3px solid #c9cfd6;font-size:12.5px;color:#333}"' _n
-            file write `hf' `".meta{font-size:11.5px;color:#666;margin-top:4px}.mono{font-family:Consolas,monospace}"' _n
-    file write `hf' `".small{font-size:10.5px;color:#888}.do{color:#333;margin-top:6px}"' _n
-    file write `hf' `"details{margin:4px 0}summary.gate{cursor:pointer;font-size:13.5px;color:#002244;padding:8px 10px;background:#fbf7ea;border:1px solid #eadfbe;border-radius:6px;margin-top:14px}"' _n
+            file write `hf' `".meta{font-size:11.5px;color:#666;margin-top:4px}.meta.linked{color:#1e6b34}.caution{color:#7a5b00}.mono{font-family:Consolas,monospace}"' _n
+            file write `hf' `".small{font-size:10.5px;color:#888}.tech{margin-top:8px}.tech summary{cursor:pointer;color:#556575;font-size:11.5px}.techsum{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:8px 12px;margin:12px 0}.techsum>summary{cursor:pointer;color:#556575;font-size:12.5px;font-weight:600}"' _n
+            file write `hf' `"details{margin:4px 0}summary.gate{cursor:pointer;font-size:13.5px;color:#002244;padding:8px 10px;background:#f5f7f9;border:1px solid #dce2e8;border-radius:6px;margin-top:14px}"' _n
             file write `hf' `".foot{font-size:11px;color:#777;margin-top:24px;line-height:1.5}"' _n
             file write `hf' `"@media print{body{background:#fff}.case{border:1px solid #bbb;border-left-width:4px}}"' _n
             file write `hf' `"</style></head><body>"' _n
             file write `hf' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
             file write `hf' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
-            file write `hf' `"<div class="mast"><h1>Skip Violation Review`wst'</h1>"' _n
-            file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; a case is `cascade'+ answers erased by the skip logic within `window's of an answer being changed</div></div>"' _n
+            file write `hf' `"<div class="mast"><h1>Skip Removal Review`wst'</h1>"' _n
+            file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; a case is `cascade'+ compact consecutive AnswerRemoved events near an AnswerSet; final values may be restored later</div></div>"' _n
             file write `hf' `"<div class="wrap">"' _n
             file write `hf' `"<div class="cards">"' _n
-            file write `hf' `"<div class="card"><div class="v">`ncasc'</div><div class="k">cases</div></div>"' _n
-            file write `hf' `"<div class="card"><div class="v">`nwiped'</div><div class="k">answers erased</div></div>"' _n
-            file write `hf' `"<div class="card"><div class="v">`nintaff'</div><div class="k">interviews affected</div></div>"' _n
-            file write `hf' `"<div class="card"><div class="v">`ngates'</div><div class="k">gate questions involved</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v">`ncasc'</div><div class="k">removal histories</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v">`naffectedqall'</div><div class="k">question-run cases affected</div></div>"' _n
+            file write `hf' `"<div class="card warn"><div class="v">`ncheckall'</div><div class="k">need final-data check</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v">`nreansweredall'</div><div class="k">answered again later</div></div>"' _n
+            file write `hf' `"<div class="card dim"><div class="v">`nwiped'</div><div class="k">technical removal events</div></div>"' _n
             file write `hf' `"</div>"' _n
-            file write `hf' `"<div class="how"><b>How to handle every case below:</b> open the interview in Headquarters and check the changed question; ask the enumerator why it changed after the later questions were done; if the NEW value is correct, <b>reject the interview</b> so the erased questions are asked again (they are empty now); if the OLD value was correct, restore it and verify the answers below it. Occasional cases are honest corrections - the pattern to challenge is the same gate erased across many interviews, or one enumerator producing many cases.</div>"' _n
+            file write `hf' `"<div class="how"><b>How to read each card:</b> first read <b>Observed answer event</b>, which now states whether the exact question/roster instance changed value, repeated the same value, was first observed, or was re-entered after removal. Next read <b>Questionnaire relationship</b>, then the removal history and current state. When data() is supplied, blank-but-disabled questions move to <b>Resolved history</b>; only final blanks that are enabled, not evaluable, or absent from the supplied export remain under <b>Cases needing verification</b>. A questionnaire relationship is not automatic proof of cause.</div>"' _n
             quietly save `"`DET2'"'
+
             quietly use `"`GSUM'"', clear
-            file write `hf' `"<h2>Gate questions flipped most</h2>"' _n
-            file write `hf' `"<table><tr><th>variable</th><th class="r">cases</th><th class="r">answers erased</th></tr>"' _n
+            file write `hf' `"<details class="techsum"><summary>Technical pattern summary</summary>"' _n
+            file write `hf' `"<div class="meta">This table counts raw removal histories. Cause not identified means no questionnaire relationship was found. A direct link means the conditions mention the variable; an indirect link means they mention a calculated variable that depends on it. Neither proves cause.</div>"' _n
+            file write `hf' `"<table><tr><th>relationship / variable</th><th class="r">histories</th><th class="r">removal events</th></tr>"' _n
             forvalues i = 1/`=_N' {
-                file write `hf' `"<tr><td class="mono">"' (trigger[`i']) `"</td><td class="r">"' (strofreal(flips[`i'])) `"</td><td class="r">"' (strofreal(wiped[`i'])) `"</td></tr>"' _n
+                file write `hf' `"<tr><td>"' (g_label[`i']) `"</td><td class="r">"' (strofreal(flips[`i'])) `"</td><td class="r">"' (strofreal(wiped[`i'])) `"</td></tr>"' _n
             }
-            file write `hf' `"</table>"' _n
+            file write `hf' `"</table></details>"' _n
+
             quietly use `"`DET2'"', clear
-            file write `hf' `"<h2>Action needed - grouped by gate question</h2>"' _n
+            file write `hf' `"<h2>Cases needing verification</h2>"' _n
+            file write `hf' `"<div class="note">These cases contain at least one final blank that is enabled, whose effective logic could not be evaluated, or whose variable/roster instance is absent from the supplied data. Blank-but-disabled questions are resolved automatically.</div>"' _n
             quietly count if tier!="C"
             local nact = r(N)
             if `nact'>0 {
                 quietly keep if tier!="C"
-                quietly replace trigger = "(unknown gate)" if trigger==""
+                quietly gen long __check = nopen + nunknown
                 tempvar gw gi ge tgi tge gc2
-                quietly egen long `gw'  = total(nrem), by(trigger)
-                quietly egen byte `tgi' = tag(trigger interview__id)
-                quietly egen long `gi'  = total(`tgi'), by(trigger)
-                quietly egen byte `tge' = tag(trigger h_ac)
-                quietly egen long `ge'  = total(`tge'), by(trigger)
-                quietly egen long `gc2' = count(nrem), by(trigger)
-                gsort -`gw' trigger -nrem interview__id sk_run
+                quietly egen long `gw'  = total(__check), by(h_gkey)
+                quietly egen byte `tgi' = tag(h_gkey interview__id)
+                quietly egen long `gi'  = total(`tgi'), by(h_gkey)
+                quietly egen byte `tge' = tag(h_gkey h_ac)
+                quietly egen long `ge'  = total(`tge'), by(h_gkey)
+                quietly egen long `gc2' = count(nrem), by(h_gkey)
+                gsort -`gw' h_gkey -__check -nqrem interview__id sk_run
                 quietly gen byte __gf = 1
-                quietly replace __gf = trigger != trigger[_n-1] if _n>1
+                quietly replace __gf = h_gkey != h_gkey[_n-1] if _n>1
                 local ing 0
                 forvalues i = 1/`=_N' {
                     if __gf[`i'] {
                         if `ing' file write `hf' `"</details>"' _n
                         local ing 1
-                        file write `hf' `"<details open><summary class="gate"><b class="mono">"' (cond(h_tg[`i']!="", h_tg[`i'], "(unknown gate)")) `"</b> &nbsp;-&nbsp; "' (strofreal(`gc2'[`i'])) `" case(s), "' (strofreal(`gw'[`i'])) `" answers erased, in "' (strofreal(`gi'[`i'])) `" interview(s) by "' (strofreal(`ge'[`i'])) `" enumerator(s)</summary>"' _n
-                        if h_l3[`i']!="" file write `hf' (h_l3[`i']) _n
-                        if h_l4[`i']!="" file write `hf' (h_l4[`i']) _n
+                        file write `hf' `"<details open><summary class="gate"><b>"' (h_group[`i']) `"</b> &nbsp;-&nbsp; "' (strofreal(`gc2'[`i'])) `" case(s), "' (strofreal(`gw'[`i'])) `" question(s) to check, in "' (strofreal(`gi'[`i'])) `" interview(s)</summary>"' _n
                     }
                     file write `hf' (h_open[`i']) _n
                     file write `hf' (h_chip[`i']) _n
                     file write `hf' (h_l1[`i']) _n
-                    file write `hf' `"<div class="c2" style="font-weight:700;color:#7a5b00">"' (why[`i']) `"</div>"' _n
+                    file write `hf' (h_eventbox[`i']) _n
+                    if h_finalbox[`i']!="" file write `hf' (h_finalbox[`i']) _n
+                    file write `hf' (h_rel[`i']) _n
                     file write `hf' (h_l2[`i']) _n
-                    if h_do[`i']!="" file write `hf' (h_do[`i']) _n
-                    if h_l5[`i']!="" file write `hf' (h_l5[`i']) _n
-                    if h_l6[`i']!="" file write `hf' (h_l6[`i']) _n
+                    file write `hf' (h_state[`i']) _n
+                    file write `hf' (h_do[`i']) _n
+                    file write `hf' (h_tech[`i']) _n
                     file write `hf' `"</div>"' _n
                 }
                 if `ing' file write `hf' `"</details>"' _n
             }
-            else file write `hf' `"<div class="meta">Nothing needs action - every case was auto-cleared as routine.</div>"' _n
+            else file write `hf' `"<div class="state resolved"><b>No final-data checks are indicated.</b> Every affected item is answered or correctly blank under the final questionnaire logic.</div>"' _n
+
             quietly use `"`DET2'"', clear
-            file write `hf' `"<h2>Routine cases (auto-cleared)</h2>"' _n
-            file write `hf' `"<details><summary style="cursor:pointer;font-size:13px;color:#555;padding:6px 0">Show `nclr' routine case(s) - confirmed corrections, workflow resets and systemic churn</summary>"' _n
+            file write `hf' `"<h2>Resolved history - no action</h2>"' _n
+            file write `hf' `"<details><summary style="cursor:pointer;font-size:13px;color:#555;padding:6px 0">Show `nclr' resolved historical case(s)</summary>"' _n
             local wr 0
             forvalues i = 1/`=_N' {
                 if tier[`i']!="C" continue
@@ -3744,16 +5182,18 @@ program _suso_para_skips, rclass
                 file write `hf' (h_open[`i']) _n
                 file write `hf' (h_chip[`i']) _n
                 file write `hf' (h_l1[`i']) _n
+                file write `hf' (h_eventbox[`i']) _n
+                if h_finalbox[`i']!="" file write `hf' (h_finalbox[`i']) _n
+                file write `hf' (h_rel[`i']) _n
                 file write `hf' (h_l2[`i']) _n
-                if h_l3[`i']!="" file write `hf' (h_l3[`i']) _n
-                if h_l4[`i']!="" file write `hf' (h_l4[`i']) _n
-                if h_l5[`i']!="" file write `hf' (h_l5[`i']) _n
-                if h_l6[`i']!="" file write `hf' (h_l6[`i']) _n
+                file write `hf' (h_state[`i']) _n
+                file write `hf' (h_do[`i']) _n
+                file write `hf' (h_tech[`i']) _n
                 file write `hf' `"</div>"' _n
             }
             file write `hf' `"</details>"' _n
-            if `nclr'>200 file write `hf' `"<div class="meta">Showing the 200 largest of `nclr' routine case(s).</div>"' _n
-            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.0). Cases are screening signals from the paradata event stream, not proof of misconduct.</div>"' _n
+            if `nclr'>200 file write `hf' `"<div class="meta">Showing the first 200 of `nclr' resolved historical cases.</div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.12). Cases are screening signals from the paradata event stream, not proof of misconduct.</div>"' _n
             file write `hf' `"</div></body></html>"' _n
             file close `hf'
             di as txt "  shareable review page written: " as res `"`html'"'
@@ -3775,8 +5215,21 @@ program _suso_para_skips, rclass
 
     return scalar nints     = `nints'
     return scalar ncascades = `ncasc'
-    return scalar nwiped    = `nwiped'
-    return scalar naffected = `naff'
+    return scalar nwiped       = `nwiped'
+    return scalar nremovalevents = `nremevents'
+    return scalar naffectedquestions = `naffectedqall'
+    return scalar nreanswered    = `nreansweredall'
+    return scalar nopen          = `nopenall'
+    return scalar nunknown       = `nunknownall'
+    return scalar nfinalanswered = `nfinalansweredall'
+    return scalar nanswereddisabled = `nanswereddisabledall'
+    return scalar nexpectedblank = `nexpectedblankall'
+    return scalar nblankenabled  = `nblankenabledall'
+    return scalar nlogicunknown  = `nlogicunknownall'
+    return scalar nnotindata     = `nnotindataall'
+    return scalar nfinalcheck    = `nfinalcheckall'
+    return scalar hasfinaldata   = `hasfinaldata'
+    return scalar naffected      = `naff'
 end
 
 * ---- report: dynamic self-contained HTML QC report ------------------------------
@@ -3790,6 +5243,8 @@ program _suso_para_report, rclass
         GAPMins(real 30) FASTsecs(real 2) ALLRoles                               ///
         CASCade(integer 3) WINdow(real 60) LITEcap(integer 15000) ]
     _suso_para_need events
+    tempfile EVFULL
+    quietly save `"`EVFULL'"'
     _suso_para_varsel , vars(`"`vars'"')
 
     if `"`saving'"'=="" local saving "suso_paradata_qc.html"
@@ -3877,7 +5332,7 @@ program _suso_para_report, rclass
     local hasq 0
     capture confirm variable para_var
     if !_rc {
-        quietly keep if para_ans & para_ivw & para_var!=""
+        quietly keep if para_fieldans & para_var!=""
         if _N>0 {
             local hasq 1
             tempvar tag
@@ -3895,7 +5350,7 @@ program _suso_para_report, rclass
 
     * ---- interviewer-day volume + lite decision ----------------------------------
     quietly use `"`EVD'"', clear
-    quietly keep if para_ans & para_ivw & !missing(para_tsu)
+    quietly keep if para_fieldans & !missing(para_tsu)
     if _N==0 {
         di as err "suso paradata report: no interviewer answer events — nothing to report on."
         exit 2000
@@ -3923,7 +5378,7 @@ program _suso_para_report, rclass
     * ---- per-interview hour and answer-gap vectors (skipped for huge surveys) ----
     if !`lite' {
         quietly use `"`EVD'"', clear
-        quietly keep if para_ans & para_ivw & !missing(para_tsl)
+        quietly keep if para_fieldans & !missing(para_tsl)
         quietly gen byte __hh = hh(para_tsl)
         quietly contract interview__id __hh, freq(__pc)
         forvalues h = 0/23 {
@@ -4053,7 +5508,7 @@ program _suso_para_report, rclass
     * zero changes means the supervisor's rejection was simply bounced straight back.
     quietly use `"`EVD'"', clear
     sort interview__id para_ord para_seq
-    quietly by interview__id: gen double __ca = sum((para_ans | para_rem) & para_ivw)
+    quietly by interview__id: gen double __ca = sum(para_fieldans | para_fieldrem)
     quietly gen double __cts = para_tsu if para_cmp
     quietly gen double __cca = __ca     if para_cmp
     gsort interview__id -para_ord -para_seq
@@ -4088,7 +5543,7 @@ program _suso_para_report, rclass
     local hasov 0
     capture confirm string variable responsible
     if !_rc {
-        quietly keep if para_ans & para_ivw & responsible!="" & !missing(para_tsu)
+        quietly keep if para_fieldans & responsible!="" & !missing(para_tsu)
         if _N>0 {
             quietly merge m:1 interview__id using `"`MODEF'"', keep(master match) nogenerate
             quietly drop if iscawi==1
@@ -4119,7 +5574,7 @@ program _suso_para_report, rclass
     tempvar fct fmin
     quietly gen double `fct' = para_tsu if para_cmp
     quietly egen double `fmin' = min(`fct'), by(interview__id)
-    quietly gen byte __pc1 = para_ans & para_ivw & !missing(`fmin') & para_tsu>`fmin'
+    quietly gen byte __pc1 = para_fieldans & !missing(`fmin') & para_tsu>`fmin'
     collapse (sum) pce=__pc1, by(interview__id) fast
     quietly save `"`PCEF'"'
 
@@ -4150,7 +5605,7 @@ program _suso_para_report, rclass
     quietly use `"`EVD'"', clear
     capture confirm variable para_var
     if !_rc {
-        quietly keep if para_ans & para_ivw & para_var!=""
+        quietly keep if para_fieldans & para_var!=""
         if _N>0 {
             local hasnq 1
             quietly bysort interview__id para_var: keep if _n==1
@@ -4220,14 +5675,28 @@ program _suso_para_report, rclass
     }
 
     * ---- skip cascades ------------------------------------------------------------
-    quietly use `"`EV'"', clear
-    quietly _suso_para_skips , cascade(`cascade') window(`window') qx(`"`qx'"') detail(`"`RSD'"')
+    quietly use `"`EVFULL'"', clear
+    quietly _suso_para_skips , cascade(`cascade') window(`window') qx(`"`qx'"') ///
+        data(`"`data'"') detail(`"`RSD'"') vars(`"`vars'"') `allroles'
     local ncasc = r(ncascades)
     local nwiped = r(nwiped)
+    local naffectedq = r(naffectedquestions)
+    local nopen = r(nopen)
+    local nreanswered = r(nreanswered)
+    local nunknown = r(nunknown)
+    local nfinalanswered = r(nfinalanswered)
+    local nanswereddisabled = r(nanswereddisabled)
+    local nexpectedblank = r(nexpectedblank)
+    local nfinalcheck = r(nfinalcheck)
+    local hasfinaldata = r(hasfinaldata)
     local trignames `"`r(triggers)'"'
     tempname RT
     capture matrix `RT' = r(triggers_stats)
-    quietly keep interview__id n_cascades casc_removed n_triggers
+    quietly keep interview__id n_cascades casc_removed casc_questions casc_open ///
+        casc_reanswered casc_unknown casc_finalanswered casc_answered_disabled ///
+        casc_expectedblank                                                       ///
+        casc_blank_enabled casc_logicunknown casc_notindata casc_finalcheck      ///
+        casc_datachecked n_triggers
     quietly save `"`SK'"'
 
     * ---- timing + flags (defaults; live thresholds are client-side) ---------------
@@ -4235,7 +5704,10 @@ program _suso_para_report, rclass
     quietly _suso_para_timing , by(interview) gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
     quietly _suso_para_flags
     quietly merge 1:1 interview__id using `"`SK'"', nogenerate
-    foreach v in n_cascades casc_removed n_triggers {
+    foreach v in n_cascades casc_removed casc_questions casc_open casc_reanswered ///
+        casc_unknown casc_finalanswered casc_answered_disabled casc_expectedblank ///
+        casc_blank_enabled                                                       ///
+        casc_logicunknown casc_notindata casc_finalcheck casc_datachecked n_triggers {
         quietly replace `v' = 0 if missing(`v')
     }
     if !`lite' {
@@ -4304,7 +5776,7 @@ program _suso_para_report, rclass
     local ncompletedc = trim("`ncompletedc'")
     local nuntouchedc : di %12.0fc `nuntouched'
     local nuntouchedc = trim("`nuntouchedc'")
-    local warnc = cond(`ncasc'>0, "warn", "dim")
+    local warnc = cond((`nopen'+`nunknown')>0, "warn", "dim")
     quietly save `"`MERGED'"'
 
     * ---- write the HTML -----------------------------------------------------------
@@ -4385,7 +5857,7 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="card"><div class="v">`ncompletedc'</div><div class="k">completed</div></div>"' _n
     file write `fh' `"<div class="card dim"><div class="v">`nuntouchedc'</div><div class="k">never started (preload only)</div></div>"' _n
     file write `fh' `"<div class="card"><div class="v">`tothrc'</div><div class="k">interviewer hours</div></div>"' _n
-    file write `fh' `"<div class="card `warnc'"><div class="v">`ncasc'</div><div class="k">skip cascades (`nwiped' wiped)</div></div>"' _n
+    file write `fh' `"<div class="card `warnc'"><div class="v">`ncasc'</div><div class="k">removal histories (`nfinalcheck' need review; `nexpectedblank' correctly blank; `nfinalanswered' answered; `nanswereddisabled' answered while disabled)</div></div>"' _n
     file write `fh' `"</div>"' _n
     file write `fh' `"<div class="panel">"' _n
     file write `fh' `"<div class="prow">"' _n
@@ -4422,7 +5894,7 @@ program _suso_para_report, rclass
     file write `fh' `"</div>"' _n
     file write `fh' `"<div id="verdict" class="verdict"></div>"' _n
     file write `fh' `"<h2>What needs attention</h2>"' _n
-    file write `fh' `"<div class="note">Every interview here comes with the evidence in plain words. <b>Investigate</b> = hard evidence (two interviews at once, or a rejection bounced straight back) or three independent signals. <b>Verify</b> = two signals, or one signal plus a skip cascade. <b>Watch</b> = a single signal; look only if a pattern builds. Click a row for its detail; the key is what you paste into Headquarters. Signals are screening evidence for review, never proof of fabrication on their own. <span id="w_none"></span></div>"' _n
+    file write `fh' `"<div class="note">Every interview here comes with the evidence in plain words. <b>Investigate</b> = hard evidence (two interviews at once, or a rejection bounced straight back) or three independent signals. <b>Verify</b> = an unresolved removal history, two signals, or one signal plus a resubmission concern. <b>Watch</b> = a single behaviour signal; look only if a pattern builds. Click a row for its detail; the key is what you paste into Headquarters. Signals are screening evidence for review, never proof of fabrication on their own. <span id="w_none"></span></div>"' _n
     file write `fh' `"<section><div style="margin:6px 0"><button id="c_csv" class="pbtn ghost">Download this list (CSV)</button></div><table id="t_worst"></table></section>"' _n
     file write `fh' `"<h2>Behaviour flags</h2>"' _n
     file write `fh' `"<div class="note">How often each signal fires at the current thresholds. Adjust sensitivity in the panel; everything recomputes instantly. Only interviews with actual fieldwork are analysed; API-preloaded records are set aside.</div>"' _n
@@ -4445,76 +5917,97 @@ program _suso_para_report, rclass
     file write `fh' `"<h2>Question timing</h2>"' _n
     file write `fh' `"<div class="note">Median seconds to answer each question, across interviews with fieldwork. Type to filter; click a column header to sort. Slow questions are usually hard questions - candidates for rewording or interviewer training. <span id="q_more"></span></div>"' _n
     file write `fh' `"<section><div class="ctrl" style="max-width:280px;margin-bottom:8px"><label>Filter questions</label><input id="c_q" type="text" placeholder="variable name contains..."></div><table id="t_q"></table></section>"' _n
-    * static skip-trigger table
+    * static removal-history summary (technical, collapsed by default)
     if `ncasc'>0 & `"`trignames'"'!="" {
-        file write `fh' `"<h2>Gate variables wiping answers</h2>"' _n
-        file write `fh' `"<div class="note">A cascade is `cascade'+ consecutive answer removals within `window' seconds of an answer (a gate/filter flip). Occasional cascades are honest corrections; the same gate flipped across many interviews is skip abuse or a badly worded filter. These are computed at build time.</div>"' _n
-        file write `fh' `"<section><table><tr><th>variable</th><th class="r">flips</th><th class="r">interviews</th><th class="r">answers wiped</th></tr>"' _n
+        file write `fh' `"<details style="margin-top:22px"><summary style="cursor:pointer;color:#556575;font-size:13px;font-weight:600">Technical removal-pattern summary</summary>"' _n
+        file write `fh' `"<div class="note">These counts describe historical AnswerRemoved runs. The displayed variable may be either questionnaire-linked or merely the nearest answer event; it is not automatically the cause.</div>"' _n
+        file write `fh' `"<section><table><tr><th>nearby / linked variable</th><th class="r">histories</th><th class="r">interviews</th><th class="r">removal events</th></tr>"' _n
         local i = 0
         foreach t of local trignames {
             local ++i
             _suso_para_hesc `t'
             file write `fh' `"<tr><td class="mono">`r(out)'</td><td class="r">`=`RT'[`i',1]'</td><td class="r">`=`RT'[`i',2]'</td><td class="r">`=`RT'[`i',3]'</td></tr>"' _n
         }
-        file write `fh' `"</table></section>"' _n
+        file write `fh' `"</table></section></details>"' _n
     }
+
     capture confirm file `"`RSD'"'
     if !_rc & `ncasc'>0 {
         preserve
         quietly use `"`RSD'"', clear
-        gsort -nrem interview__id sk_run
-        local hasqxt 0
-        capture confirm variable qx_text
-        if !_rc local hasqxt 1
-        * escaped display columns: data reaches the file only via (exp), never macros
-        quietly gen strL e_ac = cond(actor!="", actor, resp)
-        quietly gen strL e_tg = trigger
-        quietly gen strL e_tv0 = trigval
-        quietly gen strL e_qt = ""
-        if `hasqxt' quietly replace e_qt = substr(qx_text,1,160)
-        quietly gen strL e_wl = substr(wlc,1,300)
         capture confirm variable tier
         if _rc {
             quietly gen str1 tier = "V"
-            quietly gen strL why = ""
+            quietly gen strL why = "Check final data"
         }
-        foreach v in e_ac e_tg e_tv0 e_qt e_wl {
+        quietly gen byte __sev = cond(tier=="A",2,cond(tier=="V",1,0))
+        gsort -__sev -nopen -nunknown -nqrem interview__id sk_run
+        local hasqxt 0
+        capture confirm variable qx_text
+        if !_rc local hasqxt 1
+
+        quietly gen str120 e_ac = substr(cond(actor!="", actor, resp),1,120)
+        quietly gen strL e_tg = trigger
+        quietly gen strL e_qt = ""
+        if `hasqxt' quietly replace e_qt = substr(qx_text,1,160)
+        quietly gen strL e_wl = substr(wlc,1,300)
+        quietly gen strL e_event = transition_text
+        quietly gen strL e_final = trigger_final_text
+        quietly gen strL e_check = wl_open
+        quietly replace e_check = e_check + cond(e_check!="", " | ", "") + wl_unknown if wl_unknown!=""
+        quietly gen strL e_rel = cond(reltype==1, ///
+            cond(linkmode==2,"Indirect questionnaire relationship: ", ///
+            cond(linkmode==3,"Direct and indirect questionnaire relationship: ", ///
+            "Direct questionnaire relationship: ")) + ///
+            cond(trigger!="",trigger,"(unknown)"), ///
+            cond(reltype==3, "Questionnaire questions with no item-level condition shown", ///
+            cond(reltype==4, "Fields outside questionnaire metadata", ///
+            cond(reltype==5, "Mixed questionnaire/external fields", ///
+            cond(reltype==6, "Questionnaire metadata not supplied", ///
+            "Nearest AnswerSet only (not linked by questionnaire): " + cond(trigger!="",trigger,"(unknown)"))))))
+        foreach v in e_ac e_tg e_qt e_wl e_event e_final e_check e_rel {
             quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
         }
-        quietly gen strL e_tv = ""
-        quietly replace e_tv = " to &quot;" + e_tv0 + "&quot;" if e_tv0!=""
-        quietly gen strL e_mr = ""
-        quietly replace e_mr = " ... and " + strofreal(nrem-8) + " more" if nrem>8 & e_wl!=""
-        quietly gen strL e_cf = ""
-        if `hasqxt' {
-            quietly replace e_cf = "<div class=" + char(34) + "note" + char(34) + " style=" + char(34) + "margin:2px 0 0;color:#1e6b34;font-weight:600" + char(34) + ">Gate confirmed: the erased questions depend on this variable.</div>" if conf>0
-            quietly replace e_cf = "<div class=" + char(34) + "note" + char(34) + " style=" + char(34) + "margin:2px 0 0;color:#666" + char(34) + ">Review/approval workflow reset - not enumerator skip abuse.</div>" if conf==0 & allsvc==1
-            quietly replace e_cf = "<div class=" + char(34) + "note" + char(34) + " style=" + char(34) + "margin:2px 0 0;color:#7a5b00;font-weight:600" + char(34) + ">Unconfirmed (timing only) - verify in the interview history first.</div>" if conf==0 & allsvc==0
-        }
+
+        quietly gen strL e_eventline = "<b>Historical answer event:</b> " + e_event
+        quietly gen strL e_finalline = ""
+        quietly replace e_finalline = "<b>Current final export:</b> " + e_final if e_final!=""
+        quietly gen strL e_hist = "<b>Removal history:</b> " + strofreal(nrem) + ///
+            " AnswerRemoved event(s) affected " + strofreal(nqrem) + ///
+            " distinct question/roster instance(s)."
+        quietly gen strL e_state = "<b>Current paradata state:</b> " + ///
+            strofreal(nreanswered) + " answered again; " + strofreal(nopen) + ///
+            " still appear removed; " + strofreal(nunknown) + " unknown."
+        quietly gen strL e_action = "<b>Check in final .dta:</b> <span class=" + char(34) + "mono" + char(34) + ">" + e_check + "</span>. Reject only if a listed value is actually blank and should have been asked."
+        quietly replace e_action = "<b>Priority check:</b> review the final .dta and interview history because multiple unresolved sequences or sections are involved." if tier=="A"
         quietly gen str24 e_dt = string(ts0/86400000, "%tdDD_Mon_CCYY")
-        file write `fh' `"<h2>Actions for the field supervisor</h2>"' _n
-        file write `fh' `"<div class="note">One entry per skip violation, largest first. If the new gate value is right, the interview should be rejected so the erased questions are re-asked; if the old value was right, restore it and verify the section. For an email-ready version run: suso paradata skips , qx(questionnaire.html) messages(review.txt)</div>"' _n
+
+        file write `fh' `"<h2>Removal histories requiring a final-data check</h2>"' _n
+        file write `fh' `"<div class="note">Only unresolved histories are shown here. Fully re-answered cases are omitted from this action list and remain available in the Skip removals tab.</div>"' _n
         file write `fh' `"<section>"' _n
         quietly count if tier!="C"
-        file write `fh' `"<div class="note"><b>"' (strofreal(r(N))) `"</b> case(s) need attention; the rest were auto-cleared as routine (confirmed corrections, workflow resets, systemic churn).</div>"' _n
-        local kk = min(15, _N)
-        local shown 0
-        forvalues i = 1/`kk' {
-            if tier[`i']=="C" continue
-            local ++shown
-            file write `fh' `"<div style="border-bottom:1px solid #eef0f2;padding:9px 0">"' _n
-            file write `fh' `"<div style="font-size:13px"><span class="mono"><b>"' (interview__id[`i']) `"</b></span> &nbsp; enumerator <b>"' (e_ac[`i']) `"</b> &nbsp; "' (e_dt[`i']) `"</div>"' _n
-            file write `fh' `"<div style="font-size:12.5px;margin-top:3px">The answer to <b class="mono">"' (e_tg[`i']) `"</b> was changed"' (e_tv[`i']) `" after <b>"' (strofreal(nrem[`i'])) `"</b> later answers were recorded - the skip logic erased them.</div>"' _n
-            if e_qt[`i']!="" {
-                file write `fh' `"<div class="note" style="margin:2px 0 0"><span class="mono">"' (e_tg[`i']) `"</span>: &quot;"' (e_qt[`i']) `"&quot;</div>"' _n
+        local nshow = r(N)
+        file write `fh' `"<div class="note"><b>"' (strofreal(`nshow')) `"</b> case(s) require a final-data check.</div>"' _n
+        if `nshow'>0 {
+            quietly keep if tier!="C"
+            local kk = min(15, _N)
+            forvalues i = 1/`kk' {
+                file write `fh' `"<div style="border-bottom:1px solid #eef0f2;padding:10px 0">"' _n
+                file write `fh' `"<div style="font-size:13px"><span class="mono"><b>"' (interview__id[`i']) `"</b></span> &nbsp; enumerator <b>"' (e_ac[`i']) `"</b> &nbsp; "' (e_dt[`i']) `"</div>"' _n
+                file write `fh' `"<div style="font-size:12.5px;font-weight:700;color:"' (cond(tier[`i']=="A","#8a1f1f","#7a5b00")) `"">"' (why[`i']) `"</div>"' _n
+                file write `fh' `"<div style="font-size:12.5px;margin-top:4px">"' (e_eventline[`i']) `"</div>"' _n
+                if e_finalline[`i']!="" file write `fh' `"<div style="font-size:12.5px;margin-top:4px;color:#173b5e;background:#edf5fb;padding:5px 7px;border-radius:5px">"' (e_finalline[`i']) `"</div>"' _n
+                file write `fh' `"<div style="font-size:12.5px;margin-top:4px">"' (e_hist[`i']) `"</div>"' _n
+                file write `fh' `"<div class="note" style="margin:4px 0 0">"' (e_state[`i']) `"</div>"' _n
+                file write `fh' `"<div class="note" style="margin:4px 0 0;color:#333">"' (e_action[`i']) `"</div>"' _n
+                file write `fh' `"<details style="margin-top:5px"><summary style="cursor:pointer;color:#556575;font-size:11.5px">Technical details</summary>"' _n
+                file write `fh' `"<div class="note">"' (e_rel[`i']) `" &nbsp; Removal events: "' (strofreal(nrem[`i'])) `"</div>"' _n
+                if e_qt[`i']!="" file write `fh' `"<div class="note"><span class="mono">"' (e_tg[`i']) `"</span>: &quot;"' (e_qt[`i']) `"&quot;</div>"' _n
+                if e_wl[`i']!="" file write `fh' `"<div class="note">Affected questions: <span class="mono">"' (e_wl[`i']) (cond(length(wlc[`i'])>300," ...","")) `"</span></div>"' _n
+                file write `fh' `"</details></div>"' _n
             }
-            if e_wl[`i']!="" {
-                file write `fh' `"<div class="note" style="margin:2px 0 0">Erased: <span class="mono">"' (e_wl[`i']) (e_mr[`i']) `"</span></div>"' _n
-            }
-            if e_cf[`i']!="" file write `fh' (e_cf[`i']) _n
-            file write `fh' `"</div>"' _n
         }
-        if `shown'==0 file write `fh' `"<div class="note">Nothing needs action - every skip case was auto-cleared as routine.</div>"' _n
+        else file write `fh' `"<div class="note" style="color:#1e6b34"><b>No final-data checks are indicated.</b> Every affected question was answered again in the paradata.</div>"' _n
         file write `fh' `"</section>"' _n
         restore
     }
@@ -4522,7 +6015,7 @@ program _suso_para_report, rclass
     local rnesc `"`r(out)'"'
     local veline ""
     if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Active time sums inter-event gaps within each interview, capping every gap at `gapmins' minutes and zeroing Paused-to-Resumed intervals. Answer speed is the gap preceding each AnswerSet on a newly reached question within a session; repeat answers on the same question (multi-select taps, list items, immediate revisions) are excluded from the speed clock. Peer speed compares each interview's timed questions with the survey-median seconds for those same questions, so it is unaffected by which sections an interview reached. Overlap counts device-clock minutes in which the same enumerator recorded answers in two or more interviews. Night uses device-local time; the team's modal timezone offset is `tzmodeh' h and interviews on a different or changing offset are marked clock-suspect. CAWI (web) interviews keep only churn, duration-outlier and workflow signals, since respondent-driven timing says nothing about the enumerator. Interview status is the workflow state at the last status event in the paradata. Duration outliers use a robust (median/MAD) z on log active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from all figures. Flags are screening signals for review, not evidence of fabrication.<br><b>Produced by</b> suso paradata report (suso v1.7.0) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Active time sums inter-event gaps within each interview, capping every gap at `gapmins' minutes and zeroing workflow/session breaks. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from behavioural metrics but retained in historical state. Answer speed preserves timestamp milliseconds and is the gap preceding each AnswerSet on a newly reached question within a session; repeat answers on the same question (multi-select taps, list items, immediate revisions) are excluded from the speed clock. Peer speed compares each interview's timed questions with the survey-median seconds for those same questions, so it is unaffected by which sections an interview reached. Overlap counts device-clock minutes in which the same enumerator recorded answers in two or more interviews. Night uses device-local time; the team's modal timezone offset is `tzmodeh' h and interviews on a different or changing offset are marked clock-suspect. CAWI (web) interviews keep only churn, duration-outlier and workflow signals, since respondent-driven timing says nothing about the enumerator. Interview status is the workflow state at the last status event in the paradata. Duration outliers use a robust (median/MAD) z on log active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from all figures. Flags are screening signals for review, not evidence of fabrication.<br><b>Produced by</b> suso paradata report (suso v1.7.12) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
     * ---- embedded data ------------------------------------------------------------
@@ -4563,7 +6056,7 @@ program _suso_para_report, rclass
         }
         if `"`fjm'"'!="" local fjm `","f":{`fjm'}"'
         local sep = cond(`i'==1, "", ",")
-        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","k":"`kj'","r":"`rj'","ws":"`=ws[`i']'"`fjm',"d0":"`=__d0[`i']'","m":`=iscawi[`i']',"nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"wip":`=casc_removed[`i']',"fr":`=fr[`i']'"'
+        file write `fh' `"`sep'{"id":"`=interview__id[`i']'","k":"`kj'","r":"`rj'","ws":"`=ws[`i']'"`fjm',"d0":"`=__d0[`i']'","m":`=iscawi[`i']',"nt":`=n_timed[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.2f")',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"rem":`=casc_removed[`i']',"wip":`=casc_questions[`i']',"cop":`=casc_open[`i']',"cr":`=casc_reanswered[`i']',"cu":`=casc_unknown[`i']',"fda":`=casc_finalanswered[`i']',"fad":`=casc_answered_disabled[`i']',"feb":`=casc_expectedblank[`i']',"fbe":`=casc_blank_enabled[`i']',"flu":`=casc_logicunknown[`i']',"fnd":`=casc_notindata[`i']',"fck":`=casc_finalcheck[`i']',"fdc":`=casc_datachecked[`i']',"fr":`=fr[`i']'"'
         file write `fh' `","rt":`rtj',"ov":`=ovm[`i']',"rj":`=n_rejected[`i']',"rb":`rbj',"re":`rej',"pc":`=pce[`i']',"ve":`vej',"nq":`nqj',"ss":`=sessions[`i']',"rs":`=n_restarted[`i']',"tz":`=cond(missing(tzh[`i']),"null",string(tzh[`i'],"%12.1f"))',"to":`=tzodd[`i']'`vecs'}"' _n
     }
     file write `fh' `"],"' _n
@@ -4664,14 +6157,15 @@ program _suso_para_report, rclass
     file write `fh' `"  softResub: function(row){"' _n
     file write `fh' `"    return row.rj>0 && row.re!==null && row.re>0 && row.re<=2 && row.rb!==null && row.rb<10;"' _n
     file write `fh' `"  },"' _n
+    file write `fh' `"  unresolvedRemoval: function(row){ return row.fdc===1 ? (row.fck||0)>0 : ((row.cop||0)+(row.cu||0))>0; },"' _n
     file write `fh' `"  tierFor: function(row){"' _n
     file write `fh' `"    if(row._r || row._f[7]) return 'A';"' _n
     file write `fh' `"    if(row._n>=3) return 'A';"' _n
     file write `fh' `"    if(row._n===2) return 'V';"' _n
-    file write `fh' `"    if(row._n===1 && (row.cas>0 || P.softResub(row))) return 'V';"' _n
+    file write `fh' `"    if(row._n===1 && (P.unresolvedRemoval(row) || P.softResub(row))) return 'V';"' _n
     file write `fh' `"    if(P.softResub(row)) return 'V';"' _n
     file write `fh' `"    if(row._n===1) return 'W';"' _n
-    file write `fh' `"    if(row.cas>0) return 'W';"' _n
+    file write `fh' `"    if(P.unresolvedRemoval(row)) return 'V';"' _n
     file write `fh' `"    return '';"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  evidence: function(row,S,team){"' _n
@@ -4701,7 +6195,8 @@ program _suso_para_report, rclass
     file write `fh' `"    }"' _n
     file write `fh' `"    if(f[4]) out.push({t:'flag', s:P.f1(100*row.ch,0)+' answers removed per 100 set.'});"' _n
     file write `fh' `"    if(f[5]) out.push({t:'flag', s:'Active time '+P.f1(row.act,1)+' min is far outside the survey-wide pattern.'});"' _n
-    file write `fh' `"    if(row.cas>0) out.push({t:'flag', s:'A gate flip erased '+row.wip+' recorded answer(s) - details in the skip sections below.'});"' _n
+    file write `fh' `"    if(P.unresolvedRemoval(row)) out.push({t:'flag', s:'Final-data review after a historical removal run: '+row.fda+' answered; '+row.fad+' answered while disabled; '+row.feb+' blank as expected because disabled; '+row.fbe+' blank while enabled; '+row.flu+' logic unknown; '+row.fnd+' not in supplied data.'});"' _n
+    file write `fh' `"    else if(row.cas>0) out.push({t:'info', s:'Historical removal run resolved: '+row.fda+' answered and '+row.feb+' correctly blank because disabled. No action from this history alone.'});"' _n
     file write `fh' `"    if(row.m===1) out.push({t:'info', s:'Web (CAWI) interview - timing signals not applied.'});"' _n
     file write `fh' `"    if(row.to===1 && !f[3]){"' _n
     file write `fh' `"      if(row.tz!==null && D.meta.tzmode!==undefined && Math.abs(row.tz-D.meta.tzmode)<0.05)"' _n
@@ -4798,7 +6293,7 @@ program _suso_para_report, rclass
     file write `fh' `"      var g=m[r.r], f=P.flagsFor(r,S,ctx), any=false, j;"' _n
     file write `fh' `"      for(j=0;j<8;j++) if(f[j]) any=true;"' _n
     file write `fh' `"      if(P.resub(r)) any=true;"' _n
-    file write `fh' `"      g.n++; if(any||r.cas>0) g.fl++;"' _n
+    file write `fh' `"      g.n++; if(any||P.unresolvedRemoval(r)) g.fl++;"' _n
     file write `fh' `"      g.ov+=r.ov;"' _n
     file write `fh' `"      g.act.push(r.act);"' _n
     file write `fh' `"      if(r.med!==null) g.med.push(r.med);"' _n
@@ -4825,7 +6320,7 @@ program _suso_para_report, rclass
     file write `fh' `"      if(s.indexOf(',')>=0||s.indexOf(Q)>=0||s.indexOf('\n')>=0) return Q+s.split(Q).join(Q+Q)+Q;"' _n
     file write `fh' `"      return s;"' _n
     file write `fh' `"    }"' _n
-    file write `fh' `"    var head=['tier','interview_key','interview_id','enumerator','status','first_day','flags','active_min','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_min','rejections','resubmit_min','resubmit_edits','cascades','answers_wiped','post_completion_edits','open_errors','questions_answered'];"' _n
+    file write `fh' `"    var head=['tier','interview_key','interview_id','enumerator','status','first_day','flags','active_min','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_min','rejections','resubmit_min','resubmit_edits','cascades','questions_affected','post_completion_edits','open_errors','questions_answered'];"' _n
     file write `fh' `"    var lines=[head.join(',')], i, r, j, pat;"' _n
     file write `fh' `"    var tname={A:'INVESTIGATE',V:'VERIFY',W:'WATCH'};"' _n
     file write `fh' `"    for(i=0;i<flagged.length;i++){"' _n
@@ -5000,7 +6495,8 @@ program _suso_para_report, rclass
     file write `fh' `"    var cls=(j===7)?'chip hard':'chip';"' _n
     file write `fh' `"    s+='<span class='+Q+cls+Q+'>'+P.names[j]+'</span>';"' _n
     file write `fh' `"  }"' _n
-    file write `fh' `"  if(r.cas>0) s+='<span class='+Q+'chip'+Q+' title='+Q+'Skip cascade: a gate answer flip erased later answers'+Q+'>Gate flip</span>';"' _n
+    file write `fh' `"  if(P.unresolvedRemoval(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Historical removal run with unresolved final-data assessment'+Q+'>Final-data check</span>';"' _n
+    file write `fh' `"  else if(r.cas>0) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Historical removal run resolved by final data and logic; no action'+Q+'>Removal history resolved</span>';"' _n
     file write `fh' `"  if(r.m===1) s+='<span class='+Q+'chip info'+Q+'>CAWI</span>';"' _n
     file write `fh' `"  if(r.to===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Tablet timezone differs from the team or changed - hours unreliable'+Q+'>Clock suspect</span>';"' _n
     file write `fh' `"  return s;"' _n
@@ -5230,32 +6726,106 @@ end
 program _suso_para_qxload, rclass
     version 14.2
     syntax , FILE(string) [ SAVing(string) replace ]
+
+    * javacall runs inside Stata's JVM, whose process working directory is not
+    * guaranteed to equal Stata's current working directory. Resolve a relative
+    * questionnaire path here, before it crosses the Java boundary. This keeps
+    * Windows paths with spaces and either slash style safe and deterministic.
+    local file = subinstr(`"`file'"', "\", "/", .)
+    local qxpwd = subinstr(`"`c(pwd)'"', "\", "/", .)
+    local qxabs 0
+    * Absolute after slash normalization: /root, //server/share or C:/path.
+    if substr(`"`file'"',1,1)=="/"  local qxabs 1
+    if substr(`"`file'"',2,2)==":/" local qxabs 1
+    if !`qxabs' {
+        if substr(`"`qxpwd'"',length(`"`qxpwd'"'),1)=="/" ///
+            local file `"`qxpwd'`file'"'
+        else local file `"`qxpwd'/`file'"'
+    }
     confirm file `"`file'"'
     di as txt "suso paradata: parsing questionnaire HTML ..."
-    clear
-    mata: _suso_qx_parse(st_local("file"))
-    if _N==0 {
-        di as err "suso paradata qx: no questions found — expected the questionnaire HTML that Survey Solutions includes with every data export."
+
+    * The hierarchy-aware parser is implemented in the packaged Java bridge.
+    * Keeping it out of the ado's Mata block prevents load-time compilation
+    * failures while retaining section, subsection and item-level conditions.
+    _suso_jar
+    tempfile QXCSV
+    local qxcsv = subinstr(`"`QXCSV'"', "\", "/", .)
+    capture macro drop SUSO_QX_FILE SUSO_QX_OUT SUSO_QX_CWD             ///
+        SUSO_QX_RESOLVED SUSO_QX_RC SUSO_QX_MSG
+    global SUSO_QX_FILE `"`file'"'
+    global SUSO_QX_OUT  `"`qxcsv'"'
+    global SUSO_QX_CWD  `"`qxpwd'"'
+    global SUSO_QX_RESOLVED ""
+    global SUSO_QX_RC ""
+    global SUSO_QX_MSG ""
+    capture noisily javacall org.worldbank.suso.Stata qxmeta, classpath("$SUSO_JAR")
+    local jrc = _rc
+    local qxrc "$SUSO_QX_RC"
+    local qxmsg `"$SUSO_QX_MSG"'
+    local qxresolved `"$SUSO_QX_RESOLVED"'
+    capture macro drop SUSO_QX_FILE SUSO_QX_OUT SUSO_QX_CWD                     ///
+        SUSO_QX_RESOLVED SUSO_QX_RC SUSO_QX_MSG
+    if `jrc' | "`qxrc'"!="0" {
+        di as err "suso paradata qx: questionnaire parser failed."
+        if `"`qxmsg'"'!="" di as err "  `qxmsg'"
+        if `"`qxresolved'"'!="" di as err `"  resolved path: `qxresolved'"'
         exit 459
     }
-    label variable qx_var     "variable name"
-    label variable qx_section "section"
-    label variable qx_type    "question type"
-    label variable qx_text    "question text"
-    label variable qx_enable  "enabling condition (skip logic)"
-    label variable qx_nval    "number of validation rules"
-    label variable qx_valmsg  "first validation message"
-    label variable qx_opts    "answer options (first 8)"
-    label variable qx_optvals "answer option values (first 60)"
-    label variable qx_nopts   "number of answer options"
+    capture confirm file `"`qxcsv'"'
+    if _rc {
+        di as err "suso paradata qx: Java parser did not create its metadata file."
+        exit 459
+    }
+
+    import delimited using `"`qxcsv'"', delimiter(comma) varnames(1)             ///
+        stringcols(_all) bindquote(strict) encoding(utf-8) clear
+    quietly destring qx_nval qx_nopts, replace force
+    foreach v in qx_var qx_section qx_subsection qx_type qx_text                ///
+        qx_section_enable qx_group_enable qx_item_enable qx_parent_enable       ///
+        qx_enable qx_enable_deps qx_calc qx_valmsg qx_opts qx_optvals qx_optmap ///
+        qx_section_tri qx_group_tri qx_item_tri {
+        capture confirm string variable `v'
+        if _rc {
+            di as err "suso paradata qx: parser output is missing `v'."
+            exit 459
+        }
+    }
+    if _N==0 {
+        di as err "suso paradata qx: no questions found — expected a Survey Solutions questionnaire preview HTML file."
+        exit 459
+    }
+
+    label variable qx_var             "variable name"
+    label variable qx_section         "section"
+    label variable qx_subsection      "subsection/group"
+    label variable qx_type            "question type"
+    label variable qx_text            "question text"
+    label variable qx_section_enable  "section enabling condition"
+    label variable qx_group_enable    "subsection/group enabling condition"
+    label variable qx_item_enable     "item-level enabling condition"
+    label variable qx_parent_enable   "combined parent enabling condition"
+    label variable qx_enable          "effective enabling condition"
+    label variable qx_enable_deps     "direct and calculated-variable dependencies"
+    label variable qx_calc            "calculated-variable expression"
+    label variable qx_nval            "number of validation rules"
+    label variable qx_valmsg          "first validation message"
+    label variable qx_opts            "answer options (first 8 display; map stores first 60)"
+    label variable qx_optvals         "answer option values (first 60)"
+    label variable qx_optmap          "answer value-label map (internal)"
+    label variable qx_nopts           "number of answer options"
+    label variable qx_section_tri     "section condition translated for final-data evaluation"
+    label variable qx_group_tri       "group condition translated for final-data evaluation"
+    label variable qx_item_tri        "item condition translated for final-data evaluation"
     char _dta[suso_paradata] qx
+
     quietly count if qx_enable!=""
     local ne = r(N)
     quietly count if qx_nval>0
     local nv = r(N)
     di as txt "suso paradata: parsed " as res _N as txt " questions ("             ///
-        as res "`ne'" as txt " with skip logic, " as res "`nv'" as txt " with validations)."
-    di as txt "  use it: {bf:suso paradata skips , qx(file.html)} names the questions in every violation message."
+        as res "`ne'" as txt " with effective skip logic, " as res "`nv'" as txt " with validations)."
+    di as txt "  inherited section/subsection conditions are included in qx_enable."
     if `"`saving'"'!="" {
         if "`replace'"=="" {
             capture confirm new file `"`saving'"'
@@ -5821,7 +7391,7 @@ program _suso_para_check, rclass
     file write `hf' `"<h2>Questions</h2>"' _n
     file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
     file write `hf' `"<div id="list"></div>"' _n
-    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML were translated from C# to Stata; conditions whose numeric referents are unanswered are scored undetermined and excluded from both counts (C# treats null as false, Stata treats missing as infinity). Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Untranslatable conditions are labelled, never guessed. Produced by suso paradata check (suso v1.7.0) on `now'.</div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML were translated from C# to Stata; conditions whose numeric referents are unanswered are scored undetermined and excluded from both counts (C# treats null as false, Stata treats missing as infinity). Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Untranslatable conditions are labelled, never guessed. Produced by suso paradata check (suso v1.7.12) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
     file write `hf' `"var D={"meta":{"statuses":[`jmeta'],"fdims":[`jfdims']},"rows":["' _n
     forvalues i = 1/`=_N' {
@@ -6146,7 +7716,7 @@ program _suso_para_check, rclass
 end
 
 * ---- suite: the three QC pages combined into one tabbed, self-contained HTML ----
-* Tab 1 Behaviour (interactive paradata report), tab 2 Skip violations (supervisor
+* Tab 1 Behaviour (interactive paradata report), tab 2 Skip/removal review (supervisor
 * review page), tab 3 Data QC (skip logic + option values vs the exported data).
 * Each page is embedded in its own sandboxed iframe (srcdoc), so their scripts,
 * styles and element ids cannot collide; the outer file remains one offline HTML.
@@ -6157,7 +7727,41 @@ program _suso_para_suite, rclass
         CASCade(integer 3) WINdow(real 60) TOP(integer 15)                         ///
         MISScodes(numlist) STatus(string) FILTERS(string) VARS(string) ]
     _suso_para_need events
-    _suso_para_varsel , vars(`"`vars'"')
+
+    * Resolve suite paths against Stata's working directory before any nested
+    * command or Java call. The JVM may use a different process directory.
+    local suitepwd = subinstr(`"`c(pwd)'"', "\", "/", .)
+    if `"`qx'"'!="" {
+        local qx = subinstr(`"`qx'"', "\", "/", .)
+        local qxabs 0
+        if substr(`"`qx'"',2,1)==":" local qxabs 1
+        if substr(`"`qx'"',1,1)=="/" local qxabs 1
+        if !`qxabs' {
+            if substr(`"`suitepwd'"',-1,1)=="/" local qx `"`suitepwd'`qx'"'
+            else local qx `"`suitepwd'/`qx'"'
+        }
+    }
+    if `"`data'"'!="" {
+        local data = subinstr(`"`data'"', "\", "/", .)
+        local dataabs 0
+        if substr(`"`data'"',2,1)==":" local dataabs 1
+        if substr(`"`data'"',1,1)=="/" local dataabs 1
+        if !`dataabs' {
+            if substr(`"`suitepwd'"',-1,1)=="/" local data `"`suitepwd'`data'"'
+            else local data `"`suitepwd'/`data'"'
+        }
+    }
+    if `"`saving'"'!="" {
+        local saving = subinstr(`"`saving'"', "\", "/", .)
+        local saveabs 0
+        if substr(`"`saving'"',2,1)==":" local saveabs 1
+        if substr(`"`saving'"',1,1)=="/" local saveabs 1
+        if !`saveabs' {
+            if substr(`"`suitepwd'"',-1,1)=="/" local saving `"`suitepwd'`saving'"'
+            else local saving `"`suitepwd'/`saving'"'
+        }
+    }
+
     if `"`saving'"'=="" local saving "suso_qc_suite.html"
     if "`replace'"=="" {
         capture confirm new file `"`saving'"'
@@ -6170,32 +7774,60 @@ program _suso_para_suite, rclass
         di as err "suso paradata suite: the Data QC tab needs the questionnaire — add qx(file.html)."
         exit 198
     }
+    if `"`qx'"'!="" {
+        capture confirm file `"`qx'"'
+        if _rc {
+            di as err `"suso paradata suite: questionnaire HTML not found: `qx'"'
+            exit 601
+        }
+    }
+    if `"`data'"'!="" {
+        capture confirm file `"`data'"'
+        if _rc {
+            di as err `"suso paradata suite: data file not found: `data'"'
+            exit 601
+        }
+    }
     if `"`title'"'=="" {
         local title "Survey QC Suite"
         if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
     }
     di as txt "suso paradata: building the QC suite ..."
+    di as txt "  code build: 1.7.12-RUNKEYMISSFIX"
     tempfile EVX T1 T2 T3
     quietly save `"`EVX'"'
 
     di as txt "  [1/3] behaviour report"
-    quietly _suso_para_report , saving(`"`T1'"') replace qx(`"`qx'"')             ///
-        data(`"`data'"') filters(`"`filters'"')                                    ///
+    capture noisily _suso_para_report , saving(`"`T1'"') replace qx(`"`qx'"')     ///
+        data(`"`data'"') filters(`"`filters'"') vars(`"`vars'"')                  ///
         gapmins(`gapmins') fastsecs(`fastsecs') `allroles'                        ///
         cascade(`cascade') window(`window') litecap(`litecap')
+    local rc1 = _rc
+    if `rc1' {
+        quietly use `"`EVX'"', clear
+        di as err "suso paradata suite: Behaviour tab failed (rc=`rc1')."
+        exit `rc1'
+    }
     local nstarted = r(nstarted)
     local ncasc    = r(ncascades)
 
-    di as txt "  [2/3] skip violation review"
+    di as txt "  [2/3] skip/removal review"
     quietly use `"`EVX'"', clear
-    quietly _suso_para_skips , cascade(`cascade') window(`window') top(`top')     ///
-        qx(`"`qx'"') html(`"`T2'"') replace
+    capture noisily _suso_para_skips , cascade(`cascade') window(`window')       ///
+        top(`top') qx(`"`qx'"') data(`"`data'"') html(`"`T2'"') ///
+        vars(`"`vars'"') replace
+    local rc2 = _rc
+    if `rc2' {
+        quietly use `"`EVX'"', clear
+        di as err "suso paradata suite: Skip/removal tab failed (rc=`rc2')."
+        exit `rc2'
+    }
     local t2p `"`T2'"'
     local note2 ""
     capture confirm file `"`T2'"'
     if _rc {
         local t2p ""
-        local note2 "No skip cascades were detected in the paradata - nothing to review here."
+        local note2 "No compact AnswerRemoved runs were detected in the paradata - nothing to review here."
     }
 
     local t3p ""
@@ -6207,7 +7839,14 @@ program _suso_para_suite, rclass
         if "`misscodes'"!="" local xopt "`xopt' misscodes(`misscodes')"
         if `"`status'"'!=""  local xopt `"`xopt' status(`status')"'
         if `"`filters'"'!="" local xopt `"`xopt' filters(`filters')"'
-        quietly _suso_para_check `if' , qx(`"`qx'"') data(`"`data'"') html(`"`T3'"') replace top(`top') `xopt'
+        capture noisily _suso_para_check `if' , qx(`"`qx'"') data(`"`data'"')    ///
+            html(`"`T3'"') replace top(`top') `xopt'
+        local rc3 = _rc
+        if `rc3' {
+            quietly use `"`EVX'"', clear
+            di as err "suso paradata suite: Data QC tab failed (rc=`rc3')."
+            exit `rc3'
+        }
         local nviol = r(nviol)
         local t3p `"`T3'"'
         local note3 ""
@@ -6228,7 +7867,7 @@ program _suso_para_suite, rclass
     if strpos(`"`saving'"',"/")==0 & strpos(`"`saving'"',"\")==0 local fullp `"`c(pwd)'/`saving'"'
     di as txt "suso paradata: QC suite written to " as res `"`fullp'"'
     di as txt `"               {browse "`fullp'":Click to open in your browser}"'
-    di as txt "  tabs: Behaviour (interactive) | Skip violations | Data QC"
+    di as txt "  tabs: Behaviour (interactive) | Skip/removal review | Data QC"
     di as txt "  events left in memory, unchanged."
     return local  suite `"`fullp'"'
     return scalar nstarted  = `nstarted'
@@ -6283,7 +7922,7 @@ program _suso_examples
     di as txt    `"     suso paradata load , file("para.zip")    {txt}// or reload a saved export offline"'
     di as txt    "     suso paradata flags                      {txt}// red-flag report; data = 1 row/interview"
     di as txt    "     suso paradata timing , by(question)      {txt}// slowest questions first"
-    di as txt    "     suso paradata skips                      {txt}// gate flips wiping answers (skip abuse)"
+    di as txt    "     suso paradata skips                      {txt}// historical removal runs + final-state review"
     di as txt    `"     suso paradata report , saving("qc.html") replace {txt}// one-page HTML QC report"'
 
     di as res _n "  6) TEAM"
@@ -6399,8 +8038,8 @@ string scalar _suso_qx_resolve(string scalar t, string colvector anum, string co
 void _suso_qx_parse(string scalar fn)
 {
     real scalar fh, n, k, p, nvv, nq, nopt
-    string scalar s, tail, ch, cursec, v, ti, ty, en, ms, op, rest, pat
-    string colvector Cvar, Csec, Cty, Cti, Cen, Cms, Cop, Cov, chunks, anum, atxt, ovals, olabs
+    string scalar s, tail, ch, cursec, v, ti, ty, en, ms, op, omap, rest, pat
+    string colvector Cvar, Csec, Cty, Cti, Cen, Cms, Cop, Cov, Comap, chunks, anum, atxt, ovals, olabs
     real colvector Cnv, Cno
 
     fh = fopen(fn, "r")
@@ -6423,7 +8062,7 @@ void _suso_qx_parse(string scalar fn)
         }
     }
 
-    Cvar = Csec = Cty = Cti = Cen = Cms = Cop = Cov = J(0,1,"")
+    Cvar = Csec = Cty = Cti = Cen = Cms = Cop = Cov = Comap = J(0,1,"")
     Cnv = Cno = J(0,1,.)
     chunks = _suso_qx_split(s, `"<div class="question-container">"')
     cursec = _suso_qx_lastsec(chunks[1])
@@ -6460,13 +8099,15 @@ void _suso_qx_parse(string scalar fn)
             }
             rest = ch
             pat = `"(?s)<label[^>]*>(.*?)</label>"'
-            while (rows(olabs)<8 & ustrregexm(rest, pat)) {
+            while (rows(olabs)<60 & ustrregexm(rest, pat)) {
                 olabs = olabs \ _suso_qx_clean(ustrregexs(1))
                 rest = ustrregexrf(rest, pat, "")
             }
             op = ""
-            for (p=1; p<=min((rows(ovals), rows(olabs), 8)); p++) {
-                op = op + (p>1 ? " | " : "") + ovals[p] + " " + olabs[p]
+            omap = ""
+            for (p=1; p<=min((rows(ovals), rows(olabs), 60)); p++) {
+                if (p<=8) op = op + (p>1 ? " | " : "") + ovals[p] + " " + olabs[p]
+                omap = omap + (p>1 ? char(29) : "") + ovals[p] + char(30) + olabs[p]
             }
             Cvar = Cvar \ substr(v,1,80)
             Csec = Csec \ substr(cursec,1,200)
@@ -6476,6 +8117,7 @@ void _suso_qx_parse(string scalar fn)
             Cms  = Cms  \ ms
             Cop  = Cop  \ substr(op,1,800)
             Cov  = Cov  \ substr(invtokens(ovals'), 1, 800)
+            Comap = Comap \ omap
             Cno  = Cno  \ nopt
             Cnv  = Cnv  \ nvv
         }
@@ -6495,6 +8137,7 @@ void _suso_qx_parse(string scalar fn)
     (void) st_addvar("strL",   "qx_valmsg")
     (void) st_addvar("strL",   "qx_opts")
     (void) st_addvar("strL",   "qx_optvals")
+    (void) st_addvar("strL",   "qx_optmap")
     (void) st_addvar("int",    "qx_nopts")
     st_sstore(., "qx_var", Cvar)
     st_sstore(., "qx_section", Csec)
@@ -6504,8 +8147,57 @@ void _suso_qx_parse(string scalar fn)
     st_sstore(., "qx_valmsg", Cms)
     st_sstore(., "qx_opts", Cop)
     st_sstore(., "qx_optvals", Cov)
+    st_sstore(., "qx_optmap", Comap)
     st_store(., "qx_nopts", Cno)
     st_store(., "qx_nval", Cnv)
+}
+
+string scalar _suso_qx_code_norm(string scalar s0)
+{
+    string scalar s
+    real scalar x
+    s = strtrim(s0)
+    if (ustrregexm(s, "^[+-]?[0-9]+([.][0-9]+)?$")) {
+        x = strtoreal(s)
+        if (x < .) return(strtrim(strofreal(x, "%21.0g")))
+    }
+    return(s)
+}
+
+string scalar _suso_qx_optlabel(string scalar omap, string scalar val)
+{
+    string colvector pairs, one
+    string scalar target
+    real scalar i
+    if (omap=="" | val=="") return("")
+    target = _suso_qx_code_norm(val)
+    pairs = _suso_qx_split(omap, char(29))
+    for (i=1; i<=rows(pairs); i++) {
+        one = _suso_qx_split(pairs[i], char(30))
+        if (rows(one)>=2) {
+            if (_suso_qx_code_norm(one[1])==target) return(one[2])
+        }
+    }
+    return("")
+}
+
+void _suso_qx_apply_labels(string scalar oldv, string scalar newv,
+    string scalar mapv, string scalar oldout, string scalar newout)
+{
+    real scalar i, n
+    string colvector ov, nv, mp, ol, nl
+    n = st_nobs()
+    if (n==0) return
+    ov = st_sdata(., oldv)
+    nv = st_sdata(., newv)
+    mp = st_sdata(., mapv)
+    ol = nl = J(n,1,"")
+    for (i=1; i<=n; i++) {
+        ol[i] = _suso_qx_optlabel(mp[i], ov[i])
+        nl[i] = _suso_qx_optlabel(mp[i], nv[i])
+    }
+    st_sstore(., oldout, ol)
+    st_sstore(., newout, nl)
 }
 
 string scalar _suso_suite_read(string scalar fn)
@@ -6565,7 +8257,7 @@ void _suso_suite_write(string scalar fout, string scalar title, string scalar su
     fwrite(fh, `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' + char(10))
     fwrite(fh, `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' + char(10))
     fwrite(fh, `"<div class="mast"><h1>"' + title + "</h1>" + `"<div class="sub">"' + sub + "</div>" + char(10))
-    fwrite(fh, `"<div class="tabs"><button class="tb on" id="b1">Behaviour</button><button class="tb" id="b2">Skip violations</button><button class="tb" id="b3">Data QC</button></div></div>"' + char(10))
+    fwrite(fh, `"<div class="tabs"><button class="tb on" id="b1">Behaviour</button><button class="tb" id="b2">Skip/removal review</button><button class="tb" id="b3">Data QC</button></div></div>"' + char(10))
     _suso_suite_pane(fh, 1, f1, "")
     _suso_suite_pane(fh, 2, f2, note2)
     _suso_suite_pane(fh, 3, f3, note3)

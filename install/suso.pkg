@@ -1,29 +1,15 @@
 v 3
 d 'SUSO': module providing a Stata client for the Survey Solutions REST API
 d
-d  suso is a complete Stata interface to the World Bank Survey
-d  Solutions (SuSo) REST API (v1 and v2). It lets you script
-d  fieldwork operations from do-files: list and inspect assignments
-d  and interviews; approve, reject, comment on, reassign and delete
-d  interviews; create and manage assignments and users; start,
-d  monitor and download data exports; analyse the paradata event log + tabbed QC suite (build 2026-07-02-SUITE)
-d  (interview timing, speeding/night-work/answer-churn flags); and
-d  administer workspaces and server settings. List endpoints paginate automatically and load
-d  results as a Stata dataset; single-object responses are returned
-d  in r(). Requests run through a small, dependency-free Java backend
-d  (suso.jar) via javacall, which performs the HTTPS calls (PATCH/
-d  PUT/DELETE, proxy, streaming downloads, redirect handling).
+d suso is a Stata interface to the World Bank Survey Solutions REST API and
+d includes paradata timing, behaviour flags, historical removal review,
+d hierarchy-aware final-data enablement adjudication, and a tabbed QC suite.
+d Build: 2026-08-13-RUNKEYMISSFIX (v1.7.12; Java backend 1.7.11-AUDITFIX).
 d
-d  Requires a Survey Solutions API user (not HQ/Admin credentials).
-d
-d Requires: Stata version 14.2 and a Java 11+ runtime (suso doctor checks)
-d
-d Distribution-Date: 20260702
-d
-d Author: Attique Ur Rehman, Economist
-d Affiliation: The World Bank, Development Economics (DEC), Enterprise Surveys
-d Support: email attique@@worldbank.org
-d Web: https://sites.google.com/view/attique-ur-rehman
+d Requires: Stata 14.2 or newer and Java 11 or newer.
+d Distribution-Date: 20260813
+d Author: Attique Ur Rehman, The World Bank
+d Support: email attique@worldbank.org
 d
 f suso.ado
 f suso.sthlp
