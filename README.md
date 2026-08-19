@@ -223,18 +223,3 @@ design of this package.
 ## License
 
 [MIT](LICENSE) © 2026 Attique Ur Rehman (The World Bank, Development Economics).
-
-## Architecture (one line)
-
-`suso.ado` sets `SUSO_*` globals → `javacall org.worldbank.suso.Stata …` → `Http`
-(`java.net.http`) executes → `Json` parses → results are written back into the Stata
-dataset / `r()` via the SFI, and the password global is scrubbed after every call.
-
-
-  
-
-## Architecture (one line)
-
-`suso.ado` sets `SUSO_*` globals → `javacall org.worldbank.suso.Stata run` → `Http`
-(java.net.http) executes → `Json` parses → results are written back into the Stata
-dataset / `r()` via the SFI, and the password global is scrubbed after every call.
