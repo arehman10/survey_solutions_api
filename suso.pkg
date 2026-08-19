@@ -3,11 +3,12 @@ d 'SUSO': module providing a Stata client for the Survey Solutions REST API
 d
 d suso is a Stata interface to the World Bank Survey Solutions REST API and
 d includes paradata timing, behaviour flags, historical removal review,
-d hierarchy-aware final-data enablement adjudication, and a tabbed QC suite.
-d Build: 2026-08-13-RUNKEYMISSFIX (v1.7.12; Java backend 1.7.11-AUDITFIX).
+d hierarchy-aware final-data enablement adjudication, a tabbed QC suite, and
+d direct Headquarters interview/assignment links in the paradata HTML.
+d Build: 2026-08-18-PERFFIX (v1.7.16; Java backend 1.7.11-AUDITFIX).
 d
 d Requires: Stata 14.2 or newer and Java 11 or newer.
-d Distribution-Date: 20260813
+d Distribution-Date: 20260818
 d Author: Attique Ur Rehman, The World Bank
 d Support: email attique@worldbank.org
 d
