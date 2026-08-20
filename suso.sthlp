@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.7.16 PERFFIX  18aug2026}{...}
+{* *! version 1.7.20 QSTATUSHISTORY  19aug2026}{...}
 {vieweralsosee "[D] import" "help import"}{...}
 {vieweralsosee "" "--"}{...}
 {viewerjumpto "Syntax" "suso##syntax"}{...}
@@ -116,8 +116,9 @@ Optionally pin a default questionnaire so you can omit {opt guid()}/{opt qver()}
 {cmd:. suso config , guid("76732117-1b19-4c82-bd39-1e34a781a2e9") qver(11)}{p_end}
 
 {pstd}
-Settings live in {cmd:global} macros for the session only; nothing is written to
-disk except the optional audit log. Review the current settings with
+Settings live in {cmd:global} macros for the session only. The displayed audit
+path is a destination for selected destructive actions, not a general command or
+paradata log; read-only commands do not create it. Review the current settings with
 {cmd:suso config , show} (the password is masked) and clear them with
 {cmd:suso config , clear}. Verify the Java runtime and the location of
 {cmd:suso.jar} with {cmd:suso doctor}.
@@ -149,8 +150,8 @@ For {cmd:suso config}:
 {synopt :{opt noinsecure}}re-enable TLS verification{p_end}
 {synopt :{opt connt:imeout(ms)}}connection timeout in milliseconds (default 30000){p_end}
 {synopt :{opt readt:imeout(ms)}}read timeout in milliseconds (default 300000){p_end}
-{synopt :{opt max:rows(#)}}safety cap on rows fetched by paginated lists (default 100000){p_end}
-{synopt :{opt audit:file(path)}}append destructive actions to this log file{p_end}
+{synopt :{opt max:rows(#)}}safety cap on rows fetched by one paginated API {cmd:list, all} call (default 100000); it does not limit exports or paradata{p_end}
+{synopt :{opt audit:file(path)}}destination for selected destructive-action records; read-only/paradata commands do not create it{p_end}
 {synopt :{opt show}}display the current configuration (password masked){p_end}
 {synopt :{opt clear}}clear all session configuration{p_end}
 {synoptline}
@@ -261,9 +262,9 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:timing}}collapse events to one row per {opt by(interview)} (default), {opt by(question)} or {opt by(interviewer)} ({opt gapmins()} {opt fastsecs()} {opt allroles}){p_end}
 {synopt :{cmd:flags}}per-interview red flags + interviewer league table ({opt minactive()} {opt burstrun()} {opt nightshare()} {opt churn()} {opt zcut()} {opt top()} {opt saving()}; {opt burstshare()} is retained only as a deprecated compatibility option{p_end}
 {synopt :{cmd:skips}}historical answer-removal runs with final-state review ({opt cascade()} {opt window()} {opt top()} {opt saving()} {opt vars()}); {opt qx(file.html)} supplies inherited questionnaire logic and wording, {opt data(file.dta)} checks final values and supplies {cmd:assignment__id}, {opt messages(file.txt)} writes a review list, and {opt html(file.html)} writes a simplified page with Headquarters deep links ({opt hqurl()}){p_end}
-{synopt :{cmd:report} {opt saving()}}one-page self-contained HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch) with drill-down, Headquarters interview/assignment links and CSV export, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording; {opt data()} supplies final status/assignment/filter values; {opt vars()} focuses question/removal detail without changing lifecycle risk; {opt filters()} adds live marginal population controls; {opt hqurl()} overrides the configured workspace URL){p_end}
+{synopt :{cmd:report} {opt saving()}}one-page offline HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch), status-aware actor/question timing, a local-file raw event-history explorer, Headquarters interview/assignment links, CSV export, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording; {opt data()} supplies final status/assignment/filter values; {opt vars()} focuses question/removal detail without changing lifecycle risk; {opt filters()} adds live marginal population controls; {opt hqurl()} overrides the configured workspace URL){p_end}
 {synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
-{synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed, self-contained HTML: Behaviour (interactive paradata report with Headquarters links), Skip/removal review (supervisor review with Headquarters links), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option plus {opt vars()}, {opt filters()}, {opt allroles}, and {opt hqurl()}; Behaviour risk uses the full event stream, while {opt vars()} focuses removal detail and the Skip tab{p_end}
+{synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed offline HTML: Behaviour (interactive paradata report, local-file history explorer, and Headquarters links), Skip/removal review (supervisor review with Headquarters links), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); accepts every threshold option plus {opt vars()}, {opt filters()}, {opt allroles}, and {opt hqurl()}; Behaviour risk uses the full event stream, while {opt vars()} focuses removal detail and the Skip tab{p_end}
 {synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values; {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130); the dashboard itself defaults its interview-status scope to {bf:fieldwork done} (completed + rejected + approved) so preloaded records that never became interviews do not inflate item nonresponse, and shows a live verdict strip plus a plain-language legend (asked / viol / unans / bad codes); an {it:if} qualifier restricts it by any expression ({cmd:check if lf_responsive==1, ...}); {opt filters(varlist)} adds live Filter variable {c 45} value dropdowns to the dashboard for the named numeric variables (up to 20 distinct values each, 40 in total){p_end}
 {synoptline}
 
@@ -290,7 +291,7 @@ list ({cmd:questionnaires_list.dta}) plus one JSON document per version; one exp
 per questionnaire-version per {opt types()} entry (start {it:->} poll {it:->} download, with
 empty jobs skipped and per-job failures tolerated); and {cmd:assignments.dta} +
 {cmd:supervisors.dta}. Returns {cmd:r(ok)}, {cmd:r(skipped)}, {cmd:r(failed)}. Your current
-data is preserved/restored. Example: {cmd:suso backup , dir("C:/archive/srilanka") types(STATA Paradata)}.{p_end}
+data is preserved/restored. Example: {cmd:suso backup , dir("C:/archive/mysurvey") types(STATA Paradata)}.{p_end}
 
 {pstd}{bf:user}, {bf:supervisor}, {bf:interviewer}{p_end}
 {synoptset 30 tabbed}{...}
@@ -459,9 +460,12 @@ The one-row-per-interview result merges 1:1 on {cmd:interview__id} with the
 
 {pstd}
 {cmd:report} is the recommended first look: run it straight after {cmd:get}/{cmd:load}
-and it produces an {bf:interactive} one-page HTML report. All data is embedded in the
-file (no internet, no external libraries), so it opens on locked-down machines and can
-be emailed as-is {hline 1} and everything on the page recomputes live. The report is
+and it produces an {bf:interactive} one-page HTML report. All derived QC data is
+embedded in the file (no internet and no external libraries), so it opens on
+locked-down machines, can be emailed as-is, and the QC views recompute live. The
+optional raw event-history explorer reads a matching {cmd:paradata.tab} locally;
+source events are not embedded or uploaded, and a recipient needs their own
+authorized copy of that file. The report is
 built for a TTL or field supervisor: a verdict line and a {bf:review queue} triage
 every started interview into {bf:Investigate} (hard evidence {hline 1} same-minute
 answering in two interviews, or a rejected interview re-completed with nothing
@@ -485,6 +489,11 @@ answer-speed histograms, answers by hour, fieldwork volume, the enumerator leagu
 table (now with a vs-team speed ratio and overlap minutes), question timing, and
 nearby or questionnaire-linked answer variables associated with historical removal runs. Records with no interviewer activity
 (API-preloaded grid points) are counted separately and excluded from all figures.
+The {bf:Actor / enumerator} control also switches {bf:Question timing} to that
+actor's own first-pass AnswerSet events and recomputes the technical
+removal-pattern table from AnswerRemoved runs actually emitted by that actor.
+An actor with correction/removal activity but no first-pass answers gets an
+explicit empty Question timing table; survey-wide results are never substituted.
 It manages the event data internally and leaves the combined per-record QC table
 {hline 1} timing metrics, {cmd:f_*} flags at the defaults, cascade counts, the new
 signal columns ({cmd:rt} peer ratio, {cmd:ovm} overlap minutes, {cmd:fr} fast
@@ -553,7 +562,7 @@ basemaps) as a GraphQL multipart upload; one archive may carry several maps. {cm
 dataset (file name, size, import date, uploader). {cmd:delete} is irreversible and needs {opt confirm}. {cmd:deleteall} wipes the
 whole library: by default it only lists what would go (a dry run); to actually
 delete you confirm by typing the workspace name, e.g. {cmd:suso maps deleteall ,}
-{cmd:iknowthis(srilankainf)}. It is throttled ({opt sleep()} ms between deletes,
+{cmd:iknowthis(myworkspace)}. It is throttled ({opt sleep()} ms between deletes,
 default 200) and tolerant of per-map failures, reporting {cmd:r(deleted)}/{cmd:r(failed)}. {cmd:assign}/{cmd:unassign} control which interviewers
 can download a given map to their tablet. If your server expects a workspace
 argument on a map operation and rejects a call, the GraphQL error message is
@@ -565,8 +574,10 @@ shown verbatim so you can adjust.
 {pstd}
 Verbs that delete or irreversibly change server state {hline 1} for example
 {cmd:interview delete}, {cmd:export cancel}, {cmd:workspace delete} {hline 1}
-require the {opt confirm} option to proceed and are recorded in the audit log if
-{opt auditfile()} is configured. {cmd:workspace delete} additionally requires
+require the {opt confirm} option to proceed. Selected destructive actions append
+to the configured {opt auditfile()} or the default destination under
+{cmd:sysdir PERSONAL}; read-only, export-download, and paradata/report commands
+do not create that file. {cmd:workspace delete} additionally requires
 {opt iknowthis()} matching the workspace name. This guard is deliberate; review
 the target before adding {opt confirm} in a do-file.
 
@@ -625,11 +636,11 @@ in {cmd:r()}.
 
 {pstd}Paradata QC: pull the event log, flag suspicious interviews, keep the tables:{p_end}
 {p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
-{p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_Global_informal2026.html")}{p_end}
-{p 8 12 2}{cmd:. suso paradata skips , qx("English_Global_informal2026.html") data("informal_2026.dta") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata check , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_codebook.dta") html("qc_dashboard.html") replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata suite , qx("English_Global_informal2026.html") data("informal_2026.dta") saving("qc_suite.html") replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata suite , qx("English_Global_informal2026.html") data("informal_2026.dta") hqurl("https://server/workspace") saving("qc_suite.html") replace}{space 2}{it:(offline URL override)}{p_end}
+{p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_MySurvey.html")}{p_end}
+{p 8 12 2}{cmd:. suso paradata skips , qx("English_MySurvey.html") data("mysurvey.dta") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata check , qx("English_MySurvey.html") data("mysurvey.dta") saving("qc_codebook.dta") html("qc_dashboard.html") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata suite , qx("English_MySurvey.html") data("mysurvey.dta") saving("qc_suite.html") replace}{p_end}
+{p 8 12 2}{cmd:. suso paradata suite , qx("English_MySurvey.html") data("mysurvey.dta") hqurl("https://server/workspace") saving("qc_suite.html") replace}{space 2}{it:(offline URL override)}{p_end}
 {p 8 12 2}{cmd:. save para_events, replace}{p_end}
 {p 8 12 2}{cmd:. suso paradata flags , saving("para_flags.dta") replace}{p_end}
 {p 8 12 2}{cmd:. use para_events, clear}{p_end}
@@ -653,6 +664,11 @@ history. Only unresolved cases enter {bf:Cases needing verification}; resolved
 histories are collapsed under {bf:Resolved history - no action}. Unlinked nearby
 answer events are no longer presented as candidate gates or causes, and technical
 event detail is collapsed by default.
+The page includes a {bf:Removal-run actor / enumerator} control. It recomputes all
+five headline cards, the technical pattern table, verification groups, and
+resolved histories after filtering. Ownership is the actor who emitted the
+AnswerRemoved run, not the interview's primary owner or last editor. Inside
+{cmd:suite}, this control and the Behaviour actor control stay synchronized.
 
 {title:Paradata suite path and cascade hotfix}
 
@@ -679,6 +695,45 @@ optional audit log is written to disk.
 
 
 {title:Paradata runtime and methodology fixes}
+
+{pstd}
+Version 1.7.20 makes {bf:Question timing} respond to both the actor/enumerator
+and Interview status controls. Status is the current/final status when the
+report is built, with {opt data()} taking precedence over the last paradata
+workflow event. The table shows every observed question in scope and separates
+{bf:answer events}, {bf:distinct interviews}, and {bf:timed reaches}; the latter
+is the denominator for the median, p90, and fast-share timing statistics.
+
+{pstd}
+The Behaviour page also includes a local {bf:Interview event history} explorer.
+Choose the matching original {cmd:paradata.tab} file once, then type, paste, or
+open an interview ID from a review card. A browser worker streams the source and
+shows the complete ordered timeline plus a raw event table (event, actor, role,
+source/UTC/local time, offset, and parameters). The source events are not
+embedded in the report or uploaded; raw parameters can contain sensitive answers
+and GPS coordinates, so the report and source file must be handled accordingly.
+
+{pstd}
+Version 1.7.19 fixes Stata {cmd:r(198)} while generating the actor-filtered
+Skip/removal HTML. The selector options are now created through the browser DOM,
+avoiding an embedded JavaScript quote sequence that Stata interpreted as the end
+of a compound-quoted string. Timing, cascade detection, ownership, and final-data
+adjudication are unchanged.
+
+{pstd}
+Version 1.7.18 splits the interactive report writer into compiler-safe helper
+programs. This fixes Stata {cmd:r(1000)} at ado load time while preserving the
+v1.7.17 actor-filtered Question timing, Skip/removal review, and technical
+removal-pattern summary without changing their calculations.
+
+Version 1.7.17 adds actor-correct filtering to Question timing and removal
+review. Actor-specific medians and p90 values are calculated directly from that
+actor's first-pass event gaps. Removal cascades are still detected on the complete
+event stream first; filtering is applied afterward to compact run records, so it
+cannot manufacture or break a cascade. Behaviour and Skip/removal selectors are
+bidirectionally synchronized in the suite, while standalone pages retain their
+own selector. The default {bf:All enumerators} view preserves the previous
+survey-wide totals.
 
 {pstd}
 Version 1.7.16 derives the large paradata event stream once at the default
@@ -720,7 +775,7 @@ Missing/reversed clocks, unreliable timezone offsets and CAPI/CAWI mode quality
 suppress the timing signals they cannot support.
 
 {pstd}
-The self-contained HTML and its downloaded CSV use the same risk-domain rules,
+The offline HTML and its downloaded CSV use the same risk-domain rules,
 show multi-day/long-pause context without adding paused time to active work, and
 include safe Headquarters interview and assignment links when a workspace URL
 and assignment identifier are available.

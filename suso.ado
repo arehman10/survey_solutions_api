@@ -1,4 +1,4 @@
-*! suso v1.7.16 build 2026-08-18-PERFFIX  (single-derive paradata cache, fail-fast Data QC, Stata 14 JSON fix; see help)
+*! suso v1.7.20 build 2026-08-19-QSTATUSHISTORY  (status-aware question timing + local event history; see help)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -19,6 +19,7 @@
 capture mata: mata drop suso_urlencode()
 capture mata: mata drop suso_urlencode_var()
 capture mata: mata drop suso_jsonesc()
+capture mata: mata drop suso_jsonesc_var()
 version 14.2
 mata:
 mata set matastrict off
@@ -72,6 +73,13 @@ string scalar suso_jsonesc(string scalar s)
         else            out = out + ch
     }
     return(out)
+}
+
+void suso_jsonesc_var(string scalar src, string scalar dst)
+{
+    real scalar i
+    for (i=1; i<=st_nobs(); i++)
+        st_sstore(i, dst, suso_jsonesc(st_sdata(i, src)))
 }
 end
 
@@ -240,16 +248,19 @@ program _suso_showconfig
     if "$SUSO_PROXYHOST"!="" di as txt "  proxy       : " as res "$SUSO_PROXYHOST:$SUSO_PROXYPORT"
     di as txt "  TLS chain   : " as res cond("$SUSO_INSECURE"=="1","DISABLED (hostname still checked)","verified")
     di as txt "  timeouts ms : " as res "connect=$SUSO_CONNTO  read=$SUSO_READTO"
-    di as txt "  max rows    : " as res "$SUSO_MAXROWS"
+    di as txt "  list max rows: " as res "$SUSO_MAXROWS" as txt " (API list/all safety cap; not paradata/export size)"
     local af "$SUSO_AUDIT"
     if "`af'"=="" local af "`c(sysdir_personal)'suso_audit.log"
-    di as txt "  audit log   : " as res `"`af'"'
+    capture confirm file `"`af'"'
+    local afstate = cond(_rc,"not present; paradata/read-only commands do not write it","exists")
+    di as txt "  destructive audit destination: " as res `"`af'"'
+    di as txt "  audit status: " as res "`afstate'"
     di as txt "{hline 62}"
 end
 
 program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.16 (build 2026-08-18-PERFFIX)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.20 (build 2026-08-19-QSTATUSHISTORY)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -259,8 +270,8 @@ program _suso_about, rclass
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
-    return local version "1.7.16"
-    return local build "2026-08-18-PERFFIX"
+    return local version "1.7.20"
+    return local build "2026-08-19-QSTATUSHISTORY"
     return local expected_backend "1.7.11-AUDITFIX"
 end
 
@@ -277,7 +288,7 @@ program _suso_doctor, rclass
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
-    di as txt "  ado code build : " as res "1.7.16-PERFFIX"
+    di as txt "  ado code build : " as res "1.7.20-QSTATUSHISTORY"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -303,7 +314,7 @@ program _suso_doctor, rclass
             if "$SUSO_JARBUILD"!="1.7.11-AUDITFIX" {
                 local ok 0
                 di as err "  WARNING       : suso.ado and suso.jar are from different builds."
-                di as err "                  Reinstall both files from the same v1.7.16 package, then restart Stata."
+                di as err "                  Reinstall both files from the same v1.7.20 package, then restart Stata."
             }
         }
         else {
@@ -314,7 +325,7 @@ program _suso_doctor, rclass
     }
     _suso_showconfig
     return scalar ok = `ok'
-    return local ado_build "1.7.16-PERFFIX"
+    return local ado_build "1.7.20-QSTATUSHISTORY"
     return local backend_build "`backend'"
     return local java_version "`javaver'"
     capture macro drop SUSO_JAVAVER SUSO_JAVAOK SUSO_JARBUILD
@@ -3060,7 +3071,7 @@ program _suso_para_derive, rclass
         para_fieldcmp | para_fieldrst | para_inv)
     quietly bysort interview__id para_ivw (para_ord para_seq): replace ///
         para_actor = para_actor[_n-1] if para_ivw & para_actor=="" & _n>1
-    quietly gen str244 para_actor_key = lower(strtrim(para_actor))
+    quietly gen str244 para_actor_key = ustrlower(strtrim(para_actor))
 
     * Event-level interview mode.  Mixed CAPI/CAWI histories are retained rather
     * than classifying the whole record from only its last mode-change event.
@@ -3443,7 +3454,7 @@ program _suso_para_timing, rclass
         para_off_valid
     * Canonical behaviour belongs to the deterministic primary first-pass actor.
     * Keep the all-actor first-pass metrics too for lifecycle/coverage diagnostics.
-    quietly gen byte `pactor' = para_actor_key==lower(strtrim(para_primary)) & ///
+    quietly gen byte `pactor' = para_actor_key==ustrlower(strtrim(para_primary)) & ///
         para_primary!="" & para_ivw
     quietly gen byte `pansall' = para_fieldans & `pactor'
     quietly gen byte `pansfirst' = para_fieldans & para_firstpass & `pactor'
@@ -4699,7 +4710,11 @@ program _suso_para_skips, rclass
     quietly gen double sk_lastord    = para_ord if para_fieldans
     quietly gen double sk_lastseq    = para_seq if para_fieldans
 
-    quietly gen str120 sk_actor = substr(para_actor,1,120)
+    * A removal history belongs to the actor who emitted its AnswerRemoved run.
+    * Retain the normalized key as well as the display name: primary interviewer
+    * and last editor are interview context, never substitutes for run ownership.
+    quietly gen str244 sk_actor = para_actor
+    quietly gen str244 sk_actor_key = para_actor_key
 
     quietly gen str80  sk_nextvar    = sk_lastvar
     quietly gen strL   sk_nextval    = sk_lastval
@@ -4713,7 +4728,7 @@ program _suso_para_skips, rclass
     * sorts.  This is lossless and materially reduces sort/temp I/O on large
     * paradata exports.
     capture quietly compress sk_resp sk_lastvar sk_lastroster sk_lastqkey      ///
-        sk_actor sk_nextvar sk_nextroster sk_nextqkey
+        sk_actor sk_actor_key sk_nextvar sk_nextroster sk_nextqkey
 
     quietly bysort interview__id (para_ord para_seq): ///
         replace sk_lastvar = sk_lastvar[_n-1] if missing(sk_lastseq) & _n>1
@@ -4933,7 +4948,8 @@ program _suso_para_skips, rclass
             trigger_roster=sk_trigroster trigger_qkey=sk_trigqkey              ///
             trigger_tsu=sk_trigts trigger_ord=sk_trigord trigger_seq=sk_trigseq ///
             useprev=sk_useprev prevok=sk_prevnear nextok=sk_nextnear            ///
-            actor=sk_actor resp=sk_resp, by(interview__id sk_run) fast
+            actor=sk_actor actor_key=sk_actor_key resp=sk_resp,               ///
+            by(interview__id sk_run) fast
 
         * Only candidates that passed the bounded proximity test may adjudicate a run.
         quietly replace pvar = "" if prevok!=1
@@ -5669,7 +5685,7 @@ program _suso_para_skips, rclass
             quietly file open `mf' using `"`messages'"', write replace text
             local mh 1
             file write `mf' "PARADATA SKIP/REMOVAL REVIEW" _n
-            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.16)" _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.20)" _n
             file write `mf' "Definition: a case is `cascade' or more consecutive AnswerRemoved events in a compact run near an AnswerSet event." _n
             file write `mf' "`ncasc' case(s) found; `nwiped' removal event(s); `naffectedqall' distinct question-run case(s) affected." _n
             if `hasfinaldata' file write `mf' "Final export assessment: `nfinalansweredall' answered; `nanswereddisabledall' answered while disabled; `nexpectedblankall' blank as expected because disabled; `nfinalcheckall' require review." _n
@@ -5746,29 +5762,8 @@ program _suso_para_skips, rclass
                     exit 602
                 }
             }
-            tempfile DET1 DET2 GSUM
+            tempfile DET1 DET2
             quietly save `"`DET1'"'
-            tempvar i1 g1
-            quietly bysort interview__id: gen byte `i1' = _n==1
-            quietly count if `i1'
-            local nintaff = r(N)
-            quietly bysort trigger: gen byte `g1' = _n==1
-            quietly count if `g1' & trigger!=""
-            local ngates = r(N)
-            quietly gen long __w = nrem
-            quietly gen str244 g_label = cond(reltype==1, ///
-                cond(linkmode==2,"Indirect questionnaire relationship: ", ///
-                cond(linkmode==3,"Direct and indirect questionnaire relationship: ", ///
-                "Direct questionnaire relationship: ")) + ///
-                cond(trigger!="",trigger,"(unknown)"), ///
-                cond(reltype==3, "Questionnaire questions with no item-level condition shown", ///
-                cond(reltype==4, "Fields outside questionnaire metadata", ///
-                cond(reltype==5, "Mixed questionnaire/external fields", ///
-                cond(reltype==6, "Questionnaire metadata not supplied", "Cause not identified")))))
-            collapse (count) flips=__w (sum) wiped=__w, by(g_label) fast
-            gsort -wiped -flips g_label
-            quietly keep in 1/`=min(10,_N)'
-            quietly save `"`GSUM'"'
             * Exact old/new transition is already stored in DET1.
             quietly use `"`DET1'"', clear
             if `haskey' quietly merge m:1 interview__id using `"`SKKEY'"', keep(master match) nogenerate
@@ -5780,7 +5775,8 @@ program _suso_para_skips, rclass
             quietly replace hq_assignment = "" if missing(hq_assignment)
             gsort -nqrem -nrem interview__id sk_run
             * pre-built display columns: data reaches the file only via (exp)
-            quietly gen str120 h_ac = substr(cond(actor!="", actor, resp),1,120)
+            quietly gen str120 h_ac = substr(cond(actor!="", actor,             ///
+                "Unknown removal actor"),1,120)
             quietly gen strL h_iid = interview__id
             quietly gen strL h_tg = trigger
             quietly gen strL h_tv0 = trigval
@@ -5811,6 +5807,17 @@ program _suso_para_skips, rclass
                 cond(reltype==4, "Fields outside questionnaire metadata", ///
                 cond(reltype==5, "Mixed questionnaire/external fields", ///
                 cond(reltype==6, "Questionnaire metadata not supplied", "Cause not identified")))))
+            * Structured client-side filtering uses the actual removal-run actor.
+            * Never fall back to resp (the primary/last interview owner), because a
+            * later correction actor must not inherit somebody else's removal run.
+            quietly gen str244 js_actor_key = actor_key
+            quietly replace js_actor_key = ustrlower(strtrim(actor)) if          ///
+                js_actor_key=="" & actor!=""
+            quietly replace js_actor_key = "__unknown_removal_actor__" if       ///
+                js_actor_key==""
+            quietly gen str244 js_actor = cond(actor!="",actor,                 ///
+                "Unknown removal actor")
+            quietly gen str244 js_group = h_group
             quietly gen strL h_iid_url = ""
             quietly gen strL h_assignment_url = ""
             mata: suso_urlencode_var("h_iid", "h_iid_url")
@@ -5895,6 +5902,38 @@ program _suso_para_skips, rclass
             quietly gen strL h_eb = "<div class=" + char(34) + "meta linked" + char(34) + ">Blank as expected because disabled: <span class=" + char(34) + "mono" + char(34) + ">" + wl_expected_blank + "</span></div>" if wl_expected_blank!=""
             quietly gen strL h_l6 = "<div class=" + char(34) + "meta" + char(34) + ">AnswerSet order: " + string(trigger_ord,"%12.0g") + "; removal-run start: " + string(ts0,"%tcCCYY-NN-DD_HH:MM:SS") + "; raw removal events: " + strofreal(nrem) + ".</div>"
             quietly gen strL h_tech = "<details class=" + char(34) + "tech" + char(34) + "><summary>Technical details</summary>" + h_l3 + h_l4 + h_l5 + h_fa + h_ad + h_eb + h_l6 + "</details>"
+            quietly gen strL h_card = h_open + h_chip + h_l1 + h_eventbox +     ///
+                h_finalbox + h_rel + h_l2 + h_state + h_do + h_tech + "</div>"
+
+            * JSON-escape in Mata directly from variables.  This avoids routing
+            * questionnaire text, actor names, or answer values through Stata
+            * macro expansion and neutralizes </script>-style payloads.
+            foreach __jv in actor_key actor group group_key iid card {
+                quietly gen strL j_`__jv' = ""
+            }
+            quietly replace j_actor_key = js_actor_key
+            quietly replace j_actor = js_actor
+            quietly replace j_group = js_group
+            quietly replace j_group_key = h_gkey
+            quietly replace j_iid = interview__id
+            quietly replace j_card = h_card
+            foreach __jv in actor_key actor group group_key iid card {
+                mata: suso_jsonesc_var("j_`__jv'", "j_`__jv'")
+            }
+            quietly gen strL j_obj = "{" + char(34) + "ak" + char(34) +       ///
+                ":" + char(34) + j_actor_key + char(34) + "," + char(34) +   ///
+                "an" + char(34) + ":" + char(34) + j_actor + char(34) +      ///
+                "," + char(34) + "gk" + char(34) + ":" + char(34) +          ///
+                j_group_key + char(34) + "," + char(34) + "gl" + char(34) +  ///
+                ":" + char(34) + j_group + char(34) + "," + char(34) +       ///
+                "id" + char(34) + ":" + char(34) + j_iid + char(34) +        ///
+                "," + char(34) + "t" + char(34) + ":" + char(34) + tier +   ///
+                char(34) + "," + char(34) + "q" + char(34) + ":" +          ///
+                strofreal(nqrem) + "," + char(34) + "need" + char(34) + ":" + ///
+                strofreal(n_final_check) + "," + char(34) + "re" + char(34) + ///
+                ":" + strofreal(nreanswered) + "," + char(34) + "ev" +      ///
+                char(34) + ":" + strofreal(nrem) + "," + char(34) +          ///
+                "card" + char(34) + ":" + char(34) + j_card + char(34) + "}"
             local ncheckall = `nfinalcheckall'
             local now = trim("`c(current_date)' `c(current_time)'")
             local wst ""
@@ -5914,6 +5953,7 @@ program _suso_para_skips, rclass
             file write `hf' `".card{flex:1 1 140px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 13px;border-top:3px solid #002244}"' _n
             file write `hf' `".card.warn{border-top-color:#c48a00}.card.dim{border-top-color:#9aa7b5}"' _n
             file write `hf' `".card .v{font-size:20px;font-weight:700;color:#002244}.card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
+            file write `hf' `".filterbar{display:flex;align-items:end;gap:12px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 14px;margin:0 0 12px}.filterbar label{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#666;margin-bottom:4px}.filterbar select{min-width:260px;max-width:100%;padding:7px 9px;border:1px solid #bfc8d2;border-radius:5px;background:#fff;color:#1a1a1a}.scope{font-size:11.5px;color:#666;padding-bottom:7px}.empty{font-size:12.5px;color:#666;background:#fff;border:1px solid #e3e6ea;border-radius:6px;padding:10px 12px;margin:8px 0}"' _n
             file write `hf' `".how{background:#fdf6e3;border:1px solid #ecd9a0;border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.55;margin:12px 0}"' _n
             file write `hf' `"h2{font-size:15px;color:#002244;border-bottom:2px solid #C9A227;padding-bottom:4px;margin:22px 0 8px}"' _n
             file write `hf' `"table{border-collapse:collapse;width:100%;font-size:12.5px;background:#fff}"' _n
@@ -5937,91 +5977,53 @@ program _suso_para_skips, rclass
             file write `hf' `"<div class="mast"><h1>Skip Removal Review`wst'</h1>"' _n
             file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; a case is `cascade'+ compact consecutive AnswerRemoved events near an AnswerSet; final values may be restored later</div></div>"' _n
             file write `hf' `"<div class="wrap">"' _n
+            file write `hf' `"<div class="filterbar"><div><label for="sk_actor">Removal-run actor / enumerator</label><select id="sk_actor"></select></div><div class="scope" id="sk_scope"></div></div>"' _n
             file write `hf' `"<div class="cards">"' _n
-            file write `hf' `"<div class="card"><div class="v">`ncasc'</div><div class="k">removal histories</div></div>"' _n
-            file write `hf' `"<div class="card"><div class="v">`naffectedqall'</div><div class="k">question-run cases affected</div></div>"' _n
-            file write `hf' `"<div class="card warn"><div class="v">`ncheckall'</div><div class="k">need final-data check</div></div>"' _n
-            file write `hf' `"<div class="card"><div class="v">`nreansweredall'</div><div class="k">answered again later</div></div>"' _n
-            file write `hf' `"<div class="card dim"><div class="v">`nwiped'</div><div class="k">technical removal events</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v" id="sk_hist">-</div><div class="k">removal histories</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v" id="sk_q">-</div><div class="k">question-run cases affected</div></div>"' _n
+            file write `hf' `"<div class="card warn"><div class="v" id="sk_need">-</div><div class="k">need final-data check</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v" id="sk_re">-</div><div class="k">answered again later</div></div>"' _n
+            file write `hf' `"<div class="card dim"><div class="v" id="sk_ev">-</div><div class="k">technical removal events</div></div>"' _n
             file write `hf' `"</div>"' _n
             file write `hf' `"<div class="how"><b>How to read each card:</b> first read <b>Observed answer event</b>, which now states whether the exact question/roster instance changed value, repeated the same value, was first observed, or was re-entered after removal. Next read <b>Questionnaire relationship</b>, then the removal history and current state. When data() is supplied, blank-but-disabled questions move to <b>Resolved history</b>; only final blanks that are enabled, not evaluable, or absent from the supplied export remain under <b>Cases needing verification</b>. A questionnaire relationship is not automatic proof of cause.</div>"' _n
             quietly save `"`DET2'"'
 
-            quietly use `"`GSUM'"', clear
             file write `hf' `"<details class="techsum"><summary>Technical pattern summary</summary>"' _n
             file write `hf' `"<div class="meta">This table counts raw removal histories. Cause not identified means no questionnaire relationship was found. A direct link means the conditions mention the variable; an indirect link means they mention a calculated variable that depends on it. Neither proves cause.</div>"' _n
-            file write `hf' `"<table><tr><th>relationship / variable</th><th class="r">histories</th><th class="r">removal events</th></tr>"' _n
-            forvalues i = 1/`=_N' {
-                file write `hf' `"<tr><td>"' (g_label[`i']) `"</td><td class="r">"' (strofreal(flips[`i'])) `"</td><td class="r">"' (strofreal(wiped[`i'])) `"</td></tr>"' _n
-            }
-            file write `hf' `"</table></details>"' _n
-
-            quietly use `"`DET2'"', clear
+            file write `hf' `"<table><thead><tr><th>relationship / variable</th><th class="r">histories</th><th class="r">interviews</th><th class="r">removal events</th></tr></thead><tbody id="sk_patterns"></tbody></table><div id="sk_patterns_empty" class="meta"></div></details>"' _n
             file write `hf' `"<h2>Cases needing verification</h2>"' _n
             file write `hf' `"<div class="note">These cases contain at least one final blank that is enabled, whose effective logic could not be evaluated, or whose variable/roster instance is absent from the supplied data. Blank-but-disabled questions are resolved automatically.</div>"' _n
-            quietly count if tier!="C"
-            local nact = r(N)
-            if `nact'>0 {
-                quietly keep if tier!="C"
-                quietly gen long __check = cond(final_data_checked,n_final_check, ///
-                    nopen+nunknown)
-                tempvar gw gi ge tgi tge gc2
-                quietly egen long `gw'  = total(__check), by(h_gkey)
-                quietly egen byte `tgi' = tag(h_gkey interview__id)
-                quietly egen long `gi'  = total(`tgi'), by(h_gkey)
-                quietly egen byte `tge' = tag(h_gkey h_ac)
-                quietly egen long `ge'  = total(`tge'), by(h_gkey)
-                quietly egen long `gc2' = count(nrem), by(h_gkey)
-                gsort -`gw' h_gkey -__check -nqrem interview__id sk_run
-                quietly gen byte __gf = 1
-                quietly replace __gf = h_gkey != h_gkey[_n-1] if _n>1
-                local ing 0
-                forvalues i = 1/`=_N' {
-                    if __gf[`i'] {
-                        if `ing' file write `hf' `"</details>"' _n
-                        local ing 1
-                        file write `hf' `"<details open><summary class="gate"><b>"' (h_group[`i']) `"</b> &nbsp;-&nbsp; "' (strofreal(`gc2'[`i'])) `" case(s), "' (strofreal(`gw'[`i'])) `" question(s) to check, in "' (strofreal(`gi'[`i'])) `" interview(s)</summary>"' _n
-                    }
-                    file write `hf' (h_open[`i']) _n
-                    file write `hf' (h_chip[`i']) _n
-                    file write `hf' (h_l1[`i']) _n
-                    file write `hf' (h_eventbox[`i']) _n
-                    if h_finalbox[`i']!="" file write `hf' (h_finalbox[`i']) _n
-                    file write `hf' (h_rel[`i']) _n
-                    file write `hf' (h_l2[`i']) _n
-                    file write `hf' (h_state[`i']) _n
-                    file write `hf' (h_do[`i']) _n
-                    file write `hf' (h_tech[`i']) _n
-                    file write `hf' `"</div>"' _n
-                }
-                if `ing' file write `hf' `"</details>"' _n
-            }
-            else file write `hf' `"<div class="state resolved"><b>No final-data checks are indicated.</b> Every affected item is answered or correctly blank under the final questionnaire logic.</div>"' _n
-
-            quietly use `"`DET2'"', clear
+            file write `hf' `"<div id="sk_verify"></div>"' _n
             file write `hf' `"<h2>Resolved history - no action</h2>"' _n
-            file write `hf' `"<details><summary style="cursor:pointer;font-size:13px;color:#555;padding:6px 0">Show `nclr' resolved historical case(s)</summary>"' _n
-            local wr 0
+            file write `hf' `"<details><summary id="sk_resolved_summary" style="cursor:pointer;font-size:13px;color:#555;padding:6px 0"></summary><div id="sk_resolved"></div></details><div id="sk_resolved_more" class="meta"></div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.20). Cases are screening signals from the paradata event stream, not proof of misconduct. Enumerator ownership is the actor who emitted the AnswerRemoved run; primary interviewer and last editor are not used as substitutes.</div>"' _n
+            file write `hf' `"</div><script>"' _n
+            file write `hf' `"var SK={cases:["' _n
+            quietly use `"`DET2'"', clear
             forvalues i = 1/`=_N' {
-                if tier[`i']!="C" continue
-                if `wr'>=200 continue
-                local ++wr
-                file write `hf' (h_open[`i']) _n
-                file write `hf' (h_chip[`i']) _n
-                file write `hf' (h_l1[`i']) _n
-                file write `hf' (h_eventbox[`i']) _n
-                if h_finalbox[`i']!="" file write `hf' (h_finalbox[`i']) _n
-                file write `hf' (h_rel[`i']) _n
-                file write `hf' (h_l2[`i']) _n
-                file write `hf' (h_state[`i']) _n
-                file write `hf' (h_do[`i']) _n
-                file write `hf' (h_tech[`i']) _n
-                file write `hf' `"</div>"' _n
+                file write `hf' (cond(`i'==1,"",",")) (j_obj[`i']) _n
             }
-            file write `hf' `"</details>"' _n
-            if `nclr'>200 file write `hf' `"<div class="meta">Showing the first 200 of `nclr' resolved historical cases.</div>"' _n
-            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.16). Cases are screening signals from the paradata event stream, not proof of misconduct.</div>"' _n
-            file write `hf' `"</div></body></html>"' _n
+            file write `hf' `"]};"' _n
+            file write `hf' `"var SKP={"' _n
+            file write `hf' `"scope:function(a,k){if(!k)return a.slice();var z=[];for(var i=0;i<a.length;i++)if(a[i].ak===k)z.push(a[i]);return z;},"' _n
+            file write `hf' `"stats:function(a){var z={h:a.length,q:0,need:0,re:0,ev:0};for(var i=0;i<a.length;i++){z.q+=a[i].q;z.need+=a[i].need;z.re+=a[i].re;z.ev+=a[i].ev;}return z;},"' _n
+            file write `hf' `"actors:function(a){var m=Object.create(null),z=[],i,x;for(i=0;i<a.length;i++){x=a[i];if(!m[x.ak])m[x.ak]={k:x.ak,n:x.an,c:0};m[x.ak].c++;}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k))z.push(m[k]);z.sort(function(x,y){return x.n.localeCompare(y.n)||x.k.localeCompare(y.k);});return z;},"' _n
+            file write `hf' `"patterns:function(a){var m=Object.create(null),z=[],i,x,p;for(i=0;i<a.length;i++){x=a[i];p=m[x.gk];if(!p)p=m[x.gk]={k:x.gk,l:x.gl,h:0,ev:0,ids:Object.create(null)};p.h++;p.ev+=x.ev;p.ids[x.id]=1;}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k)){p=m[k];p.ni=Object.keys(p.ids).length;delete p.ids;z.push(p);}z.sort(function(x,y){return y.ev-x.ev||y.h-x.h||x.l.localeCompare(y.l);});return z.slice(0,10);},"' _n
+            file write `hf' `"groups:function(a){var m=Object.create(null),z=[],i,x,g;for(i=0;i<a.length;i++){x=a[i];if(x.t==='C')continue;g=m[x.gk];if(!g)g=m[x.gk]={k:x.gk,l:x.gl,need:0,ids:Object.create(null),cases:[]};g.need+=x.need;g.ids[x.id]=1;g.cases.push(x);}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k)){g=m[k];g.ni=Object.keys(g.ids).length;delete g.ids;g.cases.sort(function(x,y){var sx=x.t==='A'?2:1,sy=y.t==='A'?2:1;return sy-sx||y.need-x.need||y.q-x.q||x.id.localeCompare(y.id);});z.push(g);}z.sort(function(x,y){return y.need-x.need||x.l.localeCompare(y.l);});return z;}"' _n
+            file write `hf' `"};if(typeof module!=='undefined'&&module.exports)module.exports=SKP;"' _n
+            file write `hf' `"function E(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}"' _n
+            file write `hf' `"function A(s){return E(s);}"' _n
+            file write `hf' `"function el(x){return document.getElementById(x);}"' _n
+            * Build selector options through the DOM.  Besides being safer for
+            * actor labels, this deliberately avoids a JavaScript double-quote
+            * followed by an apostrophe: that byte pair is Stata's compound-
+            * string terminator and caused r(198) in the v1.7.18 HTML path.
+            file write `hf' `"function initActors(){var a=SKP.actors(SK.cases),s=el('sk_actor'),o=document.createElement('option');s.innerHTML='';o.value='';o.textContent='All removal-run actors ('+a.length+')';s.appendChild(o);for(var i=0;i<a.length;i++){o=document.createElement('option');o.value=a[i].k;o.textContent=a[i].n+' ('+a[i].c+')';s.appendChild(o);}}"' _n
+            file write `hf' `"function actorLabel(k){var o=el('sk_actor').options;for(var i=0;i<o.length;i++)if(o[i].value===k)return o[i].text.replace(/ \([0-9]+\)$/,'');return k;}"' _n
+            file write `hf' `"function renderSkip(){var k=el('sk_actor').value,a=SKP.scope(SK.cases,k),st=SKP.stats(a),p=SKP.patterns(a),g=SKP.groups(a),i,s='';el('sk_hist').textContent=st.h.toLocaleString();el('sk_q').textContent=st.q.toLocaleString();el('sk_need').textContent=st.need.toLocaleString();el('sk_re').textContent=st.re.toLocaleString();el('sk_ev').textContent=st.ev.toLocaleString();el('sk_scope').textContent=k?('Showing removal runs emitted by '+actorLabel(k)+'.'):('Showing all '+st.h.toLocaleString()+' removal histories.');for(i=0;i<p.length;i++)s+='<tr><td>'+E(p[i].l)+'</td><td class="r">'+p[i].h.toLocaleString()+'</td><td class="r">'+p[i].ni.toLocaleString()+'</td><td class="r">'+p[i].ev.toLocaleString()+'</td></tr>';el('sk_patterns').innerHTML=s;el('sk_patterns_empty').textContent=p.length?'':'No removal patterns for this selection.';s='';for(i=0;i<g.length;i++)s+='<details open><summary class="gate"><b>'+E(g[i].l)+'</b> &nbsp;-&nbsp; '+g[i].cases.length+' case(s), '+g[i].need+' question(s) to check, in '+g[i].ni+' interview(s)</summary>'+g[i].cases.map(function(x){return x.card;}).join('')+'</details>';if(!g.length)s='<div class="state resolved"><b>No final-data checks are indicated for this selection.</b> Every matching affected item is answered or correctly blank under final questionnaire logic.</div>';el('sk_verify').innerHTML=s;var r=[];for(i=0;i<a.length;i++)if(a[i].t==='C')r.push(a[i]);el('sk_resolved_summary').textContent='Show '+r.length+' resolved historical case(s)';el('sk_resolved').innerHTML=r.slice(0,200).map(function(x){return x.card;}).join('');el('sk_resolved_more').textContent=r.length>200?('Showing the first 200 of '+r.length+' resolved historical cases for this selection.'):(r.length?'':'No resolved histories for this selection.');}"' _n
+            file write `hf' `"function setActor(k,label,notify){var s=el('sk_actor'),found=false;for(var i=0;i<s.options.length;i++)if(s.options[i].value===k){found=true;break;}if(k&&!found){var o=document.createElement('option');o.value=k;o.textContent=(label||k)+' (0)';s.appendChild(o);}s.value=k||'';renderSkip();if(notify&&parent!==window)parent.postMessage({type:'suso-actor-filter',key:s.value,label:s.value?actorLabel(s.value):''},'*');}"' _n
+            file write `hf' `"initActors();renderSkip();el('sk_actor').addEventListener('change',function(){setActor(this.value,actorLabel(this.value),true);});window.addEventListener('message',function(ev){var d=ev.data||{};if(ev.source!==parent||d.type!=='suso-actor-filter'||typeof d.key!=='string'||typeof d.label!=='string'||d.key.length>500||d.label.length>500)return;setActor(d.key,d.label,false);});"' _n
+            file write `hf' `"</script></body></html>"' _n
             file close `hf'
             di as txt "  shareable review page written: " as res `"`html'"'
             if `"`hqbase'"'!="" {
@@ -6066,9 +6068,1297 @@ program _suso_para_skips, rclass
 end
 
 * ---- report: dynamic self-contained HTML QC report ------------------------------
-* All data is embedded as JSON; vanilla JS (no CDN, works offline) recomputes
-* every figure and table live as the user filters by enumerator, searches
-* questions, or moves the flag thresholds / night window.
+* All derived QC payloads are embedded as JSON; vanilla JS (no CDN, works
+* offline) recomputes every figure and table live.  The optional raw-history
+* explorer reads a user-selected local paradata.tab on demand; source events
+* are intentionally not embedded.
+* ---- report writer: static JavaScript kept outside the main report program -----
+* Stata hard-limits each compiled program to 135,600 bytes.  Keeping this static
+* browser engine in its own helper preserves ample compiler headroom.
+program _suso_para_report_js
+    version 14.2
+    args fh
+    if "`fh'"=="" {
+        di as err "suso internal error: report file handle was not supplied."
+        exit 198
+    }
+    file write `fh' `"/* suso paradata report - dynamic engine. Pure compute core in P (node-testable), DOM layer below. */"' _n
+    file write `fh' `"var P = {"' _n
+    file write `fh' `"  letters: ['S','B','T','N','C','Z','P','O'],"' _n
+    file write `fh' `"  names: ['Speeding','Fast streak','Too short','Night work','Churn','Duration outlier','Faster than peers','Shared-minute screen'],"' _n
+    file write `fh' `"  presets: {"' _n
+    file write `fh' `"    standard:{burst:8,minact:5,n1:22,n2:6,nshare:0.25,churn:0.20,z:3.5,peer:0.35,ov:3,nmin:10},"' _n
+    file write `fh' `"    lenient:{fs:1.5,burst:12,minact:3,n1:22,n2:6,nshare:0.35,churn:0.30,z:4,peer:0.25,ov:5,nmin:15},"' _n
+    file write `fh' `"    strict:{fs:3,burst:6,minact:10,n1:22,n2:6,nshare:0.15,churn:0.15,z:3,peer:0.45,ov:2,nmin:8}"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  sum: function(a){ var s=0,i; for(i=0;i<a.length;i++) s+=a[i]; return s; },"' _n
+    file write `fh' `"  norm: function(s){ return String(s===null||s===undefined?'':s).trim().toLowerCase(); },"' _n
+    file write `fh' `"  questionIndex: function(rows){"' _n
+    file write `fh' `"    var m=Object.create(null),i,k,r;"' _n
+    file write `fh' `"    for(i=0;i<(rows||[]).length;i++){ r=rows[i]; k=P.norm(r.r||r.k); if(!m[k]) m[k]=[]; m[k].push(r); }"' _n
+    file write `fh' `"    return m;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  questionRows: function(all,index,resp,ws){"' _n
+    file write `fh' `"    var src=resp?(index[P.norm(resp)]||[]):(all||[]),out=[],i,sk=String(ws||'');"' _n
+    file write `fh' `"    for(i=0;i<src.length;i++) if(String(src[i].s||'')===sk) out.push(src[i]);"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  removalView: function(rows,resp){"' _n
+    file write `fh' `"    var scoped=[],groups=Object.create(null),rk=P.norm(resp),i,r,k,g,seen;"' _n
+    file write `fh' `"    var out={histories:0,questions:0,check:0,reanswered:0,events:0,active:0,resolved:0,rows:scoped,patterns:[]};"' _n
+    file write `fh' `"    for(i=0;i<(rows||[]).length;i++){"' _n
+    file write `fh' `"      r=rows[i]; if(resp&&(r.k||P.norm(r.a))!==rk) continue; scoped.push(r);"' _n
+    file write `fh' `"      out.histories++; out.questions+=r.q||0; out.check+=r.ck||0; out.reanswered+=r.ra||0; out.events+=r.n||0;"' _n
+    file write `fh' `"      if(r.tier==='C') out.resolved++; else out.active++;"' _n
+    file write `fh' `"      k=r.t||'(no nearby / linked variable identified)';"' _n
+    file write `fh' `"      if(!groups[k]) groups[k]={v:k,h:0,n:0,ids:Object.create(null)}; g=groups[k]; g.h++; g.n+=r.n||0; g.ids[r.id]=1;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    for(k in groups) if(Object.prototype.hasOwnProperty.call(groups,k)){ g=groups[k]; g.i=Object.keys(g.ids).length; delete g.ids; out.patterns.push(g); }"' _n
+    file write `fh' `"    out.patterns.sort(function(a,b){if(b.n!==a.n)return b.n-a.n;if(b.h!==a.h)return b.h-a.h;return a.v<b.v?-1:1;});"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  f1: function(x,d){ if(x===null||x===undefined||isNaN(x)) return '.'; return x.toFixed(d===undefined?1:d); },"' _n
+    file write `fh' `"  inWindow: function(h,n1,n2){ if(n1===n2) return false; if(n1<n2) return h>=n1&&h<n2; return h>=n1||h<n2; },"' _n
+    file write `fh' `"  fastShare: function(row,fs){"' _n
+    file write `fh' `"    if(!row.g) return row.fsh;"' _n
+    file write `fh' `"    var t=P.sum(row.g); if(t<=0) return null;"' _n
+    file write `fh' `"    var f=0,i,lim=Math.max(0,Math.ceil(fs*2-1e-9)); for(i=0;i<row.g.length&&i<lim;i++) f+=row.g[i];"' _n
+    file write `fh' `"    return f/t;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  nightShare: function(row,n1,n2){"' _n
+    file write `fh' `"    if(!row.h) return row.nsh;"' _n
+    file write `fh' `"    var t=P.sum(row.h); if(t<=0) return null;"' _n
+    file write `fh' `"    var s=0,i; for(i=0;i<24;i++) if(P.inWindow(i,n1,n2)) s+=row.h[i];"' _n
+    file write `fh' `"    return s/t;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  median: function(a){"' _n
+    file write `fh' `"    if(!a.length) return null;"' _n
+    file write `fh' `"    var b=a.slice().sort(function(x,y){return x-y;});"' _n
+    file write `fh' `"    var m=Math.floor(b.length/2);"' _n
+    file write `fh' `"    return b.length%2 ? b[m] : (b[m-1]+b[m])/2;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  zctx: function(rows){"' _n
+    file write `fh' `"    var lx=[],i;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].itq===1&&rows[i].af>0&&rows[i].im!==1&&rows[i].imm!==1) lx.push(Math.log(rows[i].af));"' _n
+    file write `fh' `"    if(lx.length<10) return null;"' _n
+    file write `fh' `"    var med=P.median(lx), dev=[],j;"' _n
+    file write `fh' `"    for(j=0;j<lx.length;j++) dev.push(Math.abs(lx[j]-med));"' _n
+    file write `fh' `"    var mad=P.median(dev);"' _n
+    file write `fh' `"    if(!(mad>0)) return null;"' _n
+    file write `fh' `"    return {med:med, mad:mad};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  zval: function(row,ctx){"' _n
+    file write `fh' `"    var tq=row.itq, m=row.im, mm=row.imm;"' _n
+    file write `fh' `"    if(!ctx||tq!==1||m===1||mm===1||!(row.af>0)) return null;"' _n
+    file write `fh' `"    return 0.6745*(Math.log(row.af)-ctx.med)/ctx.mad;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  team: function(rows){"' _n
+    file write `fh' `"    var med=[],nq=[],act=[],i,r;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      r=rows[i];"' _n
+    file write `fh' `"      if(r.af!==null&&r.af!==undefined) act.push(r.af);"' _n
+    file write `fh' `"      if(r.med!==null) med.push(r.med);"' _n
+    file write `fh' `"      if(r.nq!==null&&r.nq!==undefined) nq.push(r.nq);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return {med:P.median(med), nq:P.median(nq), act:P.median(act)};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  isCapi: function(row){ return row.m!==1 && row.mm!==1 && row.mu!==1; },"' _n
+    file write `fh' `"  flagsFor: function(row,S,ctx){"' _n
+    file write `fh' `"    var capi=P.isCapi(row);"' _n
+    file write `fh' `"    var primaryView=!row.vr || row.vp===1;"' _n
+    file write `fh' `"    var dcapi=row.im!==1&&row.imm!==1, dtq=row.itq;"' _n
+    file write `fh' `"    var support=row.vr?(row.vans||0):(row.pans||row.nt||0);"' _n
+    file write `fh' `"    var nsh=P.nightShare(row,S.n1,S.n2), z=P.zval(row,ctx);"' _n
+    file write `fh' `"    return ["' _n
+    file write `fh' `"      capi && row.tq===1 && row.med!==null && row.med<S.fs && row.nt>=S.nmin,"' _n
+    file write `fh' `"      capi && row.tq===1 && row.fr>=S.burst && row.nt>=S.nmin,"' _n
+    file write `fh' `"      primaryView && dcapi && dtq===1 && row.nc>0 && row.af!==null && row.af<S.minact,"' _n
+    file write `fh' `"      capi && row.lq===1 && row.to!==1 && nsh!==null && nsh>S.nshare && row.nt>=S.nmin,"' _n
+    file write `fh' `"      row.ch!==null && row.ch>S.churn && support>=S.nmin,"' _n
+    file write `fh' `"      primaryView && dcapi && dtq===1 && z!==null && Math.abs(z)>S.z,"' _n
+    file write `fh' `"      capi && row.tq===1 && row.rt!==null && row.rt<S.peer && row.nt>=S.nmin,"' _n
+    file write `fh' `"      row.ov>=S.ov"' _n
+    file write `fh' `"    ];"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  resub: function(row){ return row.rj>0 && row.rbc===1 && row.re===0; },"' _n
+    file write `fh' `"  softResub: function(row){"' _n
+    file write `fh' `"    return row.rj>0 && row.rbc===1 && row.re>0 && row.rq!==null && row.rq>=1 && row.rq<=2 && row.rb!==null && row.rb>=0 && row.rb<10;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  unknownResub: function(row){ return row.rj>0 && row.rbc===1 && row.re>0 && (row.rq===null||row.rq===0); },"' _n
+    file write `fh' `"  multiDay: function(row){ return row.on===1&&row.ilq===1&&row.ito!==1; },"' _n
+    file write `fh' `"  postEdit: function(row){ return (row.pcf||0)>0; },"' _n
+    file write `fh' `"  unresolvedRemoval: function(row){ return row.fdc===1 ? (row.fck||0)>0 : ((row.cop||0)+(row.cu||0))>0; },"' _n
+    file write `fh' `"  domains: function(row){"' _n
+    file write `fh' `"    var f=row._f||[false,false,false,false,false,false,false,false];"' _n
+    file write `fh' `"    var pace=(f[0]?1:0)+(f[1]?1:0)+(f[6]?1:0), duration=(f[2]?1:0)+(f[5]?1:0);"' _n
+    file write `fh' `"    var n=(pace>0?1:0)+(duration>0?1:0)+(f[3]?1:0)+(f[4]?1:0)+(f[7]?1:0);"' _n
+    file write `fh' `"    return {n:n,pace:pace,duration:duration};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  tierFor: function(row){"' _n
+    file write `fh' `"    var d=P.domains(row);"' _n
+    file write `fh' `"    if(row._r) return 'A';"' _n
+    file write `fh' `"    if(d.n>=3) return 'A';"' _n
+    file write `fh' `"    if(d.n>=2 || d.pace>=2 || d.duration>=2 || row._f[7]) return 'V';"' _n
+    file write `fh' `"    if(P.softResub(row) || P.unknownResub(row) || P.unresolvedRemoval(row) || row.wsm===1) return 'V';"' _n
+    file write `fh' `"    if(row._n>0 || P.multiDay(row) || P.postEdit(row)) return 'W';"' _n
+    file write `fh' `"    return '';"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  evidence: function(row,S,team,meta){"' _n
+    file write `fh' `"    meta=meta||{};"' _n
+    file write `fh' `"    var out=[], f=row._f;"' _n
+    file write `fh' `"    if(f[7]) out.push({t:'flag', s:(row.ova||'An interviewer')+' recorded answers in this and another interview in '+row.ov+' shared UTC-minute bucket(s). This is a screening match, not proof of simultaneous interviewing.'+(row.ovd?(' Trace: '+row.ovd):'')});"' _n
+    file write `fh' `"    if(row._r){"' _n
+    file write `fh' `"      var w='Rejected, then re-completed ';"' _n
+    file write `fh' `"      if(row.rb!==null) w+=P.f1(row.rb,0)+' min later ';"' _n
+    file write `fh' `"      out.push({t:'hard', s:w+'with no question changed between rejection and re-completion.'});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    else if(P.softResub(row)) out.push({t:'flag', s:'Rejected, re-completed after '+P.f1(row.rb,0)+' min with '+row.rq+' distinct question(s) touched in '+row.re+' edit event(s)'+(row.rba?(' by '+row.rba):'')+(row.rbv?(' ['+row.rbv+']'):'')+'.'});"' _n
+    file write `fh' `"    else if(P.unknownResub(row)) out.push({t:'flag', s:'Rejected and re-completed after '+row.re+' edit event(s), but this reduced paradata does not identify the distinct questions touched.'});"' _n
+    file write `fh' `"    else if(row.rbb===1) out.push({t:'info', s:'A rejection/completion cycle has reversed timestamps; its turnaround duration was not scored.'});"' _n
+    file write `fh' `"    var metricActor=row.vr||row.r;"' _n
+    file write `fh' `"    if(f[0]) out.push({t:'flag', s:'Interviewer '+metricActor+' had a typical first-pass answer time of '+P.f1(row.med,1)+' s across '+row.nt+' timed answers'+(team.med!==null?' (team typical '+P.f1(team.med,1)+' s)':'')+'.'});"' _n
+    file write `fh' `"    if(f[6]) out.push({t:'flag', s:'Finished its questions in '+P.f1(100*row.rt,0)+'% of the time colleagues typically need on those same questions.'});"' _n
+    file write `fh' `"    if(f[1]){"' _n
+    file write `fh' `"      var wfs=P.fastShare(row,S.fs);"' _n
+    file write `fh' `"      out.push({t:'flag', s:'Interviewer '+metricActor+' had a within-session streak of '+row.fr+' consecutive first-pass questions, each answered in under '+(meta.fastsecs||2)+' s'+(wfs!==null?(' ('+P.f1(100*wfs,0)+'% of first-pass timed answers were under '+S.fs+' s)'):'')+'.'});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(f[2]){"' _n
+    file write `fh' `"      var w2='First completion followed only '+P.f1(row.af,1)+' min of active first-pass work';"' _n
+    file write `fh' `"      if(row.nq!==null&&row.nq!==undefined&&team.nq!==null) w2+=' - '+row.nq+' distinct questions answered (team median '+P.f1(team.nq,0)+')';"' _n
+    file write `fh' `"      out.push({t:'flag', s:w2+'.'});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(f[3]){"' _n
+    file write `fh' `"      var w3=P.f1(100*P.nightShare(row,S.n1,S.n2),0)+'% of answering happened between '+S.n1+':00 and '+S.n2+':00 device time.';"' _n
+    file write `fh' `"      if(row.to===1) w3+=' Caution: this tablet clock is unreliable (offset differs from the team or changed mid-fieldwork).';"' _n
+    file write `fh' `"      out.push({t:'flag', s:w3, cav:(row.to===1)});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(f[4]) out.push({t:'flag', s:P.f1(100*row.ch,0)+' answers removed per 100 set.'});"' _n
+    file write `fh' `"    if(f[5]) out.push({t:'flag', s:'First-pass active time '+P.f1(row.af,1)+' min is far outside the survey-wide pattern.'});"' _n
+    file write `fh' `"    if(row.vr && row.vp!==1 && row.itq===1 && row.im!==1 && row.imm!==1 && row.nc>0 && row.af!==null && row.af<S.minact) out.push({t:'info', s:'The interview-level short-duration context belongs to primary interviewer '+row.r+'; it is not attributed to selected correction actor '+row.vr+'.'});"' _n
+    file write `fh' `"    if(P.unresolvedRemoval(row)) out.push({t:'flag', s:'Final-data review after a historical removal run: '+row.fda+' answered; '+row.fad+' answered while disabled; '+row.feb+' blank as expected because disabled; '+row.fbe+' blank while enabled; '+row.flu+' logic unknown; '+row.fnd+' not in supplied data.'});"' _n
+    file write `fh' `"    else if(row.cas>0) out.push({t:'info', s:'Historical removal run resolved: '+row.fda+' answered and '+row.feb+' correctly blank because disabled. No action from this history alone.'});"' _n
+    file write `fh' `"    if(row.ho===1) out.push({t:'info', s:'Fieldwork involved '+row.na+' actors. Primary: '+row.r+' ('+P.f1(100*row.pas,0)+'% of field answers); last editor: '+(row.le||'-')+'. Metrics and flags are attributed to the actor who generated them, not automatically to the last editor.'});"' _n
+    file write `fh' `"    if(P.multiDay(row)) out.push({t:'flag', s:'First-pass work continued on '+row.wd+' device-local dates ('+(row.d0||'?')+' to '+(row.d1||'?')+'), with a longest pre-completion pause of '+P.f1(row.lpp,0)+' min. Active work excludes that pause.'});"' _n
+    file write `fh' `"    else if(row.on===1) out.push({t:'info', s:'First-pass work spans multiple recorded local dates, but local-clock quality is unreliable; no multi-day review signal was applied.'});"' _n
+    file write `fh' `"    else if(row.lp!==null && row.lp>=60) out.push({t:'info', s:'Longest pause between work sessions was '+P.f1(row.lp,0)+' min; active time excludes it.'});"' _n
+    file write `fh' `"    if(row.pr===1) out.push({t:'info', s:'The case returned to field activity after an earlier completion; total active time is '+P.f1(row.act,1)+' min versus '+P.f1(row.af,1)+' min through first completion.'});"' _n
+    file write `fh' `"    if(row.m===1) out.push({t:'info', s:'Selected behavior actor worked in CAWI - actor speed, streak, night and peer signals were not applied.'});"' _n
+    file write `fh' `"    if(row.mm===1) out.push({t:'info', s:'Selected behavior actor has mixed CAPI/CAWI answers - actor timing signals were suppressed.'});"' _n
+    file write `fh' `"    if(row.mu===1) out.push({t:'info', s:'Selected actor collection mode is unavailable in this paradata - mode-dependent timing signals were suppressed.'});"' _n
+    file write `fh' `"    if(row.tq!==1) out.push({t:'info', s:'Selected actor timing is incomplete or reversed; actor speed, streak and peer signals were suppressed.'});"' _n
+    file write `fh' `"    if(row.itq!==1 || row.im===1 || row.imm===1) out.push({t:'info', s:'Whole-interview first-pass timing/mode quality is unsuitable; short-duration and duration-outlier signals were suppressed.'});"' _n
+    file write `fh' `"    if(row.wsm===1) out.push({t:'flag', s:'Workflow status differs between paradata ('+(row.wsp||'-')+') and final data ('+(row.wsd||'-')+'). The displayed status comes from '+row.wss+'.'});"' _n
+    file write `fh' `"    if(row.to===1 && !f[3]){"' _n
+    file write `fh' `"      if(row.tz!==null && meta.tzmode!==undefined && meta.tzmode!==null && Math.abs(row.tz-meta.tzmode)<0.05)"' _n
+    file write `fh' `"        out.push({t:'info', s:'The tablet clock offset changed during fieldwork on this interview - its hours are unreliable.'});"' _n
+    file write `fh' `"      else out.push({t:'info', s:'Tablet clock offset '+(row.tz===null?'?':P.f1(row.tz,1))+' h differs from the team ('+P.f1(meta.tzmode,1)+' h).'});"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(P.postEdit(row)) out.push({t:'flag', s:'Interviewer recorded '+row.pcf+' answer edit(s) after completion outside a rejection-correction episode.'+(row.pcd?(' Trace: '+row.pcd):'')});"' _n
+    file write `fh' `"    else if((row.pca||0)>0) out.push({t:'info', s:'Post-completion audit trail contains '+row.pca+' answer edit(s)'+(row.pcn>0?(' ('+row.pcn+' by Supervisor/HQ/API roles)'):'')+'.'+(row.pcd?(' Outside-cycle trace: '+row.pcd):'' )});"' _n
+    file write `fh' `"    if(row.ve!==null && row.ve>0) out.push({t:'info', s:row.ve+' validation error(s) still open.'});"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  forActor: function(row,a){"' _n
+    file write `fh' `"    var x=Object.create(null),k; for(k in row) if(Object.prototype.hasOwnProperty.call(row,k)) x[k]=row[k];"' _n
+    file write `fh' `"    x.itq=row.itq; x.ilq=row.ilq; x.im=row.im; x.imm=row.imm; x.imu=row.imu; x.ito=row.ito; x.iaf=row.af; x.iact=row.act;"' _n
+    file write `fh' `"    x.vr=a.r; x.vp=a.p; x.vf=a.f; x.vl=a.l; x.vshare=a.share; x.vans=a.ans; x.vansf=a.ansf; x.vq=a.q; x.vss=a.ss; x.vact=a.act; x.vaf=a.af;"' _n
+    file write `fh' `"    x.med=a.med; x.nt=a.nt; x.fsh=a.fsh; x.nsh=a.nsh; x.ch=a.ch; x.rt=a.rt; x.fr=a.fr; x.ov=a.ov; x.ova=a.r; x.ovd=a.ovd||'';"' _n
+    file write `fh' `"    x.tq=a.tq; x.lq=a.lq; x.m=a.m; x.mm=a.mm; x.mu=a.mu; x.tz=a.tz; x.to=a.to; x.h=a.h||null; x.g=a.g||null;"' _n
+    file write `fh' `"    return x;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  filterRows: function(rows,resp,ws,fd,fv,actors){"' _n
+    file write `fh' `"    var out=[],i,j,r,a,x,amap=null,rkey=P.norm(resp);"' _n
+    file write `fh' `"    if(resp){ amap=Object.create(null); for(j=0;j<(actors||[]).length;j++) if(P.norm(actors[j].r)===rkey) amap[actors[j].id]=actors[j]; }"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      r=rows[i];"' _n
+    file write `fh' `"      x=r;"' _n
+    file write `fh' `"      if(resp){"' _n
+    file write `fh' `"        a=amap[r.id]||null;"' _n
+    file write `fh' `"        if(!a) continue; x=P.forActor(r,a);"' _n
+    file write `fh' `"      }"' _n
+    file write `fh' `"      if(ws){"' _n
+    file write `fh' `"        if(ws==='APP'){ if(r.wsc!=='approvebyhq' && r.wsc!=='approvebysup') continue; }"' _n
+    file write `fh' `"        else if(r.ws!==ws) continue;"' _n
+    file write `fh' `"      }"' _n
+    file write `fh' `"      if(fd && fv){ if(!r.f || r.f[fd]!==fv) continue; }"' _n
+    file write `fh' `"      out.push(x);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  aggregate: function(rows,S,ctx){"' _n
+    file write `fh' `"    if(arguments.length<3) ctx=P.zctx(rows); var tot=[0,0,0,0,0,0,0,0], flagged=[], tiers={A:0,V:0,W:0}, i,j;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      var f=P.flagsFor(rows[i],S,ctx), n=0;"' _n
+    file write `fh' `"      for(j=0;j<8;j++){ if(f[j]){tot[j]++;n++;} }"' _n
+    file write `fh' `"      rows[i]._f=f; rows[i]._n=n;"' _n
+    file write `fh' `"      rows[i]._r=P.resub(rows[i]);"' _n
+    file write `fh' `"      rows[i]._d=P.domains(rows[i]);"' _n
+    file write `fh' `"      rows[i]._t=P.tierFor(rows[i]);"' _n
+    file write `fh' `"      if(rows[i]._t!==''){ flagged.push(rows[i]); tiers[rows[i]._t]++; }"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    var rank={A:0,V:1,W:2};"' _n
+    file write `fh' `"    flagged.sort(function(a,b){"' _n
+    file write `fh' `"      if(rank[a._t]!==rank[b._t]) return rank[a._t]-rank[b._t];"' _n
+    file write `fh' `"      if(b._d.n!==a._d.n) return b._d.n-a._d.n;"' _n
+    file write `fh' `"      if(b._n!==a._n) return b._n-a._n;"' _n
+    file write `fh' `"      if(b.wip!==a.wip) return b.wip-a.wip;"' _n
+    file write `fh' `"      var am=a.med===null?1e9:a.med, bm=b.med===null?1e9:b.med;"' _n
+    file write `fh' `"      return am-bm;"' _n
+    file write `fh' `"    });"' _n
+    file write `fh' `"    return {tot:tot, flagged:flagged, tiers:tiers, n:rows.length, ctx:ctx};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  niceBin: function(p99){"' _n
+    file write `fh' `"    var c=[1,2,5,10,15,30,60,120,240,480], i, b=1;"' _n
+    file write `fh' `"    for(i=0;i<c.length;i++){ b=c[i]; if(c[i]*20>=p99) break; }"' _n
+    file write `fh' `"    return b;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  binsActive: function(rows){"' _n
+    file write `fh' `"    var act=[],i;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].af!==null&&rows[i].af!==undefined) act.push(rows[i].af);"' _n
+    file write `fh' `"    if(!act.length) return {w:1,c:[]};"' _n
+    file write `fh' `"    var s=act.slice().sort(function(x,y){return x-y;});"' _n
+    file write `fh' `"    var p99=Math.max(s[Math.min(s.length-1,Math.floor(0.99*s.length))],1);"' _n
+    file write `fh' `"    var w=P.niceBin(p99), c=[],k;"' _n
+    file write `fh' `"    for(k=0;k<20;k++) c.push(0);"' _n
+    file write `fh' `"    for(i=0;i<act.length;i++) c[Math.min(Math.floor(act[i]/w),19)]++;"' _n
+    file write `fh' `"    return {w:w,c:c};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  binsMed: function(rows){"' _n
+    file write `fh' `"    var c=[],k,i;"' _n
+    file write `fh' `"    for(k=0;k<21;k++) c.push(0);"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].med!==null) c[Math.min(Math.floor(rows[i].med),20)]++;"' _n
+    file write `fh' `"    return c;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  hourTotals: function(rows){"' _n
+    file write `fh' `"    var t=[],k,i,j;"' _n
+    file write `fh' `"    for(k=0;k<24;k++) t.push(0);"' _n
+    file write `fh' `"    var any=false;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      if(!rows[i].h) continue;"' _n
+    file write `fh' `"      any=true;"' _n
+    file write `fh' `"      for(j=0;j<24;j++) t[j]+=rows[i].h[j];"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return any?t:null;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  dailyTotals: function(daily,resp){"' _n
+    file write `fh' `"    var m=Object.create(null),i,k;"' _n
+    file write `fh' `"    for(i=0;i<daily.length;i++){"' _n
+    file write `fh' `"      if(resp&&P.norm(daily[i].r)!==P.norm(resp)) continue;"' _n
+    file write `fh' `"      k=daily[i].d;"' _n
+    file write `fh' `"      m[k]=(m[k]||0)+daily[i].c;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    var keys=Object.keys(m).sort(), out=[];"' _n
+    file write `fh' `"    for(i=0;i<keys.length;i++) out.push({d:keys[i],c:m[keys[i]]});"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  league: function(rows,actors,S,resp){"' _n
+    file write `fh' `"    var allowed=Object.create(null), rowmap=Object.create(null), m=Object.create(null), i,a,g,any,q,capi;"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){ allowed[rows[i].id]=1; rowmap[rows[i].id]=rows[i]; }"' _n
+    file write `fh' `"    for(i=0;i<actors.length;i++){"' _n
+    file write `fh' `"      a=actors[i]; if(!allowed[a.id]||!a.r||(resp&&P.norm(a.r)!==P.norm(resp))) continue;"' _n
+    file write `fh' `"      if(!m[a.r]) m[a.r]={r:a.r,n:0,primary:0,correction:0,fl:0,ov:0,act:[],med:[],fsh:[],nsh:[]};"' _n
+    file write `fh' `"      g=m[a.r]; q=rowmap[a.id]||{}; capi=P.isCapi(a); any=false; g.n++; if(a.p===1) g.primary++; else g.correction++;"' _n
+    file write `fh' `"      if(capi && a.tq===1 && a.nt>=S.nmin && a.med!==null && a.med<S.fs) any=true;"' _n
+    file write `fh' `"      if(capi && a.tq===1 && a.nt>=S.nmin && a.fr>=S.burst) any=true;"' _n
+    file write `fh' `"      if(capi && a.lq===1 && a.to!==1 && a.nt>=S.nmin && a.nsh!==null && a.nsh>S.nshare) any=true;"' _n
+    file write `fh' `"      if(a.ans>=S.nmin && a.ch!==null && a.ch>S.churn) any=true;"' _n
+    file write `fh' `"      if(capi && a.tq===1 && a.nt>=S.nmin && a.rt!==null && a.rt<S.peer) any=true;"' _n
+    file write `fh' `"      if(a.ov>=S.ov) any=true;"' _n
+    file write `fh' `"      if((P.resub(q)||P.softResub(q)||P.unknownResub(q)) && P.norm(q.rba)===P.norm(a.r)) any=true;"' _n
+    file write `fh' `"      if(any) g.fl++; g.ov+=a.ov||0;"' _n
+    file write `fh' `"      if(a.af!==null&&a.af!==undefined) g.act.push(a.af);"' _n
+    file write `fh' `"      if(a.med!==null) g.med.push(a.med);"' _n
+    file write `fh' `"      if(a.fsh!==null) g.fsh.push(a.fsh);"' _n
+    file write `fh' `"      if(a.nsh!==null) g.nsh.push(a.nsh);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    var out=[],k;"' _n
+    file write `fh' `"    for(k in m){ if(Object.prototype.hasOwnProperty.call(m,k)) out.push(m[k]); }"' _n
+    file write `fh' `"    for(i=0;i<out.length;i++){"' _n
+    file write `fh' `"      out[i].medact=P.median(out[i].act);"' _n
+    file write `fh' `"      out[i].medmed=P.median(out[i].med);"' _n
+    file write `fh' `"      out[i].mfsh=out[i].fsh.length?P.sum(out[i].fsh)/out[i].fsh.length:null;"' _n
+    file write `fh' `"      out[i].mnsh=out[i].nsh.length?P.sum(out[i].nsh)/out[i].nsh.length:null;"' _n
+    file write `fh' `"      out[i].share=out[i].fl/out[i].n;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    out.sort(function(a,b){ if(b.share!==a.share) return b.share-a.share; return b.n-a.n; });"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  csv: function(flagged,S,team,meta){"' _n
+    file write `fh' `"    var Q=String.fromCharCode(34);"' _n
+    file write `fh' `"    function cell(x){"' _n
+    file write `fh' `"      if(x===null||x===undefined) return '';"' _n
+    file write `fh' `"      var s=String(x);"' _n
+    file write `fh' `"      if(/^[\x00-\x20]*[=+\-@]/.test(s)) s=String.fromCharCode(39)+s;"' _n
+    file write `fh' `"      if(s.indexOf(',')>=0||s.indexOf(Q)>=0||s.indexOf('\n')>=0||s.indexOf('\r')>=0) return Q+s.split(Q).join(Q+Q)+Q;"' _n
+    file write `fh' `"      return s;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    meta=meta||{};"' _n
+    file write `fh' `"    var head=['tier','risk_domains','flags','interview_key','interview_id','assignment_id','metric_actor','primary_interviewer','last_editor','first_interviewer','metric_actor_answer_share','metric_actor_answers','metric_actor_first_pass_answers','metric_actor_active_first_pass_min','metric_actor_active_total_min','metric_actor_question_instances','metric_actor_sessions','field_actor_count','primary_answer_share','status','status_source','status_paradata','status_final_data','status_mismatch','first_pass_first_day','first_pass_last_day','first_pass_work_days','interview_sessions_total','interview_sessions_first_pass','interview_sessions_rework','interview_active_first_pass_min','interview_active_total_min','interview_elapsed_span_min','interview_first_pass_span_min','longest_pause_min','longest_precompletion_pause_min','continued_multiple_days','postcompletion_return','metric_actor_timing_ok','metric_actor_local_time_ok','metric_actor_mode','interview_timing_ok','interview_mode','metric_actor_timed_answers','interview_timed_answers_total','interview_questions_answered','primary_question_instances','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_actor','overlap_min_actor','overlap_min_all_actors','overlap_trace','rejections','resubmit_min','resubmit_questions','resubmit_edit_events','resubmit_field_edit_events','resubmit_actor','resubmit_question_list','cascades','questions_affected','post_completion_field_answer_sets','post_completion_all_answer_edits','post_completion_nonfield_edits','post_completion_outside_cycle','post_completion_field_outside_cycle','post_completion_nonfield_outside_cycle','post_completion_trace','open_errors','review_reasons','context_notes','interview_url','assignment_url'];"' _n
+    file write `fh' `"    var lines=[head.join(',')], i, r, j, pat,ev,why,notes,vals,base,iu,au;"' _n
+    file write `fh' `"    var tname={A:'INVESTIGATE',V:'VERIFY',W:'WATCH'};"' _n
+    file write `fh' `"    for(i=0;i<flagged.length;i++){"' _n
+    file write `fh' `"      r=flagged[i]; pat='';"' _n
+    file write `fh' `"      for(j=0;j<8;j++) if(r._f[j]) pat+=P.letters[j];"' _n
+    file write `fh' `"      if(r._r) pat+='R';"' _n
+    file write `fh' `"      if(P.softResub(r)) pat+='Q'; if(P.unknownResub(r)) pat+='X'; if(P.unresolvedRemoval(r)) pat+='U'; if(P.multiDay(r)) pat+='D'; if(P.postEdit(r)) pat+='E'; if(r.wsm===1) pat+='M';"' _n
+    file write `fh' `"      ev=P.evidence(r,S,team,meta); why=[]; notes=[];"' _n
+    file write `fh' `"      for(j=0;j<ev.length;j++){ if(ev[j].t==='info') notes.push(ev[j].s); else why.push(ev[j].s); }"' _n
+    file write `fh' `"      base=meta.hq?String(meta.hq).replace(/\/+$/,''):''; iu=base?(base+'/Interview/Review/'+encodeURIComponent(r.id)):''; au=(base&&r.a)?(base+'/Assignments/'+encodeURIComponent(r.a)):'';"' _n
+    file write `fh' `"      vals=[tname[r._t],r._d?r._d.n:'',pat,r.k,r.id,r.a,(r.vr||r.r),r.r,r.le,r.fi,P.f1(r.vr?r.vshare:r.pas,3),(r.vr?r.vans:r.pans),(r.vr?r.vansf:r.pansf),P.f1(r.vr?r.vaf:r.paf,2),P.f1(r.vr?r.vact:r.pact,2),(r.vr?r.vq:r.pq),(r.vr?r.vss:r.pss),r.na,P.f1(r.pas,3),r.ws,r.wss,r.wsp,r.wsd,r.wsm,r.d0,r.d1,r.wd,r.ss,r.sf,r.sr,P.f1(r.af,2),P.f1(r.act,2),P.f1(r.sp,1),P.f1(r.spf,1),P.f1(r.lp,1),P.f1(r.lpp,1),(P.multiDay(r)?1:0),r.pr,r.tq,r.lq,(r.mu===1?'UNKNOWN':(r.mm===1?'MIXED':(r.m===1?'CAWI':'CAPI'))),r.itq,(r.imu===1?'UNKNOWN':(r.imm===1?'MIXED':(r.im===1?'CAWI':'CAPI'))),r.nt,r.ntt,r.nq,r.pq,P.f1(r.med,2),P.f1(P.fastShare(r,S.fs),3),r.fr,P.f1(P.nightShare(r,S.n1,S.n2),3),P.f1(r.ch,3),P.f1(r.rt,3),r.ova,r.ov,r.ovt,r.ovd,r.rj,P.f1(r.rb,1),r.rq,r.re,r.ref,r.rba,r.rbv,r.cas,r.wip,r.pc,r.pca,r.pcn,r.pco,r.pcf,r.pcno,r.pcd,(r.ve===null?'':r.ve),why.join(' | '),notes.join(' | '),iu,au];"' _n
+    file write `fh' `"      for(j=0;j<vals.length;j++) vals[j]=cell(vals[j]); lines.push(vals.join(','));"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return lines.join('\n');"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"};"' _n
+    file write `fh' `"if (typeof module!=='undefined' && module.exports) module.exports=P;"' _n
+    file write `fh' _n
+    file write `fh' `"/* ---------------- DOM layer (browser only) ---------------- */"' _n
+    file write `fh' `"if (typeof document!=='undefined') {"' _n
+    file write `fh' _n
+    file write `fh' `"var Q=String.fromCharCode(34);"' _n
+    file write `fh' `"var expOpen=Object.create(null);"' _n
+    file write `fh' `"var lastA=null, lastS=null, lastTeam=null;"' _n
+    file write `fh' `"function el(id){ return document.getElementById(id); }"' _n
+    file write `fh' `"function fmt(x,d){"' _n
+    file write `fh' `"  if(x===null||x===undefined||isNaN(x)) return '.';"' _n
+    file write `fh' `"  var s=x.toFixed(d===undefined?1:d);"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function fmtc(x){"' _n
+    file write `fh' `"  if(x===null||x===undefined) return '.';"' _n
+    file write `fh' `"  var s=String(Math.round(x)), out='', c=0, i;"' _n
+    file write `fh' `"  for(i=s.length-1;i>=0;i--){ out=s.charAt(i)+out; c++; if(c%3===0&&i>0) out=','+out; }"' _n
+    file write `fh' `"  return out;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function esc(s){"' _n
+    file write `fh' `"  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function attr(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }"' _n
+    file write `fh' `"function hqLinks(r){"' _n
+    file write `fh' `"  var b=(D.meta&&D.meta.hq)?String(D.meta.hq):'';"' _n
+    file write `fh' `"  if(!b) return '';"' _n
+    file write `fh' `"  b=b.replace(/\/+$/,'');"' _n
+    file write `fh' `"  var iu=b+'/Interview/Review/'+encodeURIComponent(r.id);"' _n
+    file write `fh' `"  var s='<span class='+Q+'hqlinks'+Q+'><a class='+Q+'hqlink'+Q+' target='+Q+'_blank'+Q+' rel='+Q+'noopener noreferrer'+Q+' href='+Q+attr(iu)+Q+'>Open interview</a>';"' _n
+    file write `fh' `"  if(r.a){ var au=b+'/Assignments/'+encodeURIComponent(r.a); s+='<a class='+Q+'hqlink secondary'+Q+' target='+Q+'_blank'+Q+' rel='+Q+'noopener noreferrer'+Q+' href='+Q+attr(au)+Q+'>Open assignment</a>'; }"' _n
+    file write `fh' `"  return s+'</span>';"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function copyText(t){"' _n
+    file write `fh' `"  var ta=document.createElement('textarea');"' _n
+    file write `fh' `"  ta.value=t; ta.style.position='fixed'; ta.style.left='-999px';"' _n
+    file write `fh' `"  document.body.appendChild(ta); ta.select();"' _n
+    file write `fh' `"  try{ document.execCommand('copy'); }catch(e){}"' _n
+    file write `fh' `"  document.body.removeChild(ta);"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function svgBars(counts,labels,hi,opts){"' _n
+    file write `fh' `"  opts=opts||{};"' _n
+    file write `fh' `"  function at(n,v){ return ' '+n+'='+Q+v+Q; }"' _n
+    file write `fh' `"  var w=opts.w||940, hgt=opts.hgt||170, lstep=opts.lstep||1, showv=opts.vals||false;"' _n
+    file write `fh' `"  var k=counts.length, maxc=0, i;"' _n
+    file write `fh' `"  for(i=0;i<k;i++) if(counts[i]>maxc) maxc=counts[i];"' _n
+    file write `fh' `"  if(maxc<=0||k===0) return '<p class=\"nodata\">Nothing to plot for this selection.</p>';"' _n
+    file write `fh' `"  var plotw=w-16, ploth=hgt-34, step=plotw/k, barw=Math.max(Math.floor(step)-2,1);"' _n
+    file write `fh' `"  var s='<svg'+at('viewBox','0 0 '+w+' '+hgt)+at('width','100%')+at('xmlns','http://www.w3.org/2000/svg')+'>';"' _n
+    file write `fh' `"  s+='<text'+at('x',8)+at('y',12)+at('font-size',10)+at('fill','#888')+'>max '+fmtc(maxc)+'</text>';"' _n
+    file write `fh' `"  s+='<line'+at('x1',8)+at('y1',hgt-22)+at('x2',w-8)+at('y2',hgt-22)+at('stroke','#d5d9de')+'></line>';"' _n
+    file write `fh' `"  for(i=0;i<k;i++){"' _n
+    file write `fh' `"    var c=counts[i], hb=Math.round(c/maxc*(ploth-16));"' _n
+    file write `fh' `"    if(c>0&&hb<2) hb=2;"' _n
+    file write `fh' `"    var x=Math.round(8+i*step), y=hgt-22-hb;"' _n
+    file write `fh' `"    var col=(hi&&hi.indexOf(i)>=0)?'#C9A227':'#002244';"' _n
+    file write `fh' `"    if(c>0) s+='<rect'+at('x',x)+at('y',y)+at('width',barw)+at('height',hb)+at('fill',col)+'><title>'+fmtc(c)+'</title></rect>';"' _n
+    file write `fh' `"    if(showv&&c>0) s+='<text'+at('x',x+Math.floor(barw/2))+at('y',y-4)+at('font-size',10)+at('fill','#333')+at('text-anchor','middle')+'>'+fmtc(c)+'</text>';"' _n
+    file write `fh' `"    if(i%lstep===0&&labels[i]) s+='<text'+at('x',x+Math.floor(barw/2))+at('y',hgt-9)+at('font-size',9.5)+at('fill','#666')+at('text-anchor','middle')+'>'+esc(labels[i])+'</text>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  s+='</svg>';"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function settings(){"' _n
+    file write `fh' `"  return {"' _n
+    file write `fh' `"    resp: el('c_resp').value,"' _n
+    file write `fh' `"    ws:   el('c_ws').value,"' _n
+    file write `fh' `"    fd:   el('c_fd').value,"' _n
+    file write `fh' `"    fv:   el('c_fv').value,"' _n
+    file write `fh' `"    fs:   D.meta.lite===1 ? D.meta.fastsecs : Math.max(0.5,parseFloat(el('c_fs').value)||2),"' _n
+    file write `fh' `"    burst:Math.max(3,parseInt(el('c_burst').value,10)||8),"' _n
+    file write `fh' `"    minact:parseFloat(el('c_minact').value)||5,"' _n
+    file write `fh' `"    n1:   parseInt(el('c_n1').value,10),"' _n
+    file write `fh' `"    n2:   parseInt(el('c_n2').value,10),"' _n
+    file write `fh' `"    nshare:(parseFloat(el('c_nshare').value)||25)/100,"' _n
+    file write `fh' `"    churn:(parseFloat(el('c_churn').value)||20)/100,"' _n
+    file write `fh' `"    z:    parseFloat(el('c_z').value)||3.5,"' _n
+    file write `fh' `"    peer:(parseFloat(el('c_peer').value)||35)/100,"' _n
+    file write `fh' `"    ov:   Math.max(1,parseInt(el('c_ov').value,10)||3),"' _n
+    file write `fh' `"    nmin: Math.max(3,parseInt(el('c_nmin').value,10)||10),"' _n
+    file write `fh' `"    top:  Math.max(1,parseInt(el('c_top').value,10)||25)"' _n
+    file write `fh' `"  };"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function applyPreset(p){"' _n
+    file write `fh' `"  if(p==='custom'||!P.presets[p]) return;"' _n
+    file write `fh' `"  var t=P.presets[p];"' _n
+    file write `fh' `"  el('c_fs').value=D.meta.lite===1?D.meta.fastsecs:((t.fs!==undefined)?t.fs:D.meta.fastsecs);"' _n
+    file write `fh' `"  el('c_burst').value=t.burst;"' _n
+    file write `fh' `"  el('c_minact').value=t.minact;"' _n
+    file write `fh' `"  el('c_n1').value=t.n1; el('c_n2').value=t.n2;"' _n
+    file write `fh' `"  el('c_nshare').value=Math.round(t.nshare*100);"' _n
+    file write `fh' `"  el('c_churn').value=Math.round(t.churn*100);"' _n
+    file write `fh' `"  el('c_z').value=t.z;"' _n
+    file write `fh' `"  el('c_peer').value=Math.round(t.peer*100);"' _n
+    file write `fh' `"  el('c_ov').value=t.ov;"' _n
+    file write `fh' `"  el('c_nmin').value=t.nmin;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function postActorFilter(){"' _n
+    file write `fh' `"  var sel=el('c_resp'),value=sel.value||'',label=value&&sel.selectedIndex>=0?sel.options[sel.selectedIndex].text.replace(/ \([^)]*\)$/,''):'';"' _n
+    file write `fh' `"  if(window.parent!==window) window.parent.postMessage({type:'suso-actor-filter',key:P.norm(value),label:label},'*');"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function applyActorFilterMessage(d){"' _n
+    file write `fh' `"  var sel=el('c_resp'), key=P.norm(d&&d.key), lab=P.norm(d&&d.label), value='', found=(!key&&!lab), i, ok;"' _n
+    file write `fh' `"  for(i=0;(key||lab)&&i<sel.options.length;i++){ ok=P.norm(sel.options[i].value); if(ok===key||(lab&&ok===lab)){ value=sel.options[i].value; found=true; break; } }"' _n
+    file write `fh' `"  if(!found&&key){var o=document.createElement('option');o.value=d.key;o.textContent=(d.label||d.key)+' (0 timing rows)';sel.appendChild(o);value=d.key;found=true;}"' _n
+    file write `fh' `"  if(!found||sel.value===value) return;"' _n
+    file write `fh' `"  sel.value=value; renderAll();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"window.addEventListener('message',function(ev){"' _n
+    file write `fh' `"  var d=ev.data||{}; if(window.parent===window||ev.source!==window.parent||d.type!=='suso-actor-filter'||typeof d.key!=='string'||typeof d.label!=='string'||d.key.length>500||d.label.length>500) return;"' _n
+    file write `fh' `"  applyActorFilterMessage(d);"' _n
+    file write `fh' `"});"' _n
+    file write `fh' `"function resetSettings(){"' _n
+    file write `fh' `"  el('c_resp').value='';"' _n
+    file write `fh' `"  el('c_ws').value='';"' _n
+    file write `fh' `"  el('c_fd').value='';"' _n
+    file write `fh' `"  fvOptions();"' _n
+    file write `fh' `"  el('c_preset').value='standard';"' _n
+    file write `fh' `"  applyPreset('standard');"' _n
+    file write `fh' `"  el('c_top').value=25;"' _n
+    file write `fh' `"  expOpen=Object.create(null);"' _n
+    file write `fh' `"  renderAll();"' _n
+    file write `fh' `"  postActorFilter();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function fvOptions(){"' _n
+    file write `fh' `"  var dim=el('c_fd').value, s='<option value='+Q+Q+'>-</option>', i, j, cnt=Object.create(null);"' _n
+    file write `fh' `"  if(dim && D.meta && D.meta.fdims){"' _n
+    file write `fh' `"    for(i=0;i<D.rows.length;i++){"' _n
+    file write `fh' `"      var rv=(D.rows[i].f&&D.rows[i].f[dim])?D.rows[i].f[dim]:'';"' _n
+    file write `fh' `"      if(rv) cnt[rv]=(cnt[rv]||0)+1;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    for(i=0;i<D.meta.fdims.length;i++){"' _n
+    file write `fh' `"      if(D.meta.fdims[i].v!==dim) continue;"' _n
+    file write `fh' `"      var vv=D.meta.fdims[i].vals;"' _n
+    file write `fh' `"      for(j=0;j<vv.length;j++){"' _n
+    file write `fh' `"        var lab=(vv[j].l&&vv[j].l!==vv[j].c)?(vv[j].c+' '+vv[j].l):vv[j].c;"' _n
+    file write `fh' `"        s+='<option value='+Q+esc(vv[j].c)+Q+'>'+esc(lab)+' ('+(cnt[vv[j].c]||0)+')</option>';"' _n
+    file write `fh' `"      }"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('c_fv').innerHTML=s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"var qSortKey='med', qSortDir=1, qActorIndex=P.questionIndex(D.aq||[]);"' _n
+    file write `fh' `"function qSort(k){"' _n
+    file write `fh' `"  if(qSortKey===k) qSortDir=-qSortDir; else { qSortKey=k; qSortDir=-1; }"' _n
+    file write `fh' `"  renderQuestions();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function renderQuestions(){"' _n
+    file write `fh' `"  var filt=(el('c_q').value||'').toLowerCase(), resp=el('c_resp').value, ws=el('c_ws').value;"' _n
+    file write `fh' `"  var src=P.questionRows(D.q,qActorIndex,resp,ws), rows=[],i;"' _n
+    file write `fh' `"  for(i=0;i<src.length;i++) if(!filt||src[i].v.toLowerCase().indexOf(filt)>=0) rows.push(src[i]);"' _n
+    file write `fh' `"  rows.sort(function(a,b){"' _n
+    file write `fh' `"    var av=a[qSortKey], bv=b[qSortKey];"' _n
+    file write `fh' `"    if(av===null&&bv===null) return a.v===b.v?0:(a.v<b.v?-1:1);"' _n
+    file write `fh' `"    if(av===null) return 1; if(bv===null) return -1;"' _n
+    file write `fh' `"    if(av===bv) return a.v===b.v?0:(a.v<b.v?-1:1);"' _n
+    file write `fh' `"    return (av<bv?-1:1)*(-qSortDir);"' _n
+    file write `fh' `"  });"' _n
+    file write `fh' `"  var s='<tr><th class=\"srt\" onclick=\"qSort(String.fromCharCode(118))\">question</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" title=\"First-pass AnswerSet saves; revisions and roster instances can count more than once\" onclick=\"qSort(String.fromCharCode(110))\">answer events</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" title=\"Unique interview IDs with at least one event for this question\" onclick=\"qSort(String.fromCharCode(110,105))\">distinct interviews</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" title=\"Newly reached events with a valid within-session time gap; denominator for the timing columns\" onclick=\"qSort(String.fromCharCode(110,116))\">timed reaches</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(109,101,100))\">median gap (s)</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(112,57,48))\">p90 gap (s)</th>'+"' _n
+    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(102,115,104))\">share &lt; '+fmt(D.meta.fastsecs,1)+' s</th></tr>';"' _n
+    file write `fh' `"  var k=rows.length;"' _n
+    file write `fh' `"  for(i=0;i<k;i++){"' _n
+    file write `fh' `"    var q=rows[i];"' _n
+    file write `fh' `"    s+='<tr><td class=\"mono\">'+esc(q.v)+'</td><td class=\"r\">'+fmtc(q.n)+'</td><td class=\"r\">'+fmtc(q.ni)+"' _n
+    file write `fh' `"       '</td><td class=\"r\">'+fmtc(q.nt)+'</td><td class=\"r\">'+fmt(q.med)+'</td><td class=\"r\">'+fmt(q.p90)+'</td><td class=\"r\">'+fmt(q.fsh,2)+'</td></tr>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('t_q').innerHTML=s;"' _n
+    file write `fh' `"  var sb=[],scope,msg; if(resp) sb.push(resp); if(ws) sb.push(ws==='APP'?'Approved only (Sup + HQ)':ws);"' _n
+    file write `fh' `"  scope=sb.length?(' for '+sb.join(' / ')):' across all enumerators and statuses';"' _n
+    file write `fh' `"  if(!src.length) msg='No first-pass answer events'+scope+' in this vars() scope.';"' _n
+    file write `fh' `"  else if(!rows.length) msg='No question names match the search'+scope+'.';"' _n
+    file write `fh' `"  else if(filt) msg='Showing '+rows.length+' of '+src.length+' observed questions matching the search'+scope+'.';"' _n
+    file write `fh' `"  else msg='Showing all '+rows.length+' observed question'+(rows.length===1?'':'s')+scope+'.';"' _n
+    file write `fh' `"  el('q_more').textContent=msg;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function renderRemovals(resp){"' _n
+    file write `fh' `"  var V=P.removalView(D.rem||[],resp),body=el('t_rsum'),i,s='',k,cs,shown=0,match,key=P.norm(resp);"' _n
+    file write `fh' `"  if(body){"' _n
+    file write `fh' `"    k=Math.min(V.patterns.length,10);"' _n
+    file write `fh' `"    for(i=0;i<k;i++){var g=V.patterns[i];s+='<tr><td class='+Q+'mono'+Q+'>'+esc(g.v)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.h)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.i)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.n)+'</td></tr>'; }"' _n
+    file write `fh' `"    if(!s) s='<tr><td colspan='+Q+'4'+Q+' class='+Q+'nodata'+Q+'>No removal histories for this enumerator and vars() scope.</td></tr>';"' _n
+    file write `fh' `"    body.innerHTML=s;"' _n
+    file write `fh' `"    el('r_more').textContent=V.patterns.length>k?('Showing the top '+k+' of '+V.patterns.length+' actor-scoped patterns.'):(V.histories+' removal histor'+(V.histories===1?'y':'ies')+' in this actor scope.');"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  cs=document.querySelectorAll('.bremcase');"' _n
+    file write `fh' `"  for(i=0;i<cs.length;i++){match=!resp||P.norm(cs[i].getAttribute('data-actor'))===key;if(match&&shown<15){cs[i].style.display='';shown++;}else cs[i].style.display='none';}"' _n
+    file write `fh' `"  if(el('r_action_note')) el('r_action_note').textContent=V.active+' case(s) require a final-data check'+(resp?(' for '+resp):'')+(V.active>shown?('; showing the first '+shown+'.'):'.');"' _n
+    file write `fh' `"  if(el('r_action_none')) el('r_action_none').style.display=V.active===0?'':'none';"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function chipsFor(r){"' _n
+    file write `fh' `"  var s='',j;"' _n
+    file write `fh' `"  if(r._r) s+='<span class='+Q+'chip hard'+Q+' title='+Q+'Rejected and re-completed with no answers changed'+Q+'>Resubmitted unchanged</span>';"' _n
+    file write `fh' `"  else if(P.softResub(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Quick rejection cycle with one or two distinct questions touched'+Q+'>Quick correction</span>';"' _n
+    file write `fh' `"  else if(P.unknownResub(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Rejection correction edits are present but question identities are unavailable'+Q+'>Correction scope unknown</span>';"' _n
+    file write `fh' `"  for(j=0;j<8;j++){"' _n
+    file write `fh' `"    if(!r._f[j]) continue;"' _n
+    file write `fh' `"    var cls='chip';"' _n
+    file write `fh' `"    s+='<span class='+Q+cls+Q+'>'+P.names[j]+'</span>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  if(P.unresolvedRemoval(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Historical removal run with unresolved final-data assessment'+Q+'>Final-data check</span>';"' _n
+    file write `fh' `"  else if(r.cas>0) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Historical removal run resolved by final data and logic; no action'+Q+'>Removal history resolved</span>';"' _n
+    file write `fh' `"  if(r.m===1) s+='<span class='+Q+'chip info'+Q+'>CAWI</span>';"' _n
+    file write `fh' `"  if(r.mm===1) s+='<span class='+Q+'chip info'+Q+'>Mixed mode</span>';"' _n
+    file write `fh' `"  if(P.multiDay(r)) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Trustworthy first-pass work continued on more than one device-local date'+Q+'>Multiple field dates</span>';"' _n
+    file write `fh' `"  else if(r.on===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Recorded dates span days but local-clock quality is unreliable'+Q+'>Dates uncertain</span>';"' _n
+    file write `fh' `"  if(P.postEdit(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Interviewer answer edits after completion outside a rejection cycle'+Q+'>Post-completion field edits</span>';"' _n
+    file write `fh' `"  else if((r.pcno||0)>0) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Supervisor/HQ/API review edits after completion'+Q+'>Post-completion review edits</span>';"' _n
+    file write `fh' `"  if(r.ho===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'More than one field actor contributed'+Q+'>Actor handoff</span>';"' _n
+    file write `fh' `"  if(r.wsm===1) s+='<span class='+Q+'chip'+Q+' title='+Q+'Paradata and final-data workflow status differ'+Q+'>Status mismatch</span>';"' _n
+    file write `fh' `"  if(r.to===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Tablet timezone differs from the team or changed - hours unreliable'+Q+'>Clock suspect</span>';"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function detailHtml(r,S,team){"' _n
+    file write `fh' `"  var ev=P.evidence(r,S,team,D.meta), s='', i;"' _n
+    file write `fh' `"  var ma=r.vr||r.r, maf=r.vr?r.vaf:r.paf, mat=r.vr?r.vact:r.pact, mans=r.vr?r.vans:r.pans, mansf=r.vr?r.vansf:r.pansf, mq=r.vr?r.vq:r.pq, mss=r.vr?r.vss:r.pss;"' _n
+    file write `fh' `"  s+='<div class='+Q+'facts'+Q+'><b>Interview:</b> <span class='+Q+'mono'+Q+'>'+esc(r.id)+'</span>'+"' _n
+    file write `fh' `"     '<span class='+Q+'cpy'+Q+' data-t='+Q+attr(r.id)+Q+'>copy id</span>';"' _n
+    file write `fh' `"  s+=' <button type='+Q+'button'+Q+' class='+Q+'pbtn ghost hv-open'+Q+' data-history-id='+Q+attr(r.id)+Q+'>View event history</button>';"' _n
+    file write `fh' `"  if(r.k) s+=' &nbsp; <b>Key:</b> <span class='+Q+'mono'+Q+'>'+esc(r.k)+'</span><span class='+Q+'cpy'+Q+' data-t='+Q+attr(r.k)+Q+'>copy key</span>';"' _n
+    file write `fh' `"  s+=hqLinks(r);"' _n
+    file write `fh' `"  s+=' &nbsp; <b>Status:</b> '+esc(r.ws||'-')+' <span class='+Q+'legend'+Q+'>('+esc(r.wss||'paradata')+')</span> &nbsp; <b>Field dates:</b> '+esc(r.d0||'-')+(r.d1&&r.d1!==r.d0?(' to '+esc(r.d1)):'')+"' _n
+    file write `fh' `"     ' &nbsp; <b>Primary actor:</b> '+esc(r.r||'-')+(r.vr&&r.vr!==r.r?(' &nbsp; <b>Metrics actor:</b> '+esc(r.vr)):'')+(r.ho===1?(' &nbsp; <b>Last editor:</b> '+esc(r.le||'-')):'')+"' _n
+    file write `fh' `"     ' &nbsp; <b>Interview workflow:</b> '+r.ss+' sessions ('+r.sf+' first-pass + '+r.sr+' rework), '+fmt(r.af,1)+' first-pass / '+fmt(r.act,1)+' total active min, '+fmt(r.sp,0)+' min elapsed span, '+fmt(r.lp,0)+' min longest pause' +"' _n
+    file write `fh' `"     ' &nbsp; <b>'+esc(ma)+' contribution:</b> '+fmtc(mans)+' answers ('+fmtc(mansf)+' first-pass), '+fmt(maf,1)+' first-pass / '+fmt(mat,1)+' total active min, '+fmtc(r.nt)+' timed'+(mq!==null?(', '+fmtc(mq)+' question instances'):'')+(mss!==null?(', '+fmtc(mss)+' sessions'):'')+"' _n
+    file write `fh' `"     ' &nbsp; <b>Restarts:</b> '+r.rs+' &nbsp; <b>Rejections:</b> '+r.rj+"' _n
+    file write `fh' `"     ((r.tz!==null)?(' &nbsp; <b>Device offset:</b> '+fmt(r.tz,1)+' h'):'')+'</div>';"' _n
+    file write `fh' `"  for(i=0;i<ev.length;i++){"' _n
+    file write `fh' `"    var cls=(ev[i].t==='hard')?'ev hard':'ev';"' _n
+    file write `fh' `"    var pre=(ev[i].t==='hard')?'<b style='+Q+'color:#8a1f1f'+Q+'>! </b>':((ev[i].t==='info')?'<span style='+Q+'color:#888'+Q+'>i </span>':'<span style='+Q+'color:#C9A227'+Q+'>&#9679; </span>');"' _n
+    file write `fh' `"    s+='<div class='+Q+cls+Q+'>'+pre+esc(ev[i].s)+'</div>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  if(!D.meta.lite && (r.h||r.g)){"' _n
+    file write `fh' `"    s+='<div style='+Q+'display:flex;flex-wrap:wrap;gap:18px;margin-top:8px'+Q+'>';"' _n
+    file write `fh' `"    if(r.h){"' _n
+    file write `fh' `"      var labH=[],hiH=[],x;"' _n
+    file write `fh' `"      for(x=0;x<24;x++){ labH.push(String(x)); if(P.inWindow(x,S.n1,S.n2)) hiH.push(x); }"' _n
+    file write `fh' `"      s+='<div style='+Q+'flex:1 1 320px'+Q+'><div class='+Q+'legend'+Q+'>Answers by hour (device time)</div>'+svgBars(r.h,labH,hiH,{w:460,hgt:100,lstep:3})+'</div>';"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(r.g){"' _n
+    file write `fh' `"      var labG=[],hiG=[],y;"' _n
+    file write `fh' `"      for(y=0;y<41;y++){ labG.push(y<40?String(y/2):'20+'); if(y<S.fs*2) hiG.push(y); }"' _n
+    file write `fh' `"      s+='<div style='+Q+'flex:1 1 320px'+Q+'><div class='+Q+'legend'+Q+'>Seconds per answer</div>'+svgBars(r.g,labG,hiG,{w:460,hgt:100,lstep:4})+'</div>';"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    s+='</div>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  return s;"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function renderWorst(){"' _n
+    file write `fh' `"  var A=lastA, S=lastS, team=lastTeam;"' _n
+    file write `fh' `"  if(!A) return;"' _n
+    file write `fh' `"  var s='<tr><th></th><th>interview</th><th>metrics actor / primary</th><th>field date(s)</th><th>signals</th><th class=\"r\">first-pass min</th><th class=\"r\">sec/ans</th></tr>';"' _n
+    file write `fh' `"  var F=A.flagged, kk=Math.min(F.length,S.top), i;"' _n
+    file write `fh' `"  var tlab={A:'Investigate',V:'Verify',W:'Watch'};"' _n
+    file write `fh' `"  for(i=0;i<kk;i++){"' _n
+    file write `fh' `"    var r=F[i];"' _n
+    file write `fh' `"    var keyc=r.k?('<span class='+Q+'mono'+Q+'><b>'+esc(r.k)+'</b></span>'):('<span class='+Q+'mono'+Q+'>'+esc(r.id.substring(0,8))+'</span>');"' _n
+    file write `fh' `"    s+='<tr class='+Q+'wrow'+Q+' data-i='+Q+i+Q+'>'+"' _n
+    file write `fh' `"       '<td><span class='+Q+'tier '+r._t+Q+'>'+tlab[r._t]+'</span></td>'+"' _n
+    file write `fh' `"       '<td>'+keyc+'</td>'+"' _n
+    file write `fh' `"       '<td>'+esc(r.vr||r.r)+(r.vr&&r.vr!==r.r?('<br><span class='+Q+'legend'+Q+'>primary: '+esc(r.r)+'</span>'):'')+'</td>'+"' _n
+    file write `fh' `"       '<td>'+esc(r.d0||'-')+(r.d1&&r.d1!==r.d0?('<br>'+esc(r.d1)):'')+'</td>'+"' _n
+    file write `fh' `"       '<td>'+chipsFor(r)+'</td>'+"' _n
+    file write `fh' `"       '<td class=\"r\">'+fmt(r.af)+'</td>'+"' _n
+    file write `fh' `"       '<td class=\"r\">'+fmt(r.med)+'</td></tr>';"' _n
+    file write `fh' `"    if(expOpen[r.id]) s+='<tr class='+Q+'wdet'+Q+'><td colspan='+Q+'7'+Q+'>'+detailHtml(r,S,team)+'</td></tr>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('t_worst').innerHTML=s;"' _n
+    file write `fh' `"  el('w_none').textContent = F.length===0 ? 'Nothing to review for this selection - no signals and no cascades.' : (F.length>kk?('Showing '+kk+' of '+F.length+' - raise Show top to see more.'):'');"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function renderAll(){"' _n
+    file write `fh' `"  var S=settings();"' _n
+    file write `fh' `"  var rows=P.filterRows(D.rows,S.resp,S.ws,S.fd,S.fv,D.actors);"' _n
+    file write `fh' `"  var benchmarkRows=P.filterRows(D.rows,'',S.ws,S.fd,S.fv,D.actors);"' _n
+    file write `fh' `"  var A=P.aggregate(rows,S,P.zctx(benchmarkRows));"' _n
+    file write `fh' `"  var team=P.team(benchmarkRows);"' _n
+    file write `fh' `"  lastA=A; lastS=S; lastTeam=team;"' _n
+    file write `fh' `"  var scope=S.resp?('actor '+S.resp):'all field actors';"' _n
+    file write `fh' `"  if(S.ws) scope+=(S.ws==='APP')?', approved interviews':(', status '+S.ws);"' _n
+    file write `fh' `"  if(S.fd && S.fv) scope+=', '+S.fd+' = '+S.fv;"' _n
+    file write `fh' _n
+    file write `fh' `"  el('k_started').textContent=fmtc(A.n);"' _n
+    file write `fh' `"  el('k_inv').textContent=fmtc(A.tiers.A);"' _n
+    file write `fh' `"  el('k_ver').textContent=fmtc(A.tiers.V);"' _n
+    file write `fh' `"  var acts=[],i;"' _n
+    file write `fh' `"  for(i=0;i<rows.length;i++) if(rows[i].af!==null) acts.push(rows[i].af);"' _n
+    file write `fh' `"  el('k_medact').textContent=fmt(P.median(acts));"' _n
+    file write `fh' `"  el('k_medans').textContent=fmt(team.med);"' _n
+    file write `fh' _n
+    file write `fh' `"  var verdict, vc, tA=A.tiers.A, tV=A.tiers.V, tW=A.tiers.W;"' _n
+    file write `fh' `"  if(tA>0){ verdict=fmtc(tA)+' interview(s) need investigation, '+fmtc(tV)+' to verify and '+fmtc(tW)+' to watch, out of '+fmtc(A.n)+' for '+scope+'.'; vc='bad'; }"' _n
+    file write `fh' `"  else if(tV>0){ verdict=fmtc(tV)+' interview(s) to verify and '+fmtc(tW)+' to watch, out of '+fmtc(A.n)+' for '+scope+' - no hard evidence at these thresholds.'; vc='warn'; }"' _n
+    file write `fh' `"  else if(tW>0){ verdict='Only single, isolated signals ('+fmtc(tW)+' interview(s) to watch) for '+scope+'.'; vc='warn'; }"' _n
+    file write `fh' `"  else { verdict='No behaviour signals raised for '+scope+' at the current sensitivity.'; vc='ok'; }"' _n
+    file write `fh' `"  el('verdict').textContent=verdict;"' _n
+    file write `fh' `"  el('verdict').className='verdict '+vc;"' _n
+    file write `fh' _n
+    file write `fh' `"  el('ch_flags').innerHTML=svgBars(A.tot,"' _n
+    file write `fh' `"    ['S speed','B streak','T short','N night','C churn','Z outlier','P peers','O overlap'],[7],"' _n
+    file write `fh' `"    {hgt:150,vals:true})+'<div class='+Q+'legend'+Q+'>S sustained speeding &nbsp; B a within-actor/session run of fast answers &nbsp; T first completion too quickly &nbsp; N night work &nbsp; C answer churn &nbsp; Z first-pass duration outlier &nbsp; P far faster than peers on the same questions &nbsp; O actor-specific shared UTC-minute screen</div>';"' _n
+    file write `fh' _n
+    file write `fh' `"  var BA=P.binsActive(rows), labA=[], hiA=[];"' _n
+    file write `fh' `"  for(i=0;i<20;i++){ labA.push(String(i*BA.w)); if((i+1)*BA.w<=S.minact) hiA.push(i); }"' _n
+    file write `fh' `"  el('ch_act').innerHTML=svgBars(BA.c,labA,hiA,{lstep:2});"' _n
+    file write `fh' `"  el('n_act').textContent='Bins of '+BA.w+' min; gold bins fall under the '+S.minact+'-minute floor.';"' _n
+    file write `fh' _n
+    file write `fh' `"  var BM=P.binsMed(rows), labM=[], hiM=[];"' _n
+    file write `fh' `"  for(i=0;i<21;i++){ labM.push(i<20?String(i):'20+'); if(i<S.fs) hiM.push(i); }"' _n
+    file write `fh' `"  el('ch_med').innerHTML=svgBars(BM,labM,hiM,{lstep:2});"' _n
+    file write `fh' `"  el('n_med').textContent='Gold bars: interviews where a typical question was answered in under '+S.fs+' seconds - too fast for a real conversation.';"' _n
+    file write `fh' _n
+    file write `fh' `"  var HT=P.hourTotals(rows), labH=[], hiH=[];"' _n
+    file write `fh' `"  for(i=0;i<24;i++){ labH.push(String(i)); if(P.inWindow(i,S.n1,S.n2)) hiH.push(i); }"' _n
+    file write `fh' `"  if(HT) el('ch_hour').innerHTML=svgBars(HT,labH,hiH,{lstep:2});"' _n
+    file write `fh' `"  else el('ch_hour').innerHTML='<p class=\"nodata\">Hour detail not embedded for this survey size.</p>';"' _n
+    file write `fh' _n
+    file write `fh' `"  var DT=P.dailyTotals(D.daily,S.resp), dc=[], dl=[], dstep=Math.max(1,Math.floor(DT.length/8));"' _n
+    file write `fh' `"  for(i=0;i<DT.length;i++){ dc.push(DT[i].c); dl.push(i%dstep===0?DT[i].d.substring(5):''); }"' _n
+    file write `fh' `"  el('ch_daily').innerHTML=svgBars(dc,dl,[],{lstep:1});"' _n
+    file write `fh' _n
+    file write `fh' `"  var L=P.league(rows,D.actors,S,S.resp), s='<tr><th>enumerator</th><th class=\"r\">interviews touched</th><th class=\"r\">med first-pass active min</th><th class=\"r\">med sec/ans</th><th class=\"r\" title=\"enumerator median sec per answer over team median: 0.5 means twice as fast as the team\">vs team</th><th class=\"r\">fast share</th><th class=\"r\">night share</th><th class=\"r\" title=\"shared UTC-minute screening buckets, summed for this actor\">overlap</th><th class=\"r\">flagged</th><th style=\"width:110px\">flag share</th></tr>';"' _n
+    file write `fh' `"  var k=Math.min(L.length,30);"' _n
+    file write `fh' `"  for(i=0;i<k;i++){"' _n
+    file write `fh' `"    var g=L[i];"' _n
+    file write `fh' `"    var vst=(g.medmed!==null&&team.med!==null&&team.med>0)?(g.medmed/team.med):null;"' _n
+    file write `fh' `"    s+=(g.fl>0?'<tr class=\"hot\">':'<tr>')+'<td>'+esc(g.r)+'</td><td class=\"r\">'+fmtc(g.n)+'</td><td class=\"r\">'+fmt(g.medact)+"' _n
+    file write `fh' `"       '</td><td class=\"r\">'+fmt(g.medmed)+'</td><td class=\"r\">'+fmt(vst,2)+'</td><td class=\"r\">'+fmt(g.mfsh,2)+'</td><td class=\"r\">'+fmt(g.mnsh,2)+"' _n
+    file write `fh' `"       '</td><td class=\"r\">'+fmtc(g.ov)+'</td><td class=\"r\">'+fmtc(g.fl)+'</td><td><span class=\"bar\" style=\"width:'+Math.round(100*g.share)+'px\"></span> '+fmt(100*g.share)+'%</td></tr>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  el('t_league').innerHTML=s;"' _n
+    file write `fh' `"  el('l_more').textContent = L.length>k ? ('Top '+k+' of '+L.length+' enumerators by flag share.') : '';"' _n
+    file write `fh' _n
+    file write `fh' `"  renderWorst();"' _n
+    file write `fh' `"  renderQuestions();"' _n
+    file write `fh' `"  renderRemovals(S.resp);"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"function initControls(){"' _n
+    file write `fh' `"  var rs=Object.create(null), i, names=[];"' _n
+    file write `fh' `"  for(i=0;i<D.actors.length;i++) rs[D.actors[i].r]=1;"' _n
+    file write `fh' `"  for(var k in rs){ if(Object.prototype.hasOwnProperty.call(rs,k)&&k!=='') names.push(k); }"' _n
+    file write `fh' `"  names.sort();"' _n
+    file write `fh' `"  var s='<option value=\"\">All enumerators ('+names.length+')</option>';"' _n
+    file write `fh' `"  for(i=0;i<names.length;i++) s+='<option value='+Q+attr(names[i])+Q+'>'+esc(names[i])+'</option>';"' _n
+    file write `fh' `"  el('c_resp').innerHTML=s;"' _n
+    file write `fh' `"  var wsm=Object.create(null), wnames=[], napp=0;"' _n
+    file write `fh' `"  for(i=0;i<D.rows.length;i++){ var w=D.rows[i].ws||''; if(w) wsm[w]=(wsm[w]||0)+1; if(D.rows[i].wsc==='approvebyhq'||D.rows[i].wsc==='approvebysup') napp++; }"' _n
+    file write `fh' `"  for(var k2 in wsm){ if(Object.prototype.hasOwnProperty.call(wsm,k2)) wnames.push(k2); }"' _n
+    file write `fh' `"  wnames.sort();"' _n
+    file write `fh' `"  var so='<option value='+Q+Q+'>All statuses</option>';"' _n
+    file write `fh' `"  if(napp>0) so+='<option value='+Q+'APP'+Q+'>Approved only (Sup + HQ) ('+napp+')</option>';"' _n
+    file write `fh' `"  for(i=0;i<wnames.length;i++) so+='<option value='+Q+attr(wnames[i])+Q+'>'+esc(wnames[i])+' ('+wsm[wnames[i]]+')</option>';"' _n
+    file write `fh' `"  el('c_ws').innerHTML=so;"' _n
+    file write `fh' `"  var fds=(D.meta&&D.meta.fdims)?D.meta.fdims:[];"' _n
+    file write `fh' `"  if(fds.length){"' _n
+    file write `fh' `"    var fo='<option value='+Q+Q+'>None</option>';"' _n
+    file write `fh' `"    for(i=0;i<fds.length;i++) fo+='<option>'+esc(fds[i].v)+'</option>';"' _n
+    file write `fh' `"    el('c_fd').innerHTML=fo;"' _n
+    file write `fh' `"    fvOptions();"' _n
+    file write `fh' `"    el('c_fd').addEventListener('change',function(){ fvOptions(); renderAll(); });"' _n
+    file write `fh' `"  } else {"' _n
+    file write `fh' `"    el('ctl_fd').style.display='none';"' _n
+    file write `fh' `"    el('ctl_fv').style.display='none';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  var hsel='';"' _n
+    file write `fh' `"  for(i=0;i<24;i++) hsel+='<option>'+i+'</option>';"' _n
+    file write `fh' `"  el('c_n1').innerHTML=hsel; el('c_n2').innerHTML=hsel;"' _n
+    file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
+    file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
+    file write `fh' `"  el('c_preset').value='standard';"' _n
+    file write `fh' `"  el('c_adv').addEventListener('click',function(){"' _n
+    file write `fh' `"    var a=el('advrow');"' _n
+    file write `fh' `"    a.style.display=(a.style.display==='none')?'flex':'none';"' _n
+    file write `fh' `"  });"' _n
+    file write `fh' `"  el('c_preset').addEventListener('change',function(){ applyPreset(el('c_preset').value); renderAll(); });"' _n
+    file write `fh' `"  el('c_resp').addEventListener('change',function(){ renderAll(); postActorFilter(); });"' _n
+    file write `fh' `"  var simp=['c_ws','c_fv','c_top'];"' _n
+    file write `fh' `"  for(i=0;i<simp.length;i++) el(simp[i]).addEventListener('change',renderAll);"' _n
+    file write `fh' `"  var adv=['c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_peer','c_ov','c_nmin'];"' _n
+    file write `fh' `"  for(i=0;i<adv.length;i++) el(adv[i]).addEventListener('change',function(){ el('c_preset').value='custom'; renderAll(); });"' _n
+    file write `fh' `"  el('c_q').addEventListener('input',renderQuestions);"' _n
+    file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
+    file write `fh' `"  el('c_csv').addEventListener('click',function(){"' _n
+    file write `fh' `"    if(!lastA) return;"' _n
+    file write `fh' `"    var body=P.csv(lastA.flagged,lastS,lastTeam,D.meta);"' _n
+    file write `fh' `"    var a=document.createElement('a');"' _n
+    file write `fh' `"    a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(body);"' _n
+    file write `fh' `"    a.download='suso_review_list.csv';"' _n
+    file write `fh' `"    document.body.appendChild(a); a.click(); document.body.removeChild(a);"' _n
+    file write `fh' `"  });"' _n
+    file write `fh' `"  el('t_worst').addEventListener('click',function(ev){"' _n
+    file write `fh' `"    var t=ev.target||ev.srcElement;"' _n
+    file write `fh' `"    if(t && t.className && String(t.className).indexOf('hv-open')>=0){"' _n
+    file write `fh' `"      if(window.susoOpenHistory) window.susoOpenHistory(t.getAttribute('data-history-id')||'');"' _n
+    file write `fh' `"      return;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(t && t.className && String(t.className).indexOf('cpy')>=0){"' _n
+    file write `fh' `"      copyText(t.getAttribute('data-t')||'');"' _n
+    file write `fh' `"      t.textContent='copied';"' _n
+    file write `fh' `"      return;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    while(t && t!==this && (!t.getAttribute || t.getAttribute('data-i')===null)) t=t.parentNode;"' _n
+    file write `fh' `"    if(t && t.getAttribute && t.getAttribute('data-i')!==null){"' _n
+    file write `fh' `"      var r=lastA.flagged[parseInt(t.getAttribute('data-i'),10)];"' _n
+    file write `fh' `"      if(r){ expOpen[r.id]=!expOpen[r.id]; renderWorst(); }"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"  });"' _n
+    file write `fh' `"  if(D.meta.lite===1){"' _n
+    file write `fh' `"    el('c_n1').disabled=true; el('c_n2').disabled=true; el('c_fs').disabled=true;"' _n
+    file write `fh' `"    el('lite_note').textContent='Large survey: per-interview hour/gap detail was not embedded, so the night window and fast-seconds controls use the values fixed at build time.';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"initControls();"' _n
+    file write `fh' `"renderAll();"' _n
+    file write `fh' `"}"' _n
+    file write `fh' _n
+    file write `fh' `"</script></body></html>"' _n
+end
+
+* ---- one canonical current/final workflow-status map ---------------------------
+* The Behaviour queue and Question timing must use the same status definition:
+* final data wins when data() supplies interview__status; otherwise use the last
+* recognized workflow event, falling back to In progress after fieldwork starts.
+program _suso_para_statusmap, rclass
+    version 14.2
+    syntax , SAVing(string) [DATA(string) replace]
+    _suso_para_need events
+
+    tempfile BASE DATAWS
+    local hasdataws 0
+    local hasparastatus 0
+
+    preserve
+        tempvar started evn
+        quietly keep interview__id para_fieldans para_fieldrem para_fieldcmp ///
+            para_fieldrst para_ev para_ord para_seq
+        quietly sort interview__id para_ord para_seq
+        quietly by interview__id: egen byte `started' = max(                 ///
+            para_fieldans | para_fieldrem | para_fieldcmp | para_fieldrst)
+        quietly gen str40 `evn' = subinstr(subinstr(para_ev, "approved",      ///
+            "approve", .), "rejected", "reject", .)
+        quietly gen str40 ws_paradata = ""
+        quietly replace ws_paradata = "Completed"       if `evn'=="completed"
+        quietly replace ws_paradata = "In progress"     if `evn'=="restarted"
+        quietly replace ws_paradata = "Approved by Sup" if `evn'=="approvebysupervisor"
+        quietly replace ws_paradata = "Rejected by Sup" if `evn'=="rejectbysupervisor"
+        quietly replace ws_paradata = "Approved by HQ"  if inlist(`evn',     ///
+            "approvebyheadquarter", "approvebyheadquarters")
+        quietly replace ws_paradata = "Rejected by HQ"  if inlist(`evn',     ///
+            "rejectbyheadquarter", "rejectbyheadquarters")
+        quietly replace ws_paradata = "Unapproved by HQ" if                  ///
+            `evn'=="unapprovebyheadquarters"
+        quietly count if ws_paradata!=""
+        local hasparastatus = r(N)>0
+        quietly by interview__id: replace ws_paradata = ws_paradata[_n-1]     ///
+            if ws_paradata=="" & _n>1
+        quietly by interview__id: keep if _n==_N
+        quietly replace ws_paradata = "" if !`started'
+        quietly replace ws_paradata = "In progress" if ws_paradata=="" & `started'
+        quietly keep interview__id ws_paradata
+        quietly save `"`BASE'"'
+    restore
+
+    if `"`data'"'!="" {
+        preserve
+            quietly use `"`data'"', clear
+            capture confirm string variable interview__id, exact
+            if _rc {
+                di as err "suso paradata report: data() requires a string interview__id variable."
+                di as err "                         Use the one-row-per-interview Survey Solutions main export."
+                exit 459
+            }
+            capture confirm variable interview__status, exact
+            if !_rc {
+                tempvar wsdata wsdup
+                capture confirm string variable interview__status
+                if !_rc quietly gen str244 `wsdata' = strtrim(interview__status)
+                else {
+                    capture decode interview__status, gen(`wsdata')
+                    if _rc {
+                        capture quietly drop `wsdata'
+                        quietly gen str244 `wsdata' = strtrim(strofreal(        ///
+                            interview__status,"%18.0g"))
+                        quietly replace `wsdata' = "Deleted"                if interview__status==-1
+                        quietly replace `wsdata' = "Restored"               if interview__status==0
+                        quietly replace `wsdata' = "Created"                if interview__status==20
+                        quietly replace `wsdata' = "SupervisorAssigned"     if interview__status==40
+                        quietly replace `wsdata' = "InterviewerAssigned"    if interview__status==60
+                        quietly replace `wsdata' = "RejectedBySupervisor"   if interview__status==65
+                        quietly replace `wsdata' = "ReadyForInterview"      if interview__status==80
+                        quietly replace `wsdata' = "SentToCapi"             if interview__status==85
+                        quietly replace `wsdata' = "Restarted"              if interview__status==95
+                        quietly replace `wsdata' = "Completed"              if interview__status==100
+                        quietly replace `wsdata' = "ApprovedBySupervisor"   if interview__status==120
+                        quietly replace `wsdata' = "RejectedByHeadquarters" if interview__status==125
+                        quietly replace `wsdata' = "ApprovedByHeadquarters" if interview__status==130
+                    }
+                    else quietly replace `wsdata' = strtrim(`wsdata')
+                    quietly replace `wsdata' = "" if missing(interview__status)
+                }
+                quietly keep interview__id `wsdata'
+                quietly rename `wsdata' ws_data
+                quietly duplicates drop
+                quietly bysort interview__id: gen byte `wsdup' = _N>1
+                quietly count if `wsdup'
+                if r(N)>0 {
+                    di as err "suso paradata report: data() has duplicate interview__id rows with conflicting interview__status values."
+                    di as err "                         Supply a one-row-per-interview main export."
+                    exit 459
+                }
+                quietly drop `wsdup'
+                quietly bysort interview__id: keep if _n==1
+                quietly save `"`DATAWS'"'
+                local hasdataws 1
+            }
+        restore
+    }
+
+    preserve
+        quietly use `"`BASE'"', clear
+        if `hasdataws' quietly merge 1:1 interview__id using `"`DATAWS'"',    ///
+            keep(master match) nogenerate
+        else quietly gen str244 ws_data = ""
+        quietly replace ws_data = "" if missing(ws_data)
+        quietly gen str244 ws = cond(ws_data!="",ws_data,ws_paradata)
+        tempvar wspn wsdn
+        quietly gen str244 `wspn' = lower(subinstr(strtrim(ws_paradata)," ","",.))
+        quietly gen str244 `wsdn' = lower(subinstr(strtrim(ws_data)," ","",.))
+        foreach vv in `wspn' `wsdn' {
+            quietly replace `vv' = subinstr(`vv',"headquarters","hq",.)
+            quietly replace `vv' = subinstr(`vv',"headquarter","hq",.)
+            quietly replace `vv' = subinstr(`vv',"supervisor","sup",.)
+            quietly replace `vv' = subinstr(`vv',"approved","approve",.)
+            quietly replace `vv' = subinstr(`vv',"rejected","reject",.)
+            quietly replace `vv' = "inprogress" if inlist(`vv',"restart","restarted")
+        }
+        quietly gen byte ws_mismatch = ws_data!="" & ws_paradata!="" &       ///
+            `wsdn'!=`wspn'
+        quietly gen str12 ws_source = cond(ws_data!="","final data","paradata")
+        quietly gen str40 ws_class = cond(`wsdn'!="",`wsdn',`wspn')
+        quietly drop `wspn' `wsdn'
+        label variable ws "display workflow status (final data preferred)"
+        label variable ws_paradata "workflow state at last paradata event"
+        label variable ws_data "interview__status in final data"
+        label variable ws_mismatch "paradata/final-data status mismatch"
+        quietly keep interview__id ws ws_paradata ws_data ws_source ws_class ws_mismatch
+        if "`replace'"!="" quietly save `"`saving'"', replace
+        else quietly save `"`saving'"'
+    restore
+
+    return scalar hasdataws = `hasdataws'
+    return scalar hasparastatus = `hasparastatus'
+end
+
+* ---- compact exact Question-timing payload -------------------------------------
+* Status scopes are computed from raw eligible events so p50/p90 and fast-share
+* remain exact.  Each event contributes to its exact status, All statuses (""),
+* and, when applicable, the combined Sup+HQ Approved scope ("APP").
+program _suso_para_questionpayload, rclass
+    version 14.2
+    syntax , STATUSMap(string) QSAVing(string) AQSAVing(string)              ///
+        PEERSAVing(string) [VARS(string)]
+    _suso_para_need events
+
+    local haspeerq 0
+    local hasq 0
+    local hasaq 0
+
+    preserve
+        capture confirm variable para_var
+        if !_rc {
+            quietly keep para_fieldans para_firstpass para_cawi para_var     ///
+                para_ansgap
+            quietly keep if para_fieldans & para_firstpass & !para_cawi &    ///
+                para_var!="" & !missing(para_ansgap)
+            if _N>0 {
+                local haspeerq 1
+                quietly keep para_var para_ansgap
+                quietly compress
+                collapse (p50) qmed=para_ansgap, by(para_var) fast
+                quietly keep if !missing(qmed)
+                quietly save `"`peersaving'"'
+            }
+        }
+    restore
+
+    preserve
+        capture confirm variable para_var
+        local hasvar = !_rc
+        if `hasvar' {
+            quietly keep interview__id para_actor para_actor_key para_var    ///
+                para_one para_fast para_ansgap para_fieldans para_firstpass  ///
+                para_ans para_rem para_ev
+            quietly keep if para_fieldans & para_firstpass & para_var!=""
+        }
+        if `hasvar' & _N>0 _suso_para_varsel , vars(`"`vars'"')
+        if `hasvar' & _N>0 {
+            local hasq 1
+            quietly drop para_fieldans para_firstpass para_ans para_rem para_ev
+            quietly compress
+            quietly merge m:1 interview__id using `"`statusmap'"',           ///
+                keep(master match) nogenerate keepusing(ws ws_class)
+            tempvar oid app copies which qstatus qscope tag scopestr
+            * Collapse on a compact numeric status key.  Carrying a str244
+            * status through a 2x/3x expansion is needlessly expensive on a
+            * multi-million-event survey.
+            quietly egen long `qstatus' = group(ws), label
+            quietly clonevar `qscope' = `qstatus'
+            quietly gen long `oid' = _n
+            quietly gen byte `app' = inlist(ws_class,"approvebyhq","approvebysup")
+            quietly gen byte `copies' = 2 + `app'
+            quietly drop ws ws_class `qstatus'
+            quietly expand `copies'
+            quietly bysort `oid': gen byte `which' = _n
+            quietly replace `qscope' = 0  if `which'==2
+            quietly replace `qscope' = -1 if `which'==3
+            quietly drop `app' `copies' `which' `oid'
+            quietly compress
+            tempfile QEVENTS
+            quietly save `"`QEVENTS'"'
+
+            quietly bysort `qscope' para_var interview__id: gen byte `tag' = _n==1
+            collapse (sum) qn=para_one qni=`tag' qnf=para_fast              ///
+                (count) qnt=para_ansgap                                    ///
+                (p50) qmed=para_ansgap (p90) qp90=para_ansgap,             ///
+                by(`qscope' para_var) fast
+            quietly gen double qfsh = qnf/qnt if qnt>0
+            quietly decode `qscope', gen(`scopestr')
+            quietly replace `scopestr' = ""    if `qscope'==0
+            quietly replace `scopestr' = "APP" if `qscope'==-1
+            quietly drop `qscope'
+            quietly rename `scopestr' qscope
+            gsort qscope -qmed para_var
+            quietly save `"`qsaving'"'
+
+            quietly use `"`QEVENTS'"', clear
+            quietly keep if para_actor_key!=""
+            if _N>0 {
+                local hasaq 1
+                tempvar atag
+                quietly bysort para_actor_key `qscope' para_var interview__id: ///
+                    gen byte `atag' = _n==1
+                collapse (sum) aqn=para_one aqni=`atag' aqnf=para_fast       ///
+                    (count) aqnt=para_ansgap                                ///
+                    (p50) aqmed=para_ansgap (p90) aqp90=para_ansgap         ///
+                    (first) aq_actor=para_actor,                            ///
+                    by(para_actor_key `qscope' para_var) fast
+                quietly gen double aqfsh = aqnf/aqnt if aqnt>0
+                quietly decode `qscope', gen(`scopestr')
+                quietly replace `scopestr' = ""    if `qscope'==0
+                quietly replace `scopestr' = "APP" if `qscope'==-1
+                quietly drop `qscope'
+                quietly rename `scopestr' qscope
+                gsort para_actor_key qscope -aqmed para_var
+                quietly save `"`aqsaving'"'
+            }
+        }
+    restore
+
+    return scalar haspeerq = `haspeerq'
+    return scalar hasq = `hasq'
+    return scalar hasaq = `hasaq'
+end
+
+* ---- browser-only raw event-history explorer ---------------------------------
+* The report never embeds the multi-million-row source.  The user explicitly
+* selects paradata.tab in the browser; a Web Worker scans it in bounded chunks,
+* keeps only a compact interview-to-byte-range index, and reads one interview on
+* demand.  Keeping this static engine in its own program also preserves Stata's
+* fixed per-program compiler headroom.
+program _suso_para_history_js
+    version 14.2
+    args fh
+    if "`fh'"=="" {
+        di as err "suso internal error: history-viewer file handle was not supplied."
+        exit 198
+    }
+    file write `fh' `"<script>"' _n
+    file write `fh' `"/* suso raw history viewer - local file only; no source events are embedded or uploaded. */"' _n
+    file write `fh' `"function historyCoreFactory(){"' _n
+    file write `fh' `"  'use strict';"' _n
+    file write `fh' `"  var decoder=new TextDecoder('utf-8',{fatal:true});"' _n
+    file write `fh' `"  function decode(bytes){return decoder.decode(bytes);}"' _n
+    file write `fh' `"  function decodeField(raw){"' _n
+    file write `fh' `"    var i,out;"' _n
+    file write `fh' `"    if(raw.length>=2&&raw[0]===34&&raw[raw.length-1]===34){"' _n
+    file write `fh' `"      out=[];"' _n
+    file write `fh' `"      for(i=1;i<raw.length-1;i++){if(raw[i]===34&&raw[i+1]===34){out.push(34);i++;}else out.push(raw[i]);}"' _n
+    file write `fh' `"      return decode(new Uint8Array(out));"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return decode(raw);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function parseRecord(bytes,quoted){"' _n
+    file write `fh' `"    var out=[],start=0,i=0,inQ=false,atStart=true,c;"' _n
+    file write `fh' `"    if(!quoted){for(i=0;i<=bytes.length;i++)if(i===bytes.length||bytes[i]===9){out.push(decode(bytes.subarray(start,i)));start=i+1;}return out;}"' _n
+    file write `fh' `"    while(i<=bytes.length){"' _n
+    file write `fh' `"      if(i===bytes.length){out.push(decodeField(bytes.subarray(start,i)));break;}"' _n
+    file write `fh' `"      c=bytes[i];"' _n
+    file write `fh' `"      if(inQ){if(c===34){if(bytes[i+1]===34){i+=2;continue;}inQ=false;}i++;continue;}"' _n
+    file write `fh' `"      if(c===34&&atStart){inQ=true;atStart=false;i++;continue;}"' _n
+    file write `fh' `"      if(c===9){out.push(decodeField(bytes.subarray(start,i)));start=i+1;atStart=true;i++;continue;}"' _n
+    file write `fh' `"      atStart=false;i++;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function field(bytes,target,quoted){"' _n
+    file write `fh' `"    var col=0,start=0,i=0,inQ=false,atStart=true,c;"' _n
+    file write `fh' `"    if(!quoted){for(i=0;i<=bytes.length;i++)if(i===bytes.length||bytes[i]===9){if(col===target)return decode(bytes.subarray(start,i));col++;start=i+1;}return '';}"' _n
+    file write `fh' `"    while(i<=bytes.length){"' _n
+    file write `fh' `"      if(i===bytes.length||(!inQ&&bytes[i]===9)){"' _n
+    file write `fh' `"        if(col===target)return decodeField(bytes.subarray(start,i));"' _n
+    file write `fh' `"        col++;start=i+1;atStart=true;i++;continue;"' _n
+    file write `fh' `"      }"' _n
+    file write `fh' `"      c=bytes[i];"' _n
+    file write `fh' `"      if(inQ){if(c===34){if(bytes[i+1]===34){i+=2;continue;}inQ=false;}i++;continue;}"' _n
+    file write `fh' `"      if(c===34&&atStart){inQ=true;atStart=false;i++;continue;}"' _n
+    file write `fh' `"      atStart=false;i++;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return '';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function walkRecords(bytes,eof,onRecord,quoted){"' _n
+    file write `fh' `"    var start=0,i=0,inQ=false,atStart=true,c,end,dataEnd;"' _n
+    file write `fh' `"    if(!quoted){while(i<bytes.length){c=bytes[i];if(c===10||c===13){if(c===13&&i+1===bytes.length&&!eof)break;dataEnd=i;end=(c===13&&bytes[i+1]===10)?i+2:i+1;onRecord(bytes.subarray(start,dataEnd),start,end);start=end;i=end;}else i++;}if(eof){if(start<bytes.length)onRecord(bytes.subarray(start),start,bytes.length);return bytes.length;}return start;}"' _n
+    file write `fh' `"    while(i<bytes.length){"' _n
+    file write `fh' `"      c=bytes[i];"' _n
+    file write `fh' `"      if(inQ){if(c===34){if(bytes[i+1]===34){i+=2;continue;}inQ=false;}i++;continue;}"' _n
+    file write `fh' `"      if(c===34&&atStart){inQ=true;atStart=false;i++;continue;}"' _n
+    file write `fh' `"      if(c===9){atStart=true;i++;continue;}"' _n
+    file write `fh' `"      if(c===10||c===13){"' _n
+    file write `fh' `"        if(c===13&&i+1===bytes.length&&!eof)break;"' _n
+    file write `fh' `"        dataEnd=i;end=(c===13&&bytes[i+1]===10)?i+2:i+1;"' _n
+    file write `fh' `"        onRecord(bytes.subarray(start,dataEnd),start,end);"' _n
+    file write `fh' `"        start=end;i=end;inQ=false;atStart=true;continue;"' _n
+    file write `fh' `"      }"' _n
+    file write `fh' `"      atStart=false;i++;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    if(eof){"' _n
+    file write `fh' `"      if(inQ)throw new Error('Unterminated quoted field near byte '+start+'.');"' _n
+    file write `fh' `"      if(start<bytes.length)onRecord(bytes.subarray(start),start,bytes.length);"' _n
+    file write `fh' `"      return bytes.length;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return start;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function normHeader(s){return String(s||'').replace(/^\uFEFF/,'').trim().toLowerCase();}"' _n
+    file write `fh' `"  function normId(s){return String(s||'').trim().toLowerCase();}"' _n
+    file write `fh' `"  function find(headers,names,required){"' _n
+    file write `fh' `"    var i,j,n=headers.map(normHeader);"' _n
+    file write `fh' `"    for(i=0;i<names.length;i++){j=n.indexOf(names[i]);if(j>=0)return j;}"' _n
+    file write `fh' `"    if(required)throw new Error('Required column not found: '+names[0]+'.');"' _n
+    file write `fh' `"    return -1;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function schema(headers){"' _n
+    file write `fh' `"    var utc=find(headers,['timestamp_utc'],false),legacy=find(headers,['timestamp'],false);"' _n
+    file write `fh' `"    if(utc<0&&legacy<0)throw new Error('Required timestamp_utc/timestamp column not found.');"' _n
+    file write `fh' `"    return {headers:headers,id:find(headers,['interview__id','interview_id'],true),order:find(headers,['order'],false),event:find(headers,['event','action'],true),responsible:find(headers,['responsible'],false),role:find(headers,['role'],false),timestamp:utc>=0?utc:legacy,sourceUtc:utc>=0,tz:find(headers,['tz_offset','offset'],false),parameters:find(headers,['parameters'],false)};"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function value(values,i){return i>=0&&i<values.length?values[i]:'';}"' _n
+    file write `fh' `"  function rowFrom(values,s,seq,byte){return {order:value(values,s.order),event:value(values,s.event),responsible:value(values,s.responsible),role:value(values,s.role),timestamp:value(values,s.timestamp),tz:value(values,s.tz),parameters:value(values,s.parameters),seq:seq,byte:byte};}"' _n
+    file write `fh' `"  function offsetSeconds(s){"' _n
+    file write `fh' `"    var m=String(s||'').trim().match(/^([+-])?(\d{1,2}):(\d{2})(?::(\d{2}))?$/),v;"' _n
+    file write `fh' `"    if(!m)return null;v=Number(m[2])*3600+Number(m[3])*60+Number(m[4]||0);"' _n
+    file write `fh' `"    if(Number(m[2])>14||Number(m[3])>59||Number(m[4]||0)>59||v>50400)return null;"' _n
+    file write `fh' `"    return m[1]==='-'?-v:v;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function partsMs(s){"' _n
+    file write `fh' `"    var m=String(s||'').trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/);"' _n
+    file write `fh' `"    if(!m)return null;return Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+m[6],+(m[7]||'0').padEnd(3,'0'));"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function pad(n,w){var s=String(n);while(s.length<w)s='0'+s;return s;}"' _n
+    file write `fh' `"  function formatMs(ms){"' _n
+    file write `fh' `"    if(ms===null||!isFinite(ms))return '';var d=new Date(ms);"' _n
+    file write `fh' `"    return pad(d.getUTCFullYear(),4)+'-'+pad(d.getUTCMonth()+1,2)+'-'+pad(d.getUTCDate(),2)+' '+pad(d.getUTCHours(),2)+':'+pad(d.getUTCMinutes(),2)+':'+pad(d.getUTCSeconds(),2)+'.'+pad(d.getUTCMilliseconds(),3);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function timeInfo(row,sourceUtc){"' _n
+    file write `fh' `"    var off=offsetSeconds(row.tz),base=partsMs(row.timestamp),utc=null,local=null;"' _n
+    file write `fh' `"    if(sourceUtc){utc=base;if(base!==null&&off!==null)local=base+off*1000;}"' _n
+    file write `fh' `"    else{local=base;if(base!==null&&off!==null)utc=base-off*1000;}"' _n
+    file write `fh' `"    return {utcMs:utc,localMs:local,utc:formatMs(utc),local:formatMs(local),offset:off};"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function kind(event){"' _n
+    file write `fh' `"    var e=String(event||'').toLowerCase();"' _n
+    file write `fh' `"    if(e.indexOf('answerremoved')>=0||e.indexOf('disabled')>=0||e.indexOf('invalid')>=0)return 'warn';"' _n
+    file write `fh' `"    if(e.indexOf('answerset')>=0)return 'answer';"' _n
+    file write `fh' `"    if(e.indexOf('completed')>=0||e.indexOf('approved')>=0||e.indexOf('rejected')>=0||e.indexOf('assigned')>=0||e.indexOf('received')>=0)return 'workflow';"' _n
+    file write `fh' `"    if(e.indexOf('paused')>=0||e.indexOf('resumed')>=0||e.indexOf('started')>=0||e.indexOf('created')>=0)return 'session';"' _n
+    file write `fh' `"    return 'system';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function matches(row,q){"' _n
+    file write `fh' `"    q=String(q||'').trim().toLowerCase();if(!q)return true;"' _n
+    file write `fh' `"    return [row.order,row.event,row.responsible,row.role,row.timestamp,row.tz,row.parameters].join(' ').toLowerCase().indexOf(q)>=0;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function orderValue(s){var t=String(s||'').trim();if(!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(t))return null;var n=Number(t);return isFinite(n)?n:null;}"' _n
+    file write `fh' `"  function orderRows(rows){"' _n
+    file write `fh' `"    return rows.sort(function(a,b){var x=orderValue(a.order),y=orderValue(b.order);x=x===null?a.seq:x;y=y===null?b.seq:y;if(x!==y)return x-y;return a.seq-b.seq;});"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function formatBytes(n){var u=['B','KB','MB','GB','TB'],i=0,x=Number(n)||0;while(x>=1024&&i<u.length-1){x/=1024;i++;}return x.toFixed(i?1:0)+' '+u[i];}"' _n
+    file write `fh' `"  return {decode:decode,parseRecord:parseRecord,field:field,walkRecords:walkRecords,normId:normId,schema:schema,rowFrom:rowFrom,offsetSeconds:offsetSeconds,timeInfo:timeInfo,kind:kind,matches:matches,orderValue:orderValue,orderRows:orderRows,formatBytes:formatBytes};"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"var HCore=historyCoreFactory();"' _n
+    file write `fh' `"if(typeof module!=='undefined'&&module.exports)module.exports=HCore;"' _n
+    file write `fh' `"function historyWorkerMain(){"' _n
+    file write `fh' `"  'use strict';"' _n
+    file write `fh' `"  var file=null,index=null,keys=[],schema=null,token=0,scanMode=false,quoted=false,CHUNK=4*1024*1024,MAX_RANGES=500000;"' _n
+    file write `fh' `"  function send(x){self.postMessage(x);}"' _n
+    file write `fh' `"  function cat(a,b){var c=new Uint8Array(a.length+b.length);c.set(a);c.set(b,a.length);return c;}"' _n
+    file write `fh' `"  async function scan(start,end,onRecord,onProgress,myToken){"' _n
+    file write `fh' `"    var offset=start,carry=new Uint8Array(0),buf,chunk,base,tail,lim;"' _n
+    file write `fh' `"    while(offset<end){"' _n
+    file write `fh' `"      if(myToken!==token)throw new Error('Cancelled');"' _n
+    file write `fh' `"      lim=Math.min(end,offset+CHUNK);chunk=new Uint8Array(await file.slice(offset,lim).arrayBuffer());"' _n
+    file write `fh' `"      base=offset-carry.length;buf=carry.length?cat(carry,chunk):chunk;"' _n
+    file write `fh' `"      tail=HCore.walkRecords(buf,false,function(rec,s,e){onRecord(rec,base+s,base+e);},quoted);"' _n
+    file write `fh' `"      carry=buf.slice(tail);offset=lim;if(onProgress)onProgress(offset,end);"' _n
+    file write `fh' `"      if(carry.length>64*1024*1024)throw new Error('A single TSV record exceeds 64 MB or has an unterminated quoted field.');"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    base=end-carry.length;HCore.walkRecords(carry,true,function(rec,s,e){onRecord(rec,base+s,base+e);},quoted);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  async function build(f,useQuoted){"' _n
+    file write `fh' `"    var my=++token,first=true,rows=0,dataRow=0,ranges=0,blank=0,lastPost=0;file=f;quoted=!!useQuoted;index=new Map();keys=[];schema=null;scanMode=false;"' _n
+    file write `fh' `"    await scan(0,file.size,function(rec,start,end){"' _n
+    file write `fh' `"      var head,id,key,entry,r;"' _n
+    file write `fh' `"      if(!rec.length)return;"' _n
+    file write `fh' `"      if(first){head=HCore.parseRecord(rec,quoted);schema=HCore.schema(head);first=false;return;}"' _n
+    file write `fh' `"      dataRow++;id=HCore.field(rec,schema.id,quoted).trim();if(!id){blank++;return;}key=HCore.normId(id);"' _n
+    file write `fh' `"      entry=index.get(key);if(!entry){entry={id:id,ranges:[],n:0};index.set(key,entry);}"' _n
+    file write `fh' `"      r=entry.ranges;if(!scanMode){if(r.length&&r[r.length-1][1]===start){r[r.length-1][1]=end;r[r.length-1][3]++;}else{r.push([start,end,dataRow,1]);ranges++;if(ranges>MAX_RANGES){scanMode=true;ranges=0;index.forEach(function(x){x.ranges=[];});}}}"' _n
+    file write `fh' `"      entry.n++;rows++;"' _n
+    file write `fh' `"    },function(done,total){var now=Date.now();if(now-lastPost>250){lastPost=now;send({type:'progress',done:done,total:total,rows:rows,interviews:index.size});}},my);"' _n
+    file write `fh' `"    if(first)throw new Error('The selected file is empty.');"' _n
+    file write `fh' `"    keys=Array.from(index.keys()).sort();"' _n
+    file write `fh' `"    send({type:'ready',name:file.name,size:file.size,rows:rows,interviews:index.size,ranges:ranges,blank:blank,scanMode:scanMode,fragmented:!scanMode&&ranges>index.size,dialect:quoted?'quoted':'suso',schema:{sourceUtc:schema.sourceUtc}});"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function lowerBound(a,q){var lo=0,hi=a.length,m;while(lo<hi){m=(lo+hi)>>1;if(a[m]<q)lo=m+1;else hi=m;}return lo;}"' _n
+    file write `fh' `"  function suggest(q){"' _n
+    file write `fh' `"    var out=[],n=HCore.normId(q),i=lowerBound(keys,n),k;if(!n){send({type:'suggestions',items:out});return;}"' _n
+    file write `fh' `"    for(;i<keys.length&&out.length<20;i++){k=keys[i];if(k.indexOf(n)!==0)break;out.push(index.get(k).id);}"' _n
+    file write `fh' `"    if(!out.length){for(i=0;i<keys.length&&out.length<20;i++)if(keys[i].indexOf(n)>=0)out.push(index.get(keys[i]).id);}"' _n
+    file write `fh' `"    send({type:'suggestions',items:out});"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  async function getHistory(id){"' _n
+    file write `fh' `"    var my=++token,key=HCore.normId(id),entry=index&&index.get(key),rows=[],i,range,rowNo,first=true,dataRow=0;"' _n
+    file write `fh' `"    if(!entry){send({type:'notfound',id:id});return;}"' _n
+    file write `fh' `"    if(scanMode){"' _n
+    file write `fh' `"      await scan(0,file.size,function(rec,start){var vals;if(!rec.length)return;if(first){first=false;return;}dataRow++;if(HCore.normId(HCore.field(rec,schema.id,quoted))===key){vals=HCore.parseRecord(rec,quoted);rows.push(HCore.rowFrom(vals,schema,dataRow,start));}},function(done,total){send({type:'readprogress',done:done,total:total,id:entry.id});},my);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    for(i=0;!scanMode&&i<entry.ranges.length;i++){"' _n
+    file write `fh' `"      range=entry.ranges[i];"' _n
+    file write `fh' `"      rowNo=range[2];await scan(range[0],range[1],function(rec,start){var vals=HCore.parseRecord(rec,quoted);if(HCore.normId(vals[schema.id])===key)rows.push(HCore.rowFrom(vals,schema,rowNo++,start));},null,my);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    HCore.orderRows(rows);send({type:'history',id:entry.id,rows:rows,schema:{sourceUtc:schema.sourceUtc}});"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  self.onmessage=function(e){"' _n
+    file write `fh' `"    var d=e.data||{};"' _n
+    file write `fh' `"    if(d.type==='index')build(d.file,d.quoted).catch(function(err){if(String(err&&err.message)!=='Cancelled')send({type:'error',message:String(err&&err.message||err)});});"' _n
+    file write `fh' `"    else if(d.type==='suggest'&&index)suggest(d.q);"' _n
+    file write `fh' `"    else if(d.type==='get'&&index)getHistory(d.id).catch(function(err){if(String(err&&err.message)!=='Cancelled')send({type:'error',message:String(err&&err.message||err)});});"' _n
+    file write `fh' `"  };"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"(function(){"' _n
+    file write `fh' `"  if(typeof document==='undefined')return;"' _n
+    file write `fh' `"  var worker=null,currentFile=null,ready=false,rows=[],sourceUtc=true,view='timeline',renderToken=0,suggestTimer=null;"' _n
+    file write `fh' `"  function E(id){return document.getElementById(id);}"' _n
+    file write `fh' `"  function text(tag,cls,value){var n=document.createElement(tag);if(cls)n.className=cls;n.textContent=value===null||value===undefined?'':String(value);return n;}"' _n
+    file write `fh' `"  function status(message,bad){var n=E('hv_status');n.textContent=message;n.className=bad?'hv-status bad':'hv-status';}"' _n
+    file write `fh' `"  function stopWorker(){if(worker)worker.terminate();worker=null;ready=false;}"' _n
+    file write `fh' `"  function workerSource(){return 'var HCore=('+historyCoreFactory.toString()+')();('+historyWorkerMain.toString()+')();';}"' _n
+    file write `fh' `"  function makeWorker(){var blob=new Blob([workerSource()],{type:'text/javascript'});return new Worker(URL.createObjectURL(blob));}"' _n
+    file write `fh' `"  function startFile(file){"' _n
+    file write `fh' `"    currentFile=file;stopWorker();rows=[];E('hv_results').style.display='none';E('hv_load').disabled=true;E('hv_id').disabled=true;E('hv_progress').style.display='block';E('hv_progress').value=0;"' _n
+    file write `fh' `"    try{worker=makeWorker();}catch(err){status('This browser could not start the local-file indexer: '+err.message,true);return;}"' _n
+    file write `fh' `"    worker.onmessage=onMessage;worker.onerror=function(e){status('Local indexer failed: '+(e.message||'unknown browser error'),true);};"' _n
+    file write `fh' `"    status('Indexing '+file.name+' in the background (0 of '+HCore.formatBytes(file.size)+') ...',false);worker.postMessage({type:'index',file:file,quoted:E('hv_dialect').value==='quoted'});"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function onMessage(e){"' _n
+    file write `fh' `"    var d=e.data||{},pct;"' _n
+    file write `fh' `"    if(d.type==='progress'){pct=d.total?100*d.done/d.total:0;E('hv_progress').value=pct;status('Indexing locally: '+pct.toFixed(1)+'% - '+d.rows.toLocaleString()+' events, '+d.interviews.toLocaleString()+' interviews found ...',false);}"' _n
+    file write `fh' `"    else if(d.type==='ready'){ready=true;sourceUtc=d.schema.sourceUtc;E('hv_progress').style.display='none';E('hv_id').disabled=false;E('hv_load').disabled=!E('hv_id').value.trim();status('Ready: '+d.rows.toLocaleString()+' events in '+d.interviews.toLocaleString()+' interviews. Parsing mode: '+(d.dialect==='quoted'?'quoted TSV':'Survey Solutions literal TSV')+'. '+(d.scanMode?'The file is highly interleaved, so each selected ID is found by a safe streaming rescan. ':(d.fragmented?'Non-contiguous interview blocks were indexed. ':''))+(d.blank?d.blank.toLocaleString()+' blank-ID rows were skipped. ':''),false);if(E('hv_id').value.trim())loadHistory();else E('hv_id').focus();}"' _n
+    file write `fh' `"    else if(d.type==='readprogress'){pct=d.total?100*d.done/d.total:0;status('Finding '+d.id+' in the interleaved file: '+pct.toFixed(1)+'% ...',false);}"' _n
+    file write `fh' `"    else if(d.type==='suggestions')showSuggestions(d.items||[]);"' _n
+    file write `fh' `"    else if(d.type==='notfound'){E('hv_results').style.display='none';status('Interview ID not found in the selected paradata file: '+d.id,true);}"' _n
+    file write `fh' `"    else if(d.type==='history'){sourceUtc=d.schema.sourceUtc;rows=d.rows||[];E('hv_id').value=d.id;E('hv_search').value='';prepareRows();populateFilters();E('hv_results').style.display='block';status('Loaded '+rows.length.toLocaleString()+' events for '+d.id+'.',false);render();}"' _n
+    file write `fh' `"    else if(d.type==='error'){E('hv_progress').style.display='none';status(d.message||'Could not read the selected file.',true);}"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function showSuggestions(items){"' _n
+    file write `fh' `"    var box=E('hv_suggest'),i,b;box.textContent='';"' _n
+    file write `fh' `"    for(i=0;i<items.length;i++){b=text('button','hv-suggestion mono',items[i]);b.type='button';b.addEventListener('click',function(){E('hv_id').value=this.textContent;box.textContent='';E('hv_load').disabled=false;loadHistory();});box.appendChild(b);}"' _n
+    file write `fh' `"    box.style.display=items.length?'block':'none';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function loadHistory(){var id=E('hv_id').value.trim();if(!ready||!id)return;E('hv_suggest').style.display='none';status('Reading the complete event chain for '+id+' ...',false);worker.postMessage({type:'get',id:id});}"' _n
+    file write `fh' `"  function openHistory(id){"' _n
+    file write `fh' `"    id=String(id===null||id===undefined?'':id).trim();if(!id||id.length>500)return false;E('hv_id').value=id;E('hv_load').disabled=!ready;E('history_explorer').scrollIntoView({behavior:'smooth',block:'start'});"' _n
+    file write `fh' `"    if(ready)loadHistory();else{status('Interview '+id+' is queued. Choose the matching paradata.tab once to open its full event chain.',false);E('hv_file').focus();}return true;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  window.susoOpenHistory=openHistory;"' _n
+    file write `fh' `"  function prepareRows(){var prev=null,i,t;for(i=0;i<rows.length;i++){t=HCore.timeInfo(rows[i],sourceUtc);rows[i]._time=t;rows[i]._gap=(prev!==null&&t.utcMs!==null)?t.utcMs-prev:null;if(t.utcMs!==null)prev=t.utcMs;}}"' _n
+    file write `fh' `"  function option(select,value,label){var o=document.createElement('option');o.value=value;o.textContent=label;select.appendChild(o);}"' _n
+    file write `fh' `"  function populateFilters(){"' _n
+    file write `fh' `"    var ev=Object.create(null),ac=Object.create(null),i,a,b,se=E('hv_event'),sa=E('hv_actor');se.textContent='';sa.textContent='';option(se,'','All event types');option(sa,'','All actors');"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){if(rows[i].event)ev[rows[i].event]=1;a=rows[i].responsible||'(no responsible actor)';ac[a]=1;}"' _n
+    file write `fh' `"    a=Object.keys(ev).sort();for(i=0;i<a.length;i++)option(se,a[i],a[i]);b=Object.keys(ac).sort();for(i=0;i<b.length;i++)option(sa,b[i],b[i]);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function gapText(ms){var sign=ms<0?'clock reversal ':'+',x=Math.abs(ms);if(ms===null)return '';if(x<1000)return sign+x+' ms';if(x<60000)return sign+(x/1000).toFixed(x<10000?1:0)+' s';if(x<3600000)return sign+(x/60000).toFixed(1)+' min';return sign+(x/3600000).toFixed(1)+' h';}"' _n
+    file write `fh' `"  function filtered(){var ev=E('hv_event').value,ac=E('hv_actor').value,q=E('hv_search').value,out=[],i,a;for(i=0;i<rows.length;i++){a=rows[i].responsible||'(no responsible actor)';if(ev&&rows[i].event!==ev)continue;if(ac&&a!==ac)continue;if(!HCore.matches(rows[i],q))continue;out.push(rows[i]);}return out;}"' _n
+    file write `fh' `"  function clearResult(){renderToken++;E('hv_timeline').textContent='';E('hv_raw_body').textContent='';}"' _n
+    file write `fh' `"  function render(){"' _n
+    file write `fh' `"    var shown=filtered(),actors=Object.create(null),events=Object.create(null),offsets=Object.create(null),i,off;clearResult();"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){actors[rows[i].responsible||'(none)']=1;events[rows[i].event||'(blank)']=1;off=rows[i].tz||'(missing)';offsets[off]=1;}"' _n
+    file write `fh' `"    E('hv_summary').textContent='Full chain: '+rows.length.toLocaleString()+' events, '+Object.keys(events).length+' event types, '+Object.keys(actors).length+' responsible actors, '+Object.keys(offsets).length+' recorded UTC offset(s). Showing '+shown.length.toLocaleString()+'.'+(Object.keys(offsets).length>1?' Offsets change in this history; local times use the offset recorded on each event.':'');"' _n
+    file write `fh' `"    E('hv_timeline').style.display=view==='timeline'?'block':'none';E('hv_raw').style.display=view==='raw'?'block':'none';E('hv_view_timeline').className=view==='timeline'?'pbtn':'pbtn ghost';E('hv_view_raw').className=view==='raw'?'pbtn':'pbtn ghost';"' _n
+    file write `fh' `"    if(view==='timeline')renderBatches(shown,E('hv_timeline'),timelineRow);else renderBatches(shown,E('hv_raw_body'),rawRow);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function renderBatches(items,target,maker){"' _n
+    file write `fh' `"    var mine=renderToken,pos=0;function batch(){var frag=document.createDocumentFragment(),end=Math.min(items.length,pos+400);if(mine!==renderToken)return;for(;pos<end;pos++)frag.appendChild(maker(items[pos]));target.appendChild(frag);if(pos<items.length)setTimeout(batch,0);}batch();"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function timelineRow(r){"' _n
+    file write `fh' `"    var n=document.createElement('div'),head=document.createElement('div'),meta=document.createElement('div'),p=document.createElement('div'),t=r._time||{};n.className='hv-event '+HCore.kind(r.event);"' _n
+    file write `fh' `"    head.className='hv-event-head';head.appendChild(text('span','hv-order mono','#'+(r.order||'?')));head.appendChild(text('span','hv-kind',r.event||'(blank event)'));if(r._gap!==null)head.appendChild(text('span','hv-gap',gapText(r._gap)));n.appendChild(head);"' _n
+    file write `fh' `"    meta.className='hv-event-meta';meta.appendChild(text('span','hv-local',t.local?('Local '+t.local):'Local time unavailable'));meta.appendChild(text('span','mono',t.utc?('UTC '+t.utc):('Source '+r.timestamp)));meta.appendChild(text('span','mono','offset '+(r.tz||'?')));n.appendChild(meta);"' _n
+    file write `fh' `"    if(r.responsible||r.role)n.appendChild(text('div','hv-actor',(r.responsible||'(no responsible actor)')+(r.role?' - '+r.role:'')));"' _n
+    file write `fh' `"    if(r.parameters){p.className='hv-parameters mono';p.textContent=r.parameters;n.appendChild(p);}return n;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function rawCell(tr,value,cls){var td=text('td',cls||'',value);tr.appendChild(td);}"' _n
+    file write `fh' `"  function rawRow(r){var tr=document.createElement('tr'),t=r._time||{};rawCell(tr,r.seq,'r mono');rawCell(tr,r.order,'r mono');rawCell(tr,r.event);rawCell(tr,r.responsible);rawCell(tr,r.role);rawCell(tr,r.timestamp,'mono');rawCell(tr,t.utc,'mono');rawCell(tr,r.tz,'mono');rawCell(tr,t.local,'mono');rawCell(tr,r.parameters,'mono hv-raw-parameters');return tr;}"' _n
+    file write `fh' `"  function init(){"' _n
+    file write `fh' `"    if(typeof Worker==='undefined'||typeof Blob==='undefined'||typeof TextDecoder==='undefined'){status('This browser lacks the local streaming features needed for the history viewer. Use a current Chrome or Edge browser.',true);E('hv_file').disabled=true;return;}"' _n
+    file write `fh' `"    E('hv_file').addEventListener('change',function(){if(this.files&&this.files[0])startFile(this.files[0]);});"' _n
+    file write `fh' `"    E('hv_dialect').addEventListener('change',function(){if(currentFile)startFile(currentFile);});"' _n
+    file write `fh' `"    E('hv_id').addEventListener('input',function(){E('hv_load').disabled=!ready||!this.value.trim();clearTimeout(suggestTimer);if(ready&&this.value.trim())suggestTimer=setTimeout(function(){worker.postMessage({type:'suggest',q:E('hv_id').value});},160);else showSuggestions([]);});"' _n
+    file write `fh' `"    E('hv_id').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();loadHistory();}});E('hv_load').addEventListener('click',loadHistory);"' _n
+    file write `fh' `"    E('hv_event').addEventListener('change',render);E('hv_actor').addEventListener('change',render);E('hv_search').addEventListener('input',render);"' _n
+    file write `fh' `"    E('hv_view_timeline').addEventListener('click',function(){view='timeline';render();});E('hv_view_raw').addEventListener('click',function(){view='raw';render();});"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();"' _n
+    file write `fh' `"})();"' _n
+    file write `fh' `"</script>"' _n
+end
+
 program _suso_para_report, rclass
     version 14.2
     syntax [, SAVing(string) replace TITle(string) QX(string)                    ///
@@ -6101,13 +7391,12 @@ program _suso_para_report, rclass
     local htitle `"`r(out)'"'
 
     di as txt "suso paradata: building the interactive QC report ..."
-    tempfile EVD EVSK SK QT QTK DAILY HHF GGF MERGED RSD RSDFOCUS WS FLK HQF    ///
-        KEYF MODEF TZF REJF REJDF OVF OVDF OVB OVP OVACT OVADF OVS PCEF VERF NQF RTF FRF ACTF ACTPF DATAWS
+    tempfile EVD EVSK SK QT AQT QTK QWS DAILY HHF GGF MERGED RSD RSDFOCUS FLK HQF ///
+        KEYF MODEF TZF REJF REJDF OVF OVDF OVB OVP OVACT OVADF OVS PCEF VERF NQF RTF FRF ACTF ACTPF
     tempname derivecap skipcap
     local nevents = _N
 
     local hasassignment 0
-    local hasdataws 0
     if `"`data'"'!="" {
         capture confirm file `"`data'"'
         if _rc {
@@ -6130,53 +7419,6 @@ program _suso_para_report, rclass
         restore
         quietly _suso_para_hqmap using `"`data'"', saving(`"`HQF'"')
         local hasassignment = r(hasassignment)
-        preserve
-            quietly use `"`data'"', clear
-            tempvar __wsdata
-            capture confirm variable interview__id, exact
-            local __hasid = !_rc
-            capture confirm variable interview__status, exact
-            if `__hasid' & !_rc {
-                capture confirm string variable interview__status
-                if !_rc quietly gen str244 `__wsdata' = strtrim(interview__status)
-                else {
-                    capture decode interview__status, gen(`__wsdata')
-                    if _rc {
-                        capture quietly drop `__wsdata'
-                        quietly gen str244 `__wsdata' = strtrim(strofreal(interview__status,"%18.0g"))
-                        quietly replace `__wsdata' = "Deleted"                if interview__status==-1
-                        quietly replace `__wsdata' = "Restored"               if interview__status==0
-                        quietly replace `__wsdata' = "Created"                if interview__status==20
-                        quietly replace `__wsdata' = "SupervisorAssigned"     if interview__status==40
-                        quietly replace `__wsdata' = "InterviewerAssigned"    if interview__status==60
-                        quietly replace `__wsdata' = "RejectedBySupervisor"   if interview__status==65
-                        quietly replace `__wsdata' = "ReadyForInterview"      if interview__status==80
-                        quietly replace `__wsdata' = "SentToCapi"             if interview__status==85
-                        quietly replace `__wsdata' = "Restarted"              if interview__status==95
-                        quietly replace `__wsdata' = "Completed"              if interview__status==100
-                        quietly replace `__wsdata' = "ApprovedBySupervisor"   if interview__status==120
-                        quietly replace `__wsdata' = "RejectedByHeadquarters" if interview__status==125
-                        quietly replace `__wsdata' = "ApprovedByHeadquarters" if interview__status==130
-                    }
-                    else quietly replace `__wsdata' = strtrim(`__wsdata')
-                }
-                quietly keep interview__id `__wsdata'
-                quietly rename `__wsdata' ws_data
-                quietly duplicates drop
-                tempvar __wsdup
-                quietly bysort interview__id: gen byte `__wsdup' = _N>1
-                quietly count if `__wsdup'
-                if r(N)>0 {
-                    di as err "suso paradata report: data() has duplicate interview__id rows with conflicting interview__status values."
-                    di as err "                         Supply a one-row-per-interview main export."
-                    exit 459
-                }
-                quietly drop `__wsdup'
-                quietly bysort interview__id: keep if _n==1
-                quietly save `"`DATAWS'"'
-                local hasdataws 1
-            }
-        restore
     }
 
     di as txt "  [behaviour 1/5] deriving sessions, actors and answer timing once ..."
@@ -6200,6 +7442,7 @@ program _suso_para_report, rclass
         local nderive 2
         quietly use `"`EVD'"', clear
     }
+    quietly _suso_para_statusmap , saving(`"`QWS'"') data(`"`data'"') replace
     di as txt "  [behaviour 2/5] building compact interview/question summaries ..."
 
     * coverage of the event stream (freshness line in the header)
@@ -6277,39 +7520,15 @@ program _suso_para_report, rclass
     }
 
     * ---- question timing table ----------------------------------------------------
-    * Whole-interview behaviour is always derived from EVD (the complete stream).
-    * vars() focuses only this instrument-diagnostic table and skip detail.
-    local hasq 0
-    local haspeerq 0
+    * Build exact All / current-status / Approved-only scopes from eligible raw
+    * events.  This remains compact in the HTML while preserving pooled quantiles.
     quietly use `"`EVD'"', clear
-    preserve
-        capture confirm variable para_var
-        if !_rc {
-            quietly keep if para_fieldans & para_firstpass & !para_cawi & para_var!="" & ///
-                !missing(para_ansgap)
-            if _N>0 {
-                local haspeerq 1
-                collapse (p50) qmed=para_ansgap, by(para_var) fast
-                quietly keep if !missing(qmed)
-                quietly save `"`QTK'"'
-            }
-        }
-    restore
-    _suso_para_varsel , vars(`"`vars'"')
-    capture confirm variable para_var
-    if !_rc {
-        quietly keep if para_fieldans & para_firstpass & para_var!=""
-        if _N>0 {
-            local hasq 1
-            tempvar tag
-            quietly bysort para_var interview__id: gen byte `tag' = _n==1
-            collapse (sum) qn=para_one qni=`tag' qnf=para_fast (count) qnt=para_ansgap ///
-                (p50) qmed=para_ansgap (p90) qp90=para_ansgap, by(para_var) fast
-            quietly gen double qfsh = qnf/qnt if qnt>0
-            gsort -qmed para_var
-            quietly save `"`QT'"'
-        }
-    }
+    quietly _suso_para_questionpayload , statusmap(`"`QWS'"')                 ///
+        qsaving(`"`QT'"') aqsaving(`"`AQT'"') peersaving(`"`QTK'"')          ///
+        vars(`"`vars'"')
+    local hasq = r(hasq)
+    local hasaq = r(hasaq)
+    local haspeerq = r(haspeerq)
 
     * ---- interviewer-day volume + lite decision ----------------------------------
     quietly use `"`EVD'"', clear
@@ -6358,7 +7577,7 @@ program _suso_para_report, rclass
     if !`lite' {
         quietly use `"`EVD'"', clear
         quietly keep if para_fieldans & para_firstpass & !missing(para_tsl) & ///
-            para_actor_key==lower(strtrim(para_primary))
+            para_actor_key==ustrlower(strtrim(para_primary))
         if _N>0 {
             quietly gen byte __hh = hh(para_tsl)
             quietly contract interview__id __hh, freq(__pc)
@@ -6378,7 +7597,7 @@ program _suso_para_report, rclass
         quietly save `"`HHF'"'
         quietly use `"`EVD'"', clear
         quietly keep if para_firstpass & !missing(para_ansgap) & ///
-            para_actor_key==lower(strtrim(para_primary))
+            para_actor_key==ustrlower(strtrim(para_primary))
         if _N>0 {
             quietly gen byte __g = min(floor(para_ansgap*2), 40)
             quietly contract interview__id __g, freq(__pc)
@@ -6397,28 +7616,6 @@ program _suso_para_report, rclass
             }
             quietly save `"`GGF'"'
         }
-    }
-
-    * ---- workflow state at the last status event ----------------------------------
-    local hasws 0
-    quietly use `"`EVD'"', clear
-    * SuSo logs rejections in the past tense but approvals without the d
-    * (RejectedBySupervisor vs ApproveBySupervisor) - normalise before matching
-    quietly gen __evn = subinstr(subinstr(para_ev, "approved", "approve", .), "rejected", "reject", .)
-    quietly keep if inlist(__evn, "completed", "restarted", "rejectbysupervisor", "approvebysupervisor") ///
-        | inlist(__evn, "approvebyheadquarter", "approvebyheadquarters", "rejectbyheadquarter", "rejectbyheadquarters", "unapprovebyheadquarters")
-    if _N>0 {
-        local hasws 1
-        quietly bysort interview__id (para_ord para_seq): keep if _n==_N
-        quietly gen str40 ws = "Completed"
-        quietly replace ws = "In progress"      if __evn=="restarted"
-        quietly replace ws = "Approved by Sup"  if __evn=="approvebysupervisor"
-        quietly replace ws = "Rejected by Sup"  if __evn=="rejectbysupervisor"
-        quietly replace ws = "Approved by HQ"   if inlist(__evn, "approvebyheadquarter", "approvebyheadquarters")
-        quietly replace ws = "Rejected by HQ"   if inlist(__evn, "rejectbyheadquarter", "rejectbyheadquarters")
-        quietly replace ws = "Unapproved by HQ" if __evn=="unapprovebyheadquarters"
-        quietly keep interview__id ws
-        quietly save `"`WS'"'
     }
 
     * ---- NEW: interview key (what the supervisor types into Headquarters) --------
@@ -6472,7 +7669,7 @@ program _suso_para_report, rclass
     * the browser or server offset and would fake a "changed mid-interview" signal
     * on every rejected or approved interview
     quietly keep if para_fieldans & para_firstpass & ///
-        para_actor_key==lower(strtrim(para_primary))
+        para_actor_key==ustrlower(strtrim(para_primary))
     quietly contract interview__id para_off, freq(__pk)
     quietly drop if missing(para_off)
     local tzmode 0
@@ -6948,9 +8145,9 @@ program _suso_para_report, rclass
         !missing(a_off_min) & a_off_min!=`tzmode'
     quietly bysort interview__id: egen double __aint = total(a_answers)
     quietly gen double a_answer_share = a_answers/__aint if __aint>0
-    quietly gen byte a_primary = para_actor_key==lower(strtrim(primary_name)) & primary_name!=""
-    quietly gen byte a_first = para_actor_key==lower(strtrim(first_name)) & first_name!=""
-    quietly gen byte a_last = para_actor_key==lower(strtrim(last_name)) & last_name!=""
+    quietly gen byte a_primary = para_actor_key==ustrlower(strtrim(primary_name)) & primary_name!=""
+    quietly gen byte a_first = para_actor_key==ustrlower(strtrim(first_name)) & first_name!=""
+    quietly gen byte a_last = para_actor_key==ustrlower(strtrim(last_name)) & last_name!=""
     quietly drop __aint a_active_s a_active_first_s a_actual a_expected      ///
         a_timebad a_localbad a_mode_unknown_n a_cawi_min a_cawi_max a_off_min a_off_max
     quietly merge 1:1 interview__id para_actor_key using `"`OVACT'"', ///
@@ -7046,38 +8243,7 @@ program _suso_para_report, rclass
             quietly replace g`g' = 0 if missing(g`g')
         }
     }
-    quietly gen str40 ws = "In progress"
-    if `hasws' {
-        quietly rename ws __wsfill
-        quietly merge 1:1 interview__id using `"`WS'"', keep(master match) nogenerate
-        quietly replace ws = "In progress" if ws==""
-        quietly drop __wsfill
-    }
-    quietly replace ws = "" if !started
-    quietly rename ws ws_paradata
-    if `hasdataws' quietly merge 1:1 interview__id using `"`DATAWS'"', ///
-        keep(master match) nogenerate
-    else quietly gen str244 ws_data = ""
-    quietly replace ws_data = "" if missing(ws_data)
-    quietly gen str244 ws = cond(ws_data!="",ws_data,ws_paradata)
-    tempvar wspn wsdn
-    quietly gen str244 `wspn' = lower(subinstr(strtrim(ws_paradata)," ","",.))
-    quietly gen str244 `wsdn' = lower(subinstr(strtrim(ws_data)," ","",.))
-    foreach vv in `wspn' `wsdn' {
-        quietly replace `vv' = subinstr(`vv',"headquarters","hq",.)
-        quietly replace `vv' = subinstr(`vv',"headquarter","hq",.)
-        quietly replace `vv' = subinstr(`vv',"supervisor","sup",.)
-        quietly replace `vv' = subinstr(`vv',"approved","approve",.)
-        quietly replace `vv' = subinstr(`vv',"rejected","reject",.)
-        quietly replace `vv' = "inprogress" if inlist(`vv',"restart","restarted")
-    }
-    quietly gen byte ws_mismatch = ws_data!="" & ws_paradata!="" & `wsdn'!=`wspn'
-    quietly gen str12 ws_source = cond(ws_data!="","final data","paradata")
-    quietly gen str40 ws_class = cond(`wsdn'!="",`wsdn',`wspn')
-    label variable ws "display workflow status (final data preferred)"
-    label variable ws_paradata "workflow state at last paradata event"
-    label variable ws_data "interview__status in final data"
-    label variable ws_mismatch "paradata/final-data status mismatch"
+    quietly merge 1:1 interview__id using `"`QWS'"', keep(master match) nogenerate
     if "`fdimvars'"!="" {
         quietly merge 1:1 interview__id using `"`FLK'"', keep(master match) nogenerate
     }
@@ -7241,6 +8407,17 @@ program _suso_para_report, rclass
     file write `fh' `".cpy:hover{background:#eef3f8}"' _n
     file write `fh' `".hqlinks{display:inline-flex;gap:6px;margin-left:10px;vertical-align:middle}.hqlink{display:inline-block;padding:3px 8px;border-radius:5px;background:#002244;color:#fff;text-decoration:none;font-size:10.5px;font-weight:600}.hqlink.secondary{background:#fff;color:#002244;border:1px solid #9fb0c1}.hqlink:hover{text-decoration:underline}"' _n
     file write `fh' `".legend{font-size:11.5px;color:#555;margin:6px 0 2px}"' _n
+    file write `fh' `".hv-privacy{background:#edf5fb;border:1px solid #bfd6ea;border-radius:7px;padding:9px 11px;color:#173b5e;font-size:12px;margin-bottom:10px}"' _n
+    file write `fh' `".hv-setup,.hv-filters,.hv-viewbar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}.hv-setup .ctrl{flex:1 1 240px}.hv-setup input[type=file],#hv_id{width:100%;box-sizing:border-box}"' _n
+    file write `fh' `".hv-status{font-size:12px;color:#315777;margin:8px 0}.hv-status.bad{color:#8a1f1f;font-weight:600}#hv_progress{width:100%;height:8px;margin:4px 0}"' _n
+    file write `fh' `".hv-idbox{position:relative}.hv-suggestions{display:none;position:absolute;left:0;right:0;top:100%;z-index:9;background:#fff;border:1px solid #c9cfd6;border-radius:0 0 6px 6px;box-shadow:0 5px 14px rgba(0,0,0,.12);max-height:210px;overflow:auto}"' _n
+    file write `fh' `".hv-suggestion{display:block;width:100%;padding:6px 8px;text-align:left;background:#fff;border:0;border-bottom:1px solid #eef0f2;cursor:pointer;color:#173b5e}.hv-suggestion:hover{background:#edf5fb}"' _n
+    file write `fh' `".hv-filters{margin:12px 0 8px}.hv-filters .ctrl{flex:1 1 180px}.hv-summary{font-size:12px;font-weight:600;color:#173b5e;margin:8px 0}.hv-viewbar{justify-content:flex-end;margin-bottom:8px}"' _n
+    file write `fh' `".hv-timeline{position:relative;margin:4px 0 0 9px;padding-left:25px;border-left:2px solid #c9d4e0}.hv-event{position:relative;background:#fff;border:1px solid #e1e5e9;border-left:4px solid #9aa7b5;border-radius:7px;padding:8px 10px;margin:0 0 9px}"' _n
+    file write `fh' `".hv-event:before{content:'';position:absolute;left:-35px;top:12px;width:10px;height:10px;border-radius:50%;background:#9aa7b5;border:2px solid #fff}.hv-event.answer{border-left-color:#2e75b6}.hv-event.answer:before{background:#2e75b6}.hv-event.workflow{border-left-color:#C9A227}.hv-event.workflow:before{background:#C9A227}.hv-event.warn{border-left-color:#a33}.hv-event.warn:before{background:#a33}.hv-event.session{border-left-color:#2d7d46}.hv-event.session:before{background:#2d7d46}"' _n
+    file write `fh' `".hv-event-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hv-order{color:#667}.hv-kind{font-weight:700;color:#002244}.hv-gap{margin-left:auto;color:#667;font-size:11px;background:#f1f3f5;border-radius:10px;padding:1px 7px}"' _n
+    file write `fh' `".hv-event-meta{display:flex;gap:12px;flex-wrap:wrap;color:#667;font-size:11px;margin-top:4px}.hv-local{font-weight:600;color:#315777}.hv-actor{font-size:12px;margin-top:5px}.hv-parameters{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fa;border-radius:4px;padding:5px 7px;margin-top:6px;color:#333}"' _n
+    file write `fh' `".hv-tablewrap{overflow:auto;max-height:70vh;border:1px solid #e3e6ea}.hv-tablewrap th{position:sticky;top:0;z-index:2;white-space:nowrap}.hv-tablewrap td{vertical-align:top}.hv-raw-parameters{min-width:280px;white-space:pre-wrap;overflow-wrap:anywhere}"' _n
     file write `fh' `"@media print{.panel{position:static;box-shadow:none}.pbtn,.cpy,.hqlinks{display:none}}"' _n
     file write `fh' `"</style></head><body>"' _n
     file write `fh' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img (class wbLogo) -->"' _n
@@ -7326,20 +8503,15 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="note">Actor-level comparison: every contributor is measured from their own events, including correction-only actors; nobody inherits the primary actor's pace or the last editor's identity. <b>vs team</b> is the actor's typical answer speed relative to the team (0.5 = twice as fast). Shared-minute counts are actor-specific screening buckets. Gold rows have at least one flagged contribution; judge shares only where the interview count is reasonable. <span id="l_more"></span></div>"' _n
     file write `fh' `"<section><table id="t_league"></table></section>"' _n
     file write `fh' `"<h2>Question timing</h2>"' _n
-    file write `fh' `"<div class="note">Survey-wide first-pass median seconds to answer each question. vars() limits this table; actor, status and final-data filter controls do not change its benchmark population. Type to filter; click a column header to sort. Slow questions are usually hard questions - candidates for rewording or interviewer training. <span id="q_more"></span></div>"' _n
+    file write `fh' `"<div class="note"><b>Actor / enumerator</b> and <b>Interview status</b> both filter this table. Status is the record's current/final status when this report was built (data() status takes precedence over paradata). <b>Answer events</b> are first-pass AnswerSet saves, so one interview can contribute several events through a revision, repeated save, or roster instance; for example, 405 events across 381 distinct interviews means 24 additional saves/instances. <b>Distinct interviews</b> counts unique interview IDs. <b>Timed reaches</b> is the subset with a valid within-session gap and is the denominator used by median, p90, and the &lt; `fastsecs' s share; repeated taps remain in Answer events but are not timed reaches. vars() limits the questions; the Filter variable/value controls do not currently change Question timing. Every observed matching variable is shown (questionnaire items with zero first-pass events are not); type to search and click a column header to sort. <span id="q_more"></span></div>"' _n
     file write `fh' `"<section><div class="ctrl" style="max-width:280px;margin-bottom:8px"><label>Filter questions</label><input id="c_q" type="text" placeholder="variable name contains..."></div><table id="t_q"></table></section>"' _n
-    * static removal-history summary (technical, collapsed by default)
-    if `ncasc'>0 & `"`trignames'"'!="" {
-        file write `fh' `"<details style="margin-top:22px"><summary style="cursor:pointer;color:#556575;font-size:13px;font-weight:600">Technical removal-pattern summary</summary>"' _n
-        file write `fh' `"<div class="note">These counts describe historical AnswerRemoved runs. The displayed variable may be either questionnaire-linked or merely the nearest answer event; it is not automatically the cause.</div>"' _n
-        file write `fh' `"<section><table><tr><th>nearby / linked variable</th><th class="r">histories</th><th class="r">interviews</th><th class="r">removal events</th></tr>"' _n
-        local i = 0
-        foreach t of local trignames {
-            local ++i
-            _suso_para_hesc `t'
-            file write `fh' `"<tr><td class="mono">`r(out)'</td><td class="r">`=`RT'[`i',1]'</td><td class="r">`=`RT'[`i',2]'</td><td class="r">`=`RT'[`i',3]'</td></tr>"' _n
-        }
-        file write `fh' `"</table></section></details>"' _n
+    * Removal summaries are rendered from one compact row per already-detected
+    * full-stream run.  This lets the actor control recompute and re-rank the
+    * table without ever changing cascade adjacency or attribution.
+    if `ncasc'>0 {
+        file write `fh' `"<details id="rtech" style="margin-top:22px"><summary style="cursor:pointer;color:#556575;font-size:13px;font-weight:600">Technical removal-pattern summary</summary>"' _n
+        file write `fh' `"<div class="note">These counts describe historical AnswerRemoved runs performed by the selected actor. The displayed variable may be either questionnaire-linked or merely the nearest answer event; it is not automatically the cause. <span id="r_more"></span></div>"' _n
+        file write `fh' `"<section><table><thead><tr><th>nearby / linked variable</th><th class="r">histories</th><th class="r">interviews</th><th class="r">removal events</th></tr></thead><tbody id="t_rsum"></tbody></table></section></details>"' _n
     }
 
     capture confirm file `"`rsdpath'"'
@@ -7361,7 +8533,15 @@ program _suso_para_report, rclass
         capture confirm variable qx_text
         if !_rc local hasqxt 1
 
-        quietly gen str120 e_ac = substr(cond(actor!="", actor, resp),1,120)
+        quietly gen str120 e_ac = substr(cond(actor!="", actor,              ///
+            "Unknown removal actor"),1,120)
+        capture confirm variable actor_key, exact
+        if _rc quietly gen str244 e_ak = ustrlower(strtrim(actor))
+        else {
+            quietly gen str244 e_ak = actor_key
+            quietly replace e_ak = ustrlower(strtrim(actor)) if e_ak==""
+        }
+        quietly replace e_ak = "__unknown_removal_actor__" if e_ak==""
         quietly gen strL e_iid = interview__id
         quietly gen strL e_tg = trigger
         quietly gen strL e_qt = ""
@@ -7384,7 +8564,7 @@ program _suso_para_report, rclass
         quietly gen strL e_assignment_url = ""
         mata: suso_urlencode_var("e_iid", "e_iid_url")
         mata: suso_urlencode_var("hq_assignment", "e_assignment_url")
-        foreach v in e_ac e_iid e_tg e_qt e_wl e_event e_final e_check e_rel hq_assignment {
+        foreach v in e_ac e_ak e_iid e_tg e_qt e_wl e_event e_final e_check e_rel hq_assignment {
             quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
             quietly replace `v' = subinstr(subinstr(`v',char(34),"&#34;",.),char(39),"&#39;",.)
         }
@@ -7416,16 +8596,16 @@ program _suso_para_report, rclass
         quietly gen str24 e_dt = string(ts0/86400000, "%tdDD_Mon_CCYY")
 
         file write `fh' `"<h2>Removal histories requiring a final-data check</h2>"' _n
-        file write `fh' `"<div class="note">Only unresolved histories are shown here. Fully re-answered cases are omitted from this action list and remain available in the Skip removals tab.</div>"' _n
-        file write `fh' `"<section>"' _n
+        file write `fh' `"<div class="note">Only unresolved histories performed by the selected actor are shown here. Fully resolved cases remain available in the Skip/removal tab.</div>"' _n
+        file write `fh' `"<section id="r_actions">"' _n
         quietly count if tier!="C"
         local nshow = r(N)
-        file write `fh' `"<div class="note"><b>"' (strofreal(`nshow')) `"</b> case(s) require a final-data check.</div>"' _n
+        file write `fh' `"<div id="r_action_note" class="note"><b>"' (strofreal(`nshow')) `"</b> case(s) require a final-data check.</div>"' _n
         if `nshow'>0 {
             quietly keep if tier!="C"
-            local kk = min(15, _N)
+            local kk = _N
             forvalues i = 1/`kk' {
-                file write `fh' `"<div style="border-bottom:1px solid #eef0f2;padding:10px 0">"' _n
+                file write `fh' `"<div class="bremcase" data-actor="' (e_ak[`i']) `" style="border-bottom:1px solid #eef0f2;padding:10px 0">"' _n
                 file write `fh' `"<div style="font-size:13px"><span class="mono"><b>"' (e_iid[`i']) `"</b></span> &nbsp; enumerator <b>"' (e_ac[`i']) `"</b> &nbsp; "' (e_dt[`i']) (e_hqlinks[`i']) `"</div>"' _n
                 file write `fh' `"<div style="font-size:12.5px;font-weight:700;color:"' (cond(tier[`i']=="A","#8a1f1f","#7a5b00")) `"">"' (why[`i']) `"</div>"' _n
                 file write `fh' `"<div style="font-size:12.5px;margin-top:4px">"' (e_eventline[`i']) `"</div>"' _n
@@ -7440,17 +8620,26 @@ program _suso_para_report, rclass
                 file write `fh' `"</details></div>"' _n
             }
         }
-        else file write `fh' `"<div class="note" style="color:#1e6b34"><b>No final-data checks are indicated.</b> Every affected question was answered again in the paradata.</div>"' _n
+        file write `fh' `"<div id="r_action_none" class="note" style="display:none;color:#1e6b34"><b>No final-data checks are indicated for this actor.</b></div>"' _n
         file write `fh' `"</section>"' _n
         restore
     }
+    file write `fh' `"<h2>Interview event history</h2>"' _n
+    file write `fh' `"<div class='note'>Select the original <span class='mono'>paradata.tab</span> once per browser tab, then search for any interview ID—or use a queue card's <b>View event history</b> button—to inspect its complete ordered audit trail. Initial indexing can take some time for a multi-million-row file; later lookups stay local. The source file is streamed in the background and is not embedded in this report.</div>"' _n
+    file write `fh' `"<section id='history_explorer'>"' _n
+    file write `fh' `"<div class='hv-privacy'><b>Private and local:</b> the selected file is read only inside this browser tab. It is never uploaded, sent over the network, or stored by this report. Raw parameters can contain answers, GPS coordinates, and other sensitive data.</div>"' _n
+    file write `fh' `"<div class='hv-setup'><div class='ctrl'><label>1. Choose local paradata file</label><input id='hv_file' type='file' accept='.tab,.tsv,.txt,text/tab-separated-values,text/plain'></div><div class='ctrl'><label>File format</label><select id='hv_dialect'><option value='suso'>Survey Solutions TSV (recommended)</option><option value='quoted'>Quoted TSV (tabs/newlines inside quotes)</option></select></div><div class='ctrl hv-idbox'><label>2. Interview ID</label><input id='hv_id' class='mono' type='text' autocomplete='off' spellcheck='false' placeholder='type or paste interview__id' disabled><div id='hv_suggest' class='hv-suggestions'></div></div><button id='hv_load' class='pbtn' type='button' disabled>Open full history</button></div>"' _n
+    file write `fh' `"<progress id='hv_progress' max='100' value='0' style='display:none'></progress><div id='hv_status' class='hv-status'>Choose the matching paradata.tab export to begin.</div>"' _n
+    file write `fh' `"<div id='hv_results' style='display:none'><div id='hv_summary' class='hv-summary'></div><div class='hv-filters'><div class='ctrl'><label>Event type</label><select id='hv_event'></select></div><div class='ctrl'><label>Responsible actor</label><select id='hv_actor'></select></div><div class='ctrl'><label>Search this history</label><input id='hv_search' type='search' placeholder='event, role, variable, value, time ...'></div></div><div class='hv-viewbar'><button id='hv_view_timeline' class='pbtn' type='button'>Friendly timeline</button><button id='hv_view_raw' class='pbtn ghost' type='button'>Raw event table</button></div><div id='hv_timeline' class='hv-timeline'></div><div id='hv_raw' class='hv-tablewrap' style='display:none'><table><thead><tr><th class='r'>source row</th><th class='r'>order</th><th>event</th><th>responsible</th><th>role</th><th>source timestamp</th><th>UTC</th><th>tz offset</th><th>device local (UTC + offset)</th><th>parameters</th></tr></thead><tbody id='hv_raw_body'></tbody></table></div></div>"' _n
+    file write `fh' `"</section>"' _n
     _suso_para_hesc `"`rolenote'"'
     local rnesc `"`r(out)'"'
     local veline ""
     if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.16) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.20) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
+    _suso_para_history_js `fh'
     * ---- embedded data ------------------------------------------------------------
     file write `fh' `"<script>"' _n
     file write `fh' `"var D={"meta":{"fastsecs":`fastsecs',"gapmins":`gapmins',"tzmode":`tzmodej',"lite":`lite',"hasve":`hasve',"hascawi":`hascawi',"haskey":`haskey',"hq":"`hqbasej'","hasassignment":`hasassignment',"fdims":[`jfdims']},"' _n
@@ -7581,14 +8770,69 @@ program _suso_para_report, rclass
     if `hasq' {
         quietly use `"`QT'"', clear
         forvalues i = 1/`=_N' {
+            _suso_jsonesc `"`=qscope[`i']'"'
+            local sj `"`r(js)'"'
             _suso_jsonesc `"`=para_var[`i']'"'
             local vj `"`r(js)'"'
             local med = cond(missing(qmed[`i']), "null", string(qmed[`i'],"%12.1f"))
             local p90 = cond(missing(qp90[`i']), "null", string(qp90[`i'],"%12.1f"))
             local fsh = cond(missing(qfsh[`i']), "null", string(qfsh[`i'],"%12.3f"))
             local sep = cond(`i'==1, "", ",")
-            file write `fh' `"`sep'{"v":"`vj'","n":`=qn[`i']',"ni":`=qni[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
+            file write `fh' `"`sep'{"s":"`sj'","v":"`vj'","n":`=qn[`i']',"ni":`=qni[`i']',"nt":`=qnt[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
         }
+    }
+    file write `fh' `"],"' _n
+    file write `fh' `""aq":["' _n
+    if `hasaq' {
+        quietly use `"`AQT'"', clear
+        forvalues i = 1/`=_N' {
+            _suso_jsonesc `"`=aq_actor[`i']'"'
+            local arj `"`r(js)'"'
+            _suso_jsonesc `"`=para_actor_key[`i']'"'
+            local akj `"`r(js)'"'
+            _suso_jsonesc `"`=para_var[`i']'"'
+            local vj `"`r(js)'"'
+            _suso_jsonesc `"`=qscope[`i']'"'
+            local sj `"`r(js)'"'
+            local med = cond(missing(aqmed[`i']), "null", string(aqmed[`i'],"%12.1f"))
+            local p90 = cond(missing(aqp90[`i']), "null", string(aqp90[`i'],"%12.1f"))
+            local fsh = cond(missing(aqfsh[`i']), "null", string(aqfsh[`i'],"%12.3f"))
+            local sep = cond(`i'==1, "", ",")
+            file write `fh' `"`sep'{"r":"`arj'","k":"`akj'","s":"`sj'","v":"`vj'","n":`=aqn[`i']',"ni":`=aqni[`i']',"nt":`=aqnt[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
+        }
+    }
+    file write `fh' `"],"' _n
+    file write `fh' `""rem":["' _n
+    capture confirm file `"`rsdpath'"'
+    if !_rc & `ncasc'>0 {
+        preserve
+        quietly use `"`rsdpath'"', clear
+        capture confirm variable actor_key, exact
+        if _rc quietly gen str244 actor_key = ustrlower(strtrim(actor))
+        else quietly replace actor_key = ustrlower(strtrim(actor)) if actor_key==""
+        quietly replace actor_key = "__unknown_removal_actor__" if actor_key==""
+        capture confirm variable tier, exact
+        if _rc quietly gen str1 tier = "V"
+        capture confirm variable final_data_checked, exact
+        if _rc quietly gen byte final_data_checked = 0
+        capture confirm variable n_final_check, exact
+        if _rc quietly gen long n_final_check = nopen+nunknown
+        if _N>0 {
+            forvalues i = 1/`=_N' {
+                _suso_jsonesc `"`=cond(actor[`i']!="",actor[`i'],"Unknown removal actor")'"'
+                local raj `"`r(js)'"'
+                _suso_jsonesc `"`=actor_key[`i']'"'
+                local rak `"`r(js)'"'
+                _suso_jsonesc `"`=trigger[`i']'"'
+                local rtj `"`r(js)'"'
+                _suso_jsonesc `"`=interview__id[`i']'"'
+                local riid `"`r(js)'"'
+                local rck = cond(final_data_checked[`i'],n_final_check[`i'],nopen[`i']+nunknown[`i'])
+                local sep = cond(`i'==1, "", ",")
+                file write `fh' `"`sep'{"a":"`raj'","k":"`rak'","t":"`rtj'","id":"`riid'","n":`=nrem[`i']',"q":`=nqrem[`i']',"ra":`=nreanswered[`i']',"ck":`rck',"tier":"`=tier[`i']'"}"' _n
+            }
+        }
+        restore
     }
     file write `fh' `"],"' _n
     file write `fh' `""daily":["' _n
@@ -7603,693 +8847,7 @@ program _suso_para_report, rclass
         }
     }
     file write `fh' `"]};"' _n
-    file write `fh' `"/* suso paradata report - dynamic engine. Pure compute core in P (node-testable), DOM layer below. */"' _n
-    file write `fh' `"var P = {"' _n
-    file write `fh' `"  letters: ['S','B','T','N','C','Z','P','O'],"' _n
-    file write `fh' `"  names: ['Speeding','Fast streak','Too short','Night work','Churn','Duration outlier','Faster than peers','Shared-minute screen'],"' _n
-    file write `fh' `"  presets: {"' _n
-    file write `fh' `"    standard:{burst:8,minact:5,n1:22,n2:6,nshare:0.25,churn:0.20,z:3.5,peer:0.35,ov:3,nmin:10},"' _n
-    file write `fh' `"    lenient:{fs:1.5,burst:12,minact:3,n1:22,n2:6,nshare:0.35,churn:0.30,z:4,peer:0.25,ov:5,nmin:15},"' _n
-    file write `fh' `"    strict:{fs:3,burst:6,minact:10,n1:22,n2:6,nshare:0.15,churn:0.15,z:3,peer:0.45,ov:2,nmin:8}"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  sum: function(a){ var s=0,i; for(i=0;i<a.length;i++) s+=a[i]; return s; },"' _n
-    file write `fh' `"  norm: function(s){ return String(s===null||s===undefined?'':s).trim().toLowerCase(); },"' _n
-    file write `fh' `"  f1: function(x,d){ if(x===null||x===undefined||isNaN(x)) return '.'; return x.toFixed(d===undefined?1:d); },"' _n
-    file write `fh' `"  inWindow: function(h,n1,n2){ if(n1===n2) return false; if(n1<n2) return h>=n1&&h<n2; return h>=n1||h<n2; },"' _n
-    file write `fh' `"  fastShare: function(row,fs){"' _n
-    file write `fh' `"    if(!row.g) return row.fsh;"' _n
-    file write `fh' `"    var t=P.sum(row.g); if(t<=0) return null;"' _n
-    file write `fh' `"    var f=0,i,lim=Math.max(0,Math.ceil(fs*2-1e-9)); for(i=0;i<row.g.length&&i<lim;i++) f+=row.g[i];"' _n
-    file write `fh' `"    return f/t;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  nightShare: function(row,n1,n2){"' _n
-    file write `fh' `"    if(!row.h) return row.nsh;"' _n
-    file write `fh' `"    var t=P.sum(row.h); if(t<=0) return null;"' _n
-    file write `fh' `"    var s=0,i; for(i=0;i<24;i++) if(P.inWindow(i,n1,n2)) s+=row.h[i];"' _n
-    file write `fh' `"    return s/t;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  median: function(a){"' _n
-    file write `fh' `"    if(!a.length) return null;"' _n
-    file write `fh' `"    var b=a.slice().sort(function(x,y){return x-y;});"' _n
-    file write `fh' `"    var m=Math.floor(b.length/2);"' _n
-    file write `fh' `"    return b.length%2 ? b[m] : (b[m-1]+b[m])/2;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  zctx: function(rows){"' _n
-    file write `fh' `"    var lx=[],i;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].itq===1&&rows[i].af>0&&rows[i].im!==1&&rows[i].imm!==1) lx.push(Math.log(rows[i].af));"' _n
-    file write `fh' `"    if(lx.length<10) return null;"' _n
-    file write `fh' `"    var med=P.median(lx), dev=[],j;"' _n
-    file write `fh' `"    for(j=0;j<lx.length;j++) dev.push(Math.abs(lx[j]-med));"' _n
-    file write `fh' `"    var mad=P.median(dev);"' _n
-    file write `fh' `"    if(!(mad>0)) return null;"' _n
-    file write `fh' `"    return {med:med, mad:mad};"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  zval: function(row,ctx){"' _n
-    file write `fh' `"    var tq=row.itq, m=row.im, mm=row.imm;"' _n
-    file write `fh' `"    if(!ctx||tq!==1||m===1||mm===1||!(row.af>0)) return null;"' _n
-    file write `fh' `"    return 0.6745*(Math.log(row.af)-ctx.med)/ctx.mad;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  team: function(rows){"' _n
-    file write `fh' `"    var med=[],nq=[],act=[],i,r;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
-    file write `fh' `"      r=rows[i];"' _n
-    file write `fh' `"      if(r.af!==null&&r.af!==undefined) act.push(r.af);"' _n
-    file write `fh' `"      if(r.med!==null) med.push(r.med);"' _n
-    file write `fh' `"      if(r.nq!==null&&r.nq!==undefined) nq.push(r.nq);"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    return {med:P.median(med), nq:P.median(nq), act:P.median(act)};"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  isCapi: function(row){ return row.m!==1 && row.mm!==1 && row.mu!==1; },"' _n
-    file write `fh' `"  flagsFor: function(row,S,ctx){"' _n
-    file write `fh' `"    var capi=P.isCapi(row);"' _n
-    file write `fh' `"    var primaryView=!row.vr || row.vp===1;"' _n
-    file write `fh' `"    var dcapi=row.im!==1&&row.imm!==1, dtq=row.itq;"' _n
-    file write `fh' `"    var support=row.vr?(row.vans||0):(row.pans||row.nt||0);"' _n
-    file write `fh' `"    var nsh=P.nightShare(row,S.n1,S.n2), z=P.zval(row,ctx);"' _n
-    file write `fh' `"    return ["' _n
-    file write `fh' `"      capi && row.tq===1 && row.med!==null && row.med<S.fs && row.nt>=S.nmin,"' _n
-    file write `fh' `"      capi && row.tq===1 && row.fr>=S.burst && row.nt>=S.nmin,"' _n
-    file write `fh' `"      primaryView && dcapi && dtq===1 && row.nc>0 && row.af!==null && row.af<S.minact,"' _n
-    file write `fh' `"      capi && row.lq===1 && row.to!==1 && nsh!==null && nsh>S.nshare && row.nt>=S.nmin,"' _n
-    file write `fh' `"      row.ch!==null && row.ch>S.churn && support>=S.nmin,"' _n
-    file write `fh' `"      primaryView && dcapi && dtq===1 && z!==null && Math.abs(z)>S.z,"' _n
-    file write `fh' `"      capi && row.tq===1 && row.rt!==null && row.rt<S.peer && row.nt>=S.nmin,"' _n
-    file write `fh' `"      row.ov>=S.ov"' _n
-    file write `fh' `"    ];"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  resub: function(row){ return row.rj>0 && row.rbc===1 && row.re===0; },"' _n
-    file write `fh' `"  softResub: function(row){"' _n
-    file write `fh' `"    return row.rj>0 && row.rbc===1 && row.re>0 && row.rq!==null && row.rq>=1 && row.rq<=2 && row.rb!==null && row.rb>=0 && row.rb<10;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  unknownResub: function(row){ return row.rj>0 && row.rbc===1 && row.re>0 && (row.rq===null||row.rq===0); },"' _n
-    file write `fh' `"  multiDay: function(row){ return row.on===1&&row.ilq===1&&row.ito!==1; },"' _n
-    file write `fh' `"  postEdit: function(row){ return (row.pcf||0)>0; },"' _n
-    file write `fh' `"  unresolvedRemoval: function(row){ return row.fdc===1 ? (row.fck||0)>0 : ((row.cop||0)+(row.cu||0))>0; },"' _n
-    file write `fh' `"  domains: function(row){"' _n
-    file write `fh' `"    var f=row._f||[false,false,false,false,false,false,false,false];"' _n
-    file write `fh' `"    var pace=(f[0]?1:0)+(f[1]?1:0)+(f[6]?1:0), duration=(f[2]?1:0)+(f[5]?1:0);"' _n
-    file write `fh' `"    var n=(pace>0?1:0)+(duration>0?1:0)+(f[3]?1:0)+(f[4]?1:0)+(f[7]?1:0);"' _n
-    file write `fh' `"    return {n:n,pace:pace,duration:duration};"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  tierFor: function(row){"' _n
-    file write `fh' `"    var d=P.domains(row);"' _n
-    file write `fh' `"    if(row._r) return 'A';"' _n
-    file write `fh' `"    if(d.n>=3) return 'A';"' _n
-    file write `fh' `"    if(d.n>=2 || d.pace>=2 || d.duration>=2 || row._f[7]) return 'V';"' _n
-    file write `fh' `"    if(P.softResub(row) || P.unknownResub(row) || P.unresolvedRemoval(row) || row.wsm===1) return 'V';"' _n
-    file write `fh' `"    if(row._n>0 || P.multiDay(row) || P.postEdit(row)) return 'W';"' _n
-    file write `fh' `"    return '';"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  evidence: function(row,S,team,meta){"' _n
-    file write `fh' `"    meta=meta||{};"' _n
-    file write `fh' `"    var out=[], f=row._f;"' _n
-    file write `fh' `"    if(f[7]) out.push({t:'flag', s:(row.ova||'An interviewer')+' recorded answers in this and another interview in '+row.ov+' shared UTC-minute bucket(s). This is a screening match, not proof of simultaneous interviewing.'+(row.ovd?(' Trace: '+row.ovd):'')});"' _n
-    file write `fh' `"    if(row._r){"' _n
-    file write `fh' `"      var w='Rejected, then re-completed ';"' _n
-    file write `fh' `"      if(row.rb!==null) w+=P.f1(row.rb,0)+' min later ';"' _n
-    file write `fh' `"      out.push({t:'hard', s:w+'with no question changed between rejection and re-completion.'});"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    else if(P.softResub(row)) out.push({t:'flag', s:'Rejected, re-completed after '+P.f1(row.rb,0)+' min with '+row.rq+' distinct question(s) touched in '+row.re+' edit event(s)'+(row.rba?(' by '+row.rba):'')+(row.rbv?(' ['+row.rbv+']'):'')+'.'});"' _n
-    file write `fh' `"    else if(P.unknownResub(row)) out.push({t:'flag', s:'Rejected and re-completed after '+row.re+' edit event(s), but this reduced paradata does not identify the distinct questions touched.'});"' _n
-    file write `fh' `"    else if(row.rbb===1) out.push({t:'info', s:'A rejection/completion cycle has reversed timestamps; its turnaround duration was not scored.'});"' _n
-    file write `fh' `"    var metricActor=row.vr||row.r;"' _n
-    file write `fh' `"    if(f[0]) out.push({t:'flag', s:'Interviewer '+metricActor+' had a typical first-pass answer time of '+P.f1(row.med,1)+' s across '+row.nt+' timed answers'+(team.med!==null?' (team typical '+P.f1(team.med,1)+' s)':'')+'.'});"' _n
-    file write `fh' `"    if(f[6]) out.push({t:'flag', s:'Finished its questions in '+P.f1(100*row.rt,0)+'% of the time colleagues typically need on those same questions.'});"' _n
-    file write `fh' `"    if(f[1]){"' _n
-    file write `fh' `"      var wfs=P.fastShare(row,S.fs);"' _n
-    file write `fh' `"      out.push({t:'flag', s:'Interviewer '+metricActor+' had a within-session streak of '+row.fr+' consecutive first-pass questions, each answered in under '+(meta.fastsecs||2)+' s'+(wfs!==null?(' ('+P.f1(100*wfs,0)+'% of first-pass timed answers were under '+S.fs+' s)'):'')+'.'});"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    if(f[2]){"' _n
-    file write `fh' `"      var w2='First completion followed only '+P.f1(row.af,1)+' min of active first-pass work';"' _n
-    file write `fh' `"      if(row.nq!==null&&row.nq!==undefined&&team.nq!==null) w2+=' - '+row.nq+' distinct questions answered (team median '+P.f1(team.nq,0)+')';"' _n
-    file write `fh' `"      out.push({t:'flag', s:w2+'.'});"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    if(f[3]){"' _n
-    file write `fh' `"      var w3=P.f1(100*P.nightShare(row,S.n1,S.n2),0)+'% of answering happened between '+S.n1+':00 and '+S.n2+':00 device time.';"' _n
-    file write `fh' `"      if(row.to===1) w3+=' Caution: this tablet clock is unreliable (offset differs from the team or changed mid-fieldwork).';"' _n
-    file write `fh' `"      out.push({t:'flag', s:w3, cav:(row.to===1)});"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    if(f[4]) out.push({t:'flag', s:P.f1(100*row.ch,0)+' answers removed per 100 set.'});"' _n
-    file write `fh' `"    if(f[5]) out.push({t:'flag', s:'First-pass active time '+P.f1(row.af,1)+' min is far outside the survey-wide pattern.'});"' _n
-    file write `fh' `"    if(row.vr && row.vp!==1 && row.itq===1 && row.im!==1 && row.imm!==1 && row.nc>0 && row.af!==null && row.af<S.minact) out.push({t:'info', s:'The interview-level short-duration context belongs to primary interviewer '+row.r+'; it is not attributed to selected correction actor '+row.vr+'.'});"' _n
-    file write `fh' `"    if(P.unresolvedRemoval(row)) out.push({t:'flag', s:'Final-data review after a historical removal run: '+row.fda+' answered; '+row.fad+' answered while disabled; '+row.feb+' blank as expected because disabled; '+row.fbe+' blank while enabled; '+row.flu+' logic unknown; '+row.fnd+' not in supplied data.'});"' _n
-    file write `fh' `"    else if(row.cas>0) out.push({t:'info', s:'Historical removal run resolved: '+row.fda+' answered and '+row.feb+' correctly blank because disabled. No action from this history alone.'});"' _n
-    file write `fh' `"    if(row.ho===1) out.push({t:'info', s:'Fieldwork involved '+row.na+' actors. Primary: '+row.r+' ('+P.f1(100*row.pas,0)+'% of field answers); last editor: '+(row.le||'-')+'. Metrics and flags are attributed to the actor who generated them, not automatically to the last editor.'});"' _n
-    file write `fh' `"    if(P.multiDay(row)) out.push({t:'flag', s:'First-pass work continued on '+row.wd+' device-local dates ('+(row.d0||'?')+' to '+(row.d1||'?')+'), with a longest pre-completion pause of '+P.f1(row.lpp,0)+' min. Active work excludes that pause.'});"' _n
-    file write `fh' `"    else if(row.on===1) out.push({t:'info', s:'First-pass work spans multiple recorded local dates, but local-clock quality is unreliable; no multi-day review signal was applied.'});"' _n
-    file write `fh' `"    else if(row.lp!==null && row.lp>=60) out.push({t:'info', s:'Longest pause between work sessions was '+P.f1(row.lp,0)+' min; active time excludes it.'});"' _n
-    file write `fh' `"    if(row.pr===1) out.push({t:'info', s:'The case returned to field activity after an earlier completion; total active time is '+P.f1(row.act,1)+' min versus '+P.f1(row.af,1)+' min through first completion.'});"' _n
-    file write `fh' `"    if(row.m===1) out.push({t:'info', s:'Selected behavior actor worked in CAWI - actor speed, streak, night and peer signals were not applied.'});"' _n
-    file write `fh' `"    if(row.mm===1) out.push({t:'info', s:'Selected behavior actor has mixed CAPI/CAWI answers - actor timing signals were suppressed.'});"' _n
-    file write `fh' `"    if(row.mu===1) out.push({t:'info', s:'Selected actor collection mode is unavailable in this paradata - mode-dependent timing signals were suppressed.'});"' _n
-    file write `fh' `"    if(row.tq!==1) out.push({t:'info', s:'Selected actor timing is incomplete or reversed; actor speed, streak and peer signals were suppressed.'});"' _n
-    file write `fh' `"    if(row.itq!==1 || row.im===1 || row.imm===1) out.push({t:'info', s:'Whole-interview first-pass timing/mode quality is unsuitable; short-duration and duration-outlier signals were suppressed.'});"' _n
-    file write `fh' `"    if(row.wsm===1) out.push({t:'flag', s:'Workflow status differs between paradata ('+(row.wsp||'-')+') and final data ('+(row.wsd||'-')+'). The displayed status comes from '+row.wss+'.'});"' _n
-    file write `fh' `"    if(row.to===1 && !f[3]){"' _n
-    file write `fh' `"      if(row.tz!==null && meta.tzmode!==undefined && meta.tzmode!==null && Math.abs(row.tz-meta.tzmode)<0.05)"' _n
-    file write `fh' `"        out.push({t:'info', s:'The tablet clock offset changed during fieldwork on this interview - its hours are unreliable.'});"' _n
-    file write `fh' `"      else out.push({t:'info', s:'Tablet clock offset '+(row.tz===null?'?':P.f1(row.tz,1))+' h differs from the team ('+P.f1(meta.tzmode,1)+' h).'});"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    if(P.postEdit(row)) out.push({t:'flag', s:'Interviewer recorded '+row.pcf+' answer edit(s) after completion outside a rejection-correction episode.'+(row.pcd?(' Trace: '+row.pcd):'')});"' _n
-    file write `fh' `"    else if((row.pca||0)>0) out.push({t:'info', s:'Post-completion audit trail contains '+row.pca+' answer edit(s)'+(row.pcn>0?(' ('+row.pcn+' by Supervisor/HQ/API roles)'):'')+'.'+(row.pcd?(' Outside-cycle trace: '+row.pcd):'' )});"' _n
-    file write `fh' `"    if(row.ve!==null && row.ve>0) out.push({t:'info', s:row.ve+' validation error(s) still open.'});"' _n
-    file write `fh' `"    return out;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  forActor: function(row,a){"' _n
-    file write `fh' `"    var x=Object.create(null),k; for(k in row) if(Object.prototype.hasOwnProperty.call(row,k)) x[k]=row[k];"' _n
-    file write `fh' `"    x.itq=row.itq; x.ilq=row.ilq; x.im=row.im; x.imm=row.imm; x.imu=row.imu; x.ito=row.ito; x.iaf=row.af; x.iact=row.act;"' _n
-    file write `fh' `"    x.vr=a.r; x.vp=a.p; x.vf=a.f; x.vl=a.l; x.vshare=a.share; x.vans=a.ans; x.vansf=a.ansf; x.vq=a.q; x.vss=a.ss; x.vact=a.act; x.vaf=a.af;"' _n
-    file write `fh' `"    x.med=a.med; x.nt=a.nt; x.fsh=a.fsh; x.nsh=a.nsh; x.ch=a.ch; x.rt=a.rt; x.fr=a.fr; x.ov=a.ov; x.ova=a.r; x.ovd=a.ovd||'';"' _n
-    file write `fh' `"    x.tq=a.tq; x.lq=a.lq; x.m=a.m; x.mm=a.mm; x.mu=a.mu; x.tz=a.tz; x.to=a.to; x.h=a.h||null; x.g=a.g||null;"' _n
-    file write `fh' `"    return x;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  filterRows: function(rows,resp,ws,fd,fv,actors){"' _n
-    file write `fh' `"    var out=[],i,j,r,a,x,amap=null,rkey=P.norm(resp);"' _n
-    file write `fh' `"    if(resp){ amap=Object.create(null); for(j=0;j<(actors||[]).length;j++) if(P.norm(actors[j].r)===rkey) amap[actors[j].id]=actors[j]; }"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
-    file write `fh' `"      r=rows[i];"' _n
-    file write `fh' `"      x=r;"' _n
-    file write `fh' `"      if(resp){"' _n
-    file write `fh' `"        a=amap[r.id]||null;"' _n
-    file write `fh' `"        if(!a) continue; x=P.forActor(r,a);"' _n
-    file write `fh' `"      }"' _n
-    file write `fh' `"      if(ws){"' _n
-    file write `fh' `"        if(ws==='APP'){ if(r.wsc!=='approvebyhq' && r.wsc!=='approvebysup') continue; }"' _n
-    file write `fh' `"        else if(r.ws!==ws) continue;"' _n
-    file write `fh' `"      }"' _n
-    file write `fh' `"      if(fd && fv){ if(!r.f || r.f[fd]!==fv) continue; }"' _n
-    file write `fh' `"      out.push(x);"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    return out;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  aggregate: function(rows,S,ctx){"' _n
-    file write `fh' `"    if(arguments.length<3) ctx=P.zctx(rows); var tot=[0,0,0,0,0,0,0,0], flagged=[], tiers={A:0,V:0,W:0}, i,j;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
-    file write `fh' `"      var f=P.flagsFor(rows[i],S,ctx), n=0;"' _n
-    file write `fh' `"      for(j=0;j<8;j++){ if(f[j]){tot[j]++;n++;} }"' _n
-    file write `fh' `"      rows[i]._f=f; rows[i]._n=n;"' _n
-    file write `fh' `"      rows[i]._r=P.resub(rows[i]);"' _n
-    file write `fh' `"      rows[i]._d=P.domains(rows[i]);"' _n
-    file write `fh' `"      rows[i]._t=P.tierFor(rows[i]);"' _n
-    file write `fh' `"      if(rows[i]._t!==''){ flagged.push(rows[i]); tiers[rows[i]._t]++; }"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    var rank={A:0,V:1,W:2};"' _n
-    file write `fh' `"    flagged.sort(function(a,b){"' _n
-    file write `fh' `"      if(rank[a._t]!==rank[b._t]) return rank[a._t]-rank[b._t];"' _n
-    file write `fh' `"      if(b._d.n!==a._d.n) return b._d.n-a._d.n;"' _n
-    file write `fh' `"      if(b._n!==a._n) return b._n-a._n;"' _n
-    file write `fh' `"      if(b.wip!==a.wip) return b.wip-a.wip;"' _n
-    file write `fh' `"      var am=a.med===null?1e9:a.med, bm=b.med===null?1e9:b.med;"' _n
-    file write `fh' `"      return am-bm;"' _n
-    file write `fh' `"    });"' _n
-    file write `fh' `"    return {tot:tot, flagged:flagged, tiers:tiers, n:rows.length, ctx:ctx};"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  niceBin: function(p99){"' _n
-    file write `fh' `"    var c=[1,2,5,10,15,30,60,120,240,480], i, b=1;"' _n
-    file write `fh' `"    for(i=0;i<c.length;i++){ b=c[i]; if(c[i]*20>=p99) break; }"' _n
-    file write `fh' `"    return b;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  binsActive: function(rows){"' _n
-    file write `fh' `"    var act=[],i;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].af!==null&&rows[i].af!==undefined) act.push(rows[i].af);"' _n
-    file write `fh' `"    if(!act.length) return {w:1,c:[]};"' _n
-    file write `fh' `"    var s=act.slice().sort(function(x,y){return x-y;});"' _n
-    file write `fh' `"    var p99=Math.max(s[Math.min(s.length-1,Math.floor(0.99*s.length))],1);"' _n
-    file write `fh' `"    var w=P.niceBin(p99), c=[],k;"' _n
-    file write `fh' `"    for(k=0;k<20;k++) c.push(0);"' _n
-    file write `fh' `"    for(i=0;i<act.length;i++) c[Math.min(Math.floor(act[i]/w),19)]++;"' _n
-    file write `fh' `"    return {w:w,c:c};"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  binsMed: function(rows){"' _n
-    file write `fh' `"    var c=[],k,i;"' _n
-    file write `fh' `"    for(k=0;k<21;k++) c.push(0);"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++) if(rows[i].med!==null) c[Math.min(Math.floor(rows[i].med),20)]++;"' _n
-    file write `fh' `"    return c;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  hourTotals: function(rows){"' _n
-    file write `fh' `"    var t=[],k,i,j;"' _n
-    file write `fh' `"    for(k=0;k<24;k++) t.push(0);"' _n
-    file write `fh' `"    var any=false;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
-    file write `fh' `"      if(!rows[i].h) continue;"' _n
-    file write `fh' `"      any=true;"' _n
-    file write `fh' `"      for(j=0;j<24;j++) t[j]+=rows[i].h[j];"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    return any?t:null;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  dailyTotals: function(daily,resp){"' _n
-    file write `fh' `"    var m=Object.create(null),i,k;"' _n
-    file write `fh' `"    for(i=0;i<daily.length;i++){"' _n
-    file write `fh' `"      if(resp&&P.norm(daily[i].r)!==P.norm(resp)) continue;"' _n
-    file write `fh' `"      k=daily[i].d;"' _n
-    file write `fh' `"      m[k]=(m[k]||0)+daily[i].c;"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    var keys=Object.keys(m).sort(), out=[];"' _n
-    file write `fh' `"    for(i=0;i<keys.length;i++) out.push({d:keys[i],c:m[keys[i]]});"' _n
-    file write `fh' `"    return out;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  league: function(rows,actors,S,resp){"' _n
-    file write `fh' `"    var allowed=Object.create(null), rowmap=Object.create(null), m=Object.create(null), i,a,g,any,q,capi;"' _n
-    file write `fh' `"    for(i=0;i<rows.length;i++){ allowed[rows[i].id]=1; rowmap[rows[i].id]=rows[i]; }"' _n
-    file write `fh' `"    for(i=0;i<actors.length;i++){"' _n
-    file write `fh' `"      a=actors[i]; if(!allowed[a.id]||!a.r||(resp&&P.norm(a.r)!==P.norm(resp))) continue;"' _n
-    file write `fh' `"      if(!m[a.r]) m[a.r]={r:a.r,n:0,primary:0,correction:0,fl:0,ov:0,act:[],med:[],fsh:[],nsh:[]};"' _n
-    file write `fh' `"      g=m[a.r]; q=rowmap[a.id]||{}; capi=P.isCapi(a); any=false; g.n++; if(a.p===1) g.primary++; else g.correction++;"' _n
-    file write `fh' `"      if(capi && a.tq===1 && a.nt>=S.nmin && a.med!==null && a.med<S.fs) any=true;"' _n
-    file write `fh' `"      if(capi && a.tq===1 && a.nt>=S.nmin && a.fr>=S.burst) any=true;"' _n
-    file write `fh' `"      if(capi && a.lq===1 && a.to!==1 && a.nt>=S.nmin && a.nsh!==null && a.nsh>S.nshare) any=true;"' _n
-    file write `fh' `"      if(a.ans>=S.nmin && a.ch!==null && a.ch>S.churn) any=true;"' _n
-    file write `fh' `"      if(capi && a.tq===1 && a.nt>=S.nmin && a.rt!==null && a.rt<S.peer) any=true;"' _n
-    file write `fh' `"      if(a.ov>=S.ov) any=true;"' _n
-    file write `fh' `"      if((P.resub(q)||P.softResub(q)||P.unknownResub(q)) && P.norm(q.rba)===P.norm(a.r)) any=true;"' _n
-    file write `fh' `"      if(any) g.fl++; g.ov+=a.ov||0;"' _n
-    file write `fh' `"      if(a.af!==null&&a.af!==undefined) g.act.push(a.af);"' _n
-    file write `fh' `"      if(a.med!==null) g.med.push(a.med);"' _n
-    file write `fh' `"      if(a.fsh!==null) g.fsh.push(a.fsh);"' _n
-    file write `fh' `"      if(a.nsh!==null) g.nsh.push(a.nsh);"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    var out=[],k;"' _n
-    file write `fh' `"    for(k in m){ if(Object.prototype.hasOwnProperty.call(m,k)) out.push(m[k]); }"' _n
-    file write `fh' `"    for(i=0;i<out.length;i++){"' _n
-    file write `fh' `"      out[i].medact=P.median(out[i].act);"' _n
-    file write `fh' `"      out[i].medmed=P.median(out[i].med);"' _n
-    file write `fh' `"      out[i].mfsh=out[i].fsh.length?P.sum(out[i].fsh)/out[i].fsh.length:null;"' _n
-    file write `fh' `"      out[i].mnsh=out[i].nsh.length?P.sum(out[i].nsh)/out[i].nsh.length:null;"' _n
-    file write `fh' `"      out[i].share=out[i].fl/out[i].n;"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    out.sort(function(a,b){ if(b.share!==a.share) return b.share-a.share; return b.n-a.n; });"' _n
-    file write `fh' `"    return out;"' _n
-    file write `fh' `"  },"' _n
-    file write `fh' `"  csv: function(flagged,S,team,meta){"' _n
-    file write `fh' `"    var Q=String.fromCharCode(34);"' _n
-    file write `fh' `"    function cell(x){"' _n
-    file write `fh' `"      if(x===null||x===undefined) return '';"' _n
-    file write `fh' `"      var s=String(x);"' _n
-    file write `fh' `"      if(/^[\x00-\x20]*[=+\-@]/.test(s)) s=String.fromCharCode(39)+s;"' _n
-    file write `fh' `"      if(s.indexOf(',')>=0||s.indexOf(Q)>=0||s.indexOf('\n')>=0||s.indexOf('\r')>=0) return Q+s.split(Q).join(Q+Q)+Q;"' _n
-    file write `fh' `"      return s;"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    meta=meta||{};"' _n
-    file write `fh' `"    var head=['tier','risk_domains','flags','interview_key','interview_id','assignment_id','metric_actor','primary_interviewer','last_editor','first_interviewer','metric_actor_answer_share','metric_actor_answers','metric_actor_first_pass_answers','metric_actor_active_first_pass_min','metric_actor_active_total_min','metric_actor_question_instances','metric_actor_sessions','field_actor_count','primary_answer_share','status','status_source','status_paradata','status_final_data','status_mismatch','first_pass_first_day','first_pass_last_day','first_pass_work_days','interview_sessions_total','interview_sessions_first_pass','interview_sessions_rework','interview_active_first_pass_min','interview_active_total_min','interview_elapsed_span_min','interview_first_pass_span_min','longest_pause_min','longest_precompletion_pause_min','continued_multiple_days','postcompletion_return','metric_actor_timing_ok','metric_actor_local_time_ok','metric_actor_mode','interview_timing_ok','interview_mode','metric_actor_timed_answers','interview_timed_answers_total','interview_questions_answered','primary_question_instances','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_actor','overlap_min_actor','overlap_min_all_actors','overlap_trace','rejections','resubmit_min','resubmit_questions','resubmit_edit_events','resubmit_field_edit_events','resubmit_actor','resubmit_question_list','cascades','questions_affected','post_completion_field_answer_sets','post_completion_all_answer_edits','post_completion_nonfield_edits','post_completion_outside_cycle','post_completion_field_outside_cycle','post_completion_nonfield_outside_cycle','post_completion_trace','open_errors','review_reasons','context_notes','interview_url','assignment_url'];"' _n
-    file write `fh' `"    var lines=[head.join(',')], i, r, j, pat,ev,why,notes,vals,base,iu,au;"' _n
-    file write `fh' `"    var tname={A:'INVESTIGATE',V:'VERIFY',W:'WATCH'};"' _n
-    file write `fh' `"    for(i=0;i<flagged.length;i++){"' _n
-    file write `fh' `"      r=flagged[i]; pat='';"' _n
-    file write `fh' `"      for(j=0;j<8;j++) if(r._f[j]) pat+=P.letters[j];"' _n
-    file write `fh' `"      if(r._r) pat+='R';"' _n
-    file write `fh' `"      if(P.softResub(r)) pat+='Q'; if(P.unknownResub(r)) pat+='X'; if(P.unresolvedRemoval(r)) pat+='U'; if(P.multiDay(r)) pat+='D'; if(P.postEdit(r)) pat+='E'; if(r.wsm===1) pat+='M';"' _n
-    file write `fh' `"      ev=P.evidence(r,S,team,meta); why=[]; notes=[];"' _n
-    file write `fh' `"      for(j=0;j<ev.length;j++){ if(ev[j].t==='info') notes.push(ev[j].s); else why.push(ev[j].s); }"' _n
-    file write `fh' `"      base=meta.hq?String(meta.hq).replace(/\/+$/,''):''; iu=base?(base+'/Interview/Review/'+encodeURIComponent(r.id)):''; au=(base&&r.a)?(base+'/Assignments/'+encodeURIComponent(r.a)):'';"' _n
-    file write `fh' `"      vals=[tname[r._t],r._d?r._d.n:'',pat,r.k,r.id,r.a,(r.vr||r.r),r.r,r.le,r.fi,P.f1(r.vr?r.vshare:r.pas,3),(r.vr?r.vans:r.pans),(r.vr?r.vansf:r.pansf),P.f1(r.vr?r.vaf:r.paf,2),P.f1(r.vr?r.vact:r.pact,2),(r.vr?r.vq:r.pq),(r.vr?r.vss:r.pss),r.na,P.f1(r.pas,3),r.ws,r.wss,r.wsp,r.wsd,r.wsm,r.d0,r.d1,r.wd,r.ss,r.sf,r.sr,P.f1(r.af,2),P.f1(r.act,2),P.f1(r.sp,1),P.f1(r.spf,1),P.f1(r.lp,1),P.f1(r.lpp,1),(P.multiDay(r)?1:0),r.pr,r.tq,r.lq,(r.mu===1?'UNKNOWN':(r.mm===1?'MIXED':(r.m===1?'CAWI':'CAPI'))),r.itq,(r.imu===1?'UNKNOWN':(r.imm===1?'MIXED':(r.im===1?'CAWI':'CAPI'))),r.nt,r.ntt,r.nq,r.pq,P.f1(r.med,2),P.f1(P.fastShare(r,S.fs),3),r.fr,P.f1(P.nightShare(r,S.n1,S.n2),3),P.f1(r.ch,3),P.f1(r.rt,3),r.ova,r.ov,r.ovt,r.ovd,r.rj,P.f1(r.rb,1),r.rq,r.re,r.ref,r.rba,r.rbv,r.cas,r.wip,r.pc,r.pca,r.pcn,r.pco,r.pcf,r.pcno,r.pcd,(r.ve===null?'':r.ve),why.join(' | '),notes.join(' | '),iu,au];"' _n
-    file write `fh' `"      for(j=0;j<vals.length;j++) vals[j]=cell(vals[j]); lines.push(vals.join(','));"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    return lines.join('\n');"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"};"' _n
-    file write `fh' `"if (typeof module!=='undefined' && module.exports) module.exports=P;"' _n
-    file write `fh' _n
-    file write `fh' `"/* ---------------- DOM layer (browser only) ---------------- */"' _n
-    file write `fh' `"if (typeof document!=='undefined') {"' _n
-    file write `fh' _n
-    file write `fh' `"var Q=String.fromCharCode(34);"' _n
-    file write `fh' `"var expOpen=Object.create(null);"' _n
-    file write `fh' `"var lastA=null, lastS=null, lastTeam=null;"' _n
-    file write `fh' `"function el(id){ return document.getElementById(id); }"' _n
-    file write `fh' `"function fmt(x,d){"' _n
-    file write `fh' `"  if(x===null||x===undefined||isNaN(x)) return '.';"' _n
-    file write `fh' `"  var s=x.toFixed(d===undefined?1:d);"' _n
-    file write `fh' `"  return s;"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function fmtc(x){"' _n
-    file write `fh' `"  if(x===null||x===undefined) return '.';"' _n
-    file write `fh' `"  var s=String(Math.round(x)), out='', c=0, i;"' _n
-    file write `fh' `"  for(i=s.length-1;i>=0;i--){ out=s.charAt(i)+out; c++; if(c%3===0&&i>0) out=','+out; }"' _n
-    file write `fh' `"  return out;"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function esc(s){"' _n
-    file write `fh' `"  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function attr(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }"' _n
-    file write `fh' `"function hqLinks(r){"' _n
-    file write `fh' `"  var b=(D.meta&&D.meta.hq)?String(D.meta.hq):'';"' _n
-    file write `fh' `"  if(!b) return '';"' _n
-    file write `fh' `"  b=b.replace(/\/+$/,'');"' _n
-    file write `fh' `"  var iu=b+'/Interview/Review/'+encodeURIComponent(r.id);"' _n
-    file write `fh' `"  var s='<span class='+Q+'hqlinks'+Q+'><a class='+Q+'hqlink'+Q+' target='+Q+'_blank'+Q+' rel='+Q+'noopener noreferrer'+Q+' href='+Q+attr(iu)+Q+'>Open interview</a>';"' _n
-    file write `fh' `"  if(r.a){ var au=b+'/Assignments/'+encodeURIComponent(r.a); s+='<a class='+Q+'hqlink secondary'+Q+' target='+Q+'_blank'+Q+' rel='+Q+'noopener noreferrer'+Q+' href='+Q+attr(au)+Q+'>Open assignment</a>'; }"' _n
-    file write `fh' `"  return s+'</span>';"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function copyText(t){"' _n
-    file write `fh' `"  var ta=document.createElement('textarea');"' _n
-    file write `fh' `"  ta.value=t; ta.style.position='fixed'; ta.style.left='-999px';"' _n
-    file write `fh' `"  document.body.appendChild(ta); ta.select();"' _n
-    file write `fh' `"  try{ document.execCommand('copy'); }catch(e){}"' _n
-    file write `fh' `"  document.body.removeChild(ta);"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"function svgBars(counts,labels,hi,opts){"' _n
-    file write `fh' `"  opts=opts||{};"' _n
-    file write `fh' `"  function at(n,v){ return ' '+n+'='+Q+v+Q; }"' _n
-    file write `fh' `"  var w=opts.w||940, hgt=opts.hgt||170, lstep=opts.lstep||1, showv=opts.vals||false;"' _n
-    file write `fh' `"  var k=counts.length, maxc=0, i;"' _n
-    file write `fh' `"  for(i=0;i<k;i++) if(counts[i]>maxc) maxc=counts[i];"' _n
-    file write `fh' `"  if(maxc<=0||k===0) return '<p class=\"nodata\">Nothing to plot for this selection.</p>';"' _n
-    file write `fh' `"  var plotw=w-16, ploth=hgt-34, step=plotw/k, barw=Math.max(Math.floor(step)-2,1);"' _n
-    file write `fh' `"  var s='<svg'+at('viewBox','0 0 '+w+' '+hgt)+at('width','100%')+at('xmlns','http://www.w3.org/2000/svg')+'>';"' _n
-    file write `fh' `"  s+='<text'+at('x',8)+at('y',12)+at('font-size',10)+at('fill','#888')+'>max '+fmtc(maxc)+'</text>';"' _n
-    file write `fh' `"  s+='<line'+at('x1',8)+at('y1',hgt-22)+at('x2',w-8)+at('y2',hgt-22)+at('stroke','#d5d9de')+'></line>';"' _n
-    file write `fh' `"  for(i=0;i<k;i++){"' _n
-    file write `fh' `"    var c=counts[i], hb=Math.round(c/maxc*(ploth-16));"' _n
-    file write `fh' `"    if(c>0&&hb<2) hb=2;"' _n
-    file write `fh' `"    var x=Math.round(8+i*step), y=hgt-22-hb;"' _n
-    file write `fh' `"    var col=(hi&&hi.indexOf(i)>=0)?'#C9A227':'#002244';"' _n
-    file write `fh' `"    if(c>0) s+='<rect'+at('x',x)+at('y',y)+at('width',barw)+at('height',hb)+at('fill',col)+'><title>'+fmtc(c)+'</title></rect>';"' _n
-    file write `fh' `"    if(showv&&c>0) s+='<text'+at('x',x+Math.floor(barw/2))+at('y',y-4)+at('font-size',10)+at('fill','#333')+at('text-anchor','middle')+'>'+fmtc(c)+'</text>';"' _n
-    file write `fh' `"    if(i%lstep===0&&labels[i]) s+='<text'+at('x',x+Math.floor(barw/2))+at('y',hgt-9)+at('font-size',9.5)+at('fill','#666')+at('text-anchor','middle')+'>'+esc(labels[i])+'</text>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  s+='</svg>';"' _n
-    file write `fh' `"  return s;"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"function settings(){"' _n
-    file write `fh' `"  return {"' _n
-    file write `fh' `"    resp: el('c_resp').value,"' _n
-    file write `fh' `"    ws:   el('c_ws').value,"' _n
-    file write `fh' `"    fd:   el('c_fd').value,"' _n
-    file write `fh' `"    fv:   el('c_fv').value,"' _n
-    file write `fh' `"    fs:   D.meta.lite===1 ? D.meta.fastsecs : Math.max(0.5,parseFloat(el('c_fs').value)||2),"' _n
-    file write `fh' `"    burst:Math.max(3,parseInt(el('c_burst').value,10)||8),"' _n
-    file write `fh' `"    minact:parseFloat(el('c_minact').value)||5,"' _n
-    file write `fh' `"    n1:   parseInt(el('c_n1').value,10),"' _n
-    file write `fh' `"    n2:   parseInt(el('c_n2').value,10),"' _n
-    file write `fh' `"    nshare:(parseFloat(el('c_nshare').value)||25)/100,"' _n
-    file write `fh' `"    churn:(parseFloat(el('c_churn').value)||20)/100,"' _n
-    file write `fh' `"    z:    parseFloat(el('c_z').value)||3.5,"' _n
-    file write `fh' `"    peer:(parseFloat(el('c_peer').value)||35)/100,"' _n
-    file write `fh' `"    ov:   Math.max(1,parseInt(el('c_ov').value,10)||3),"' _n
-    file write `fh' `"    nmin: Math.max(3,parseInt(el('c_nmin').value,10)||10),"' _n
-    file write `fh' `"    top:  Math.max(1,parseInt(el('c_top').value,10)||25)"' _n
-    file write `fh' `"  };"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function applyPreset(p){"' _n
-    file write `fh' `"  if(p==='custom'||!P.presets[p]) return;"' _n
-    file write `fh' `"  var t=P.presets[p];"' _n
-    file write `fh' `"  el('c_fs').value=D.meta.lite===1?D.meta.fastsecs:((t.fs!==undefined)?t.fs:D.meta.fastsecs);"' _n
-    file write `fh' `"  el('c_burst').value=t.burst;"' _n
-    file write `fh' `"  el('c_minact').value=t.minact;"' _n
-    file write `fh' `"  el('c_n1').value=t.n1; el('c_n2').value=t.n2;"' _n
-    file write `fh' `"  el('c_nshare').value=Math.round(t.nshare*100);"' _n
-    file write `fh' `"  el('c_churn').value=Math.round(t.churn*100);"' _n
-    file write `fh' `"  el('c_z').value=t.z;"' _n
-    file write `fh' `"  el('c_peer').value=Math.round(t.peer*100);"' _n
-    file write `fh' `"  el('c_ov').value=t.ov;"' _n
-    file write `fh' `"  el('c_nmin').value=t.nmin;"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function resetSettings(){"' _n
-    file write `fh' `"  el('c_resp').value='';"' _n
-    file write `fh' `"  el('c_ws').value='';"' _n
-    file write `fh' `"  el('c_fd').value='';"' _n
-    file write `fh' `"  fvOptions();"' _n
-    file write `fh' `"  el('c_preset').value='standard';"' _n
-    file write `fh' `"  applyPreset('standard');"' _n
-    file write `fh' `"  el('c_top').value=25;"' _n
-    file write `fh' `"  expOpen=Object.create(null);"' _n
-    file write `fh' `"  renderAll();"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"function fvOptions(){"' _n
-    file write `fh' `"  var dim=el('c_fd').value, s='<option value='+Q+Q+'>-</option>', i, j, cnt=Object.create(null);"' _n
-    file write `fh' `"  if(dim && D.meta && D.meta.fdims){"' _n
-    file write `fh' `"    for(i=0;i<D.rows.length;i++){"' _n
-    file write `fh' `"      var rv=(D.rows[i].f&&D.rows[i].f[dim])?D.rows[i].f[dim]:'';"' _n
-    file write `fh' `"      if(rv) cnt[rv]=(cnt[rv]||0)+1;"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    for(i=0;i<D.meta.fdims.length;i++){"' _n
-    file write `fh' `"      if(D.meta.fdims[i].v!==dim) continue;"' _n
-    file write `fh' `"      var vv=D.meta.fdims[i].vals;"' _n
-    file write `fh' `"      for(j=0;j<vv.length;j++){"' _n
-    file write `fh' `"        var lab=(vv[j].l&&vv[j].l!==vv[j].c)?(vv[j].c+' '+vv[j].l):vv[j].c;"' _n
-    file write `fh' `"        s+='<option value='+Q+esc(vv[j].c)+Q+'>'+esc(lab)+' ('+(cnt[vv[j].c]||0)+')</option>';"' _n
-    file write `fh' `"      }"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  el('c_fv').innerHTML=s;"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"var qSortKey='med', qSortDir=-1;"' _n
-    file write `fh' `"function qSort(k){"' _n
-    file write `fh' `"  if(qSortKey===k) qSortDir=-qSortDir; else { qSortKey=k; qSortDir=-1; }"' _n
-    file write `fh' `"  renderQuestions();"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"function renderQuestions(){"' _n
-    file write `fh' `"  var filt=(el('c_q').value||'').toLowerCase();"' _n
-    file write `fh' `"  var rows=[],i;"' _n
-    file write `fh' `"  for(i=0;i<D.q.length;i++) if(!filt||D.q[i].v.toLowerCase().indexOf(filt)>=0) rows.push(D.q[i]);"' _n
-    file write `fh' `"  rows.sort(function(a,b){"' _n
-    file write `fh' `"    var av=a[qSortKey], bv=b[qSortKey];"' _n
-    file write `fh' `"    if(av===null) av=-1; if(bv===null) bv=-1;"' _n
-    file write `fh' `"    if(av===bv) return a.v<b.v?-1:1;"' _n
-    file write `fh' `"    return (av<bv?-1:1)*(-qSortDir);"' _n
-    file write `fh' `"  });"' _n
-    file write `fh' `"  var s='<tr><th class=\"srt\" onclick=\"qSort(String.fromCharCode(118))\">question</th>'+"' _n
-    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(110))\">answers</th>'+"' _n
-    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(110,105))\">interviews</th>'+"' _n
-    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(109,101,100))\">median s</th>'+"' _n
-    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(112,57,48))\">p90 s</th>'+"' _n
-    file write `fh' `"        '<th class=\"r srt\" onclick=\"qSort(String.fromCharCode(102,115,104))\">fast share</th></tr>';"' _n
-    file write `fh' `"  var k=Math.min(rows.length,40);"' _n
-    file write `fh' `"  for(i=0;i<k;i++){"' _n
-    file write `fh' `"    var q=rows[i];"' _n
-    file write `fh' `"    s+='<tr><td class=\"mono\">'+esc(q.v)+'</td><td class=\"r\">'+fmtc(q.n)+'</td><td class=\"r\">'+fmtc(q.ni)+"' _n
-    file write `fh' `"       '</td><td class=\"r\">'+fmt(q.med)+'</td><td class=\"r\">'+fmt(q.p90)+'</td><td class=\"r\">'+fmt(q.fsh,2)+'</td></tr>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  el('t_q').innerHTML=s;"' _n
-    file write `fh' `"  el('q_more').textContent = rows.length>k ? ('Showing '+k+' of '+rows.length+' questions - refine the search to see others.') : '';"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"function chipsFor(r){"' _n
-    file write `fh' `"  var s='',j;"' _n
-    file write `fh' `"  if(r._r) s+='<span class='+Q+'chip hard'+Q+' title='+Q+'Rejected and re-completed with no answers changed'+Q+'>Resubmitted unchanged</span>';"' _n
-    file write `fh' `"  else if(P.softResub(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Quick rejection cycle with one or two distinct questions touched'+Q+'>Quick correction</span>';"' _n
-    file write `fh' `"  else if(P.unknownResub(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Rejection correction edits are present but question identities are unavailable'+Q+'>Correction scope unknown</span>';"' _n
-    file write `fh' `"  for(j=0;j<8;j++){"' _n
-    file write `fh' `"    if(!r._f[j]) continue;"' _n
-    file write `fh' `"    var cls='chip';"' _n
-    file write `fh' `"    s+='<span class='+Q+cls+Q+'>'+P.names[j]+'</span>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  if(P.unresolvedRemoval(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Historical removal run with unresolved final-data assessment'+Q+'>Final-data check</span>';"' _n
-    file write `fh' `"  else if(r.cas>0) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Historical removal run resolved by final data and logic; no action'+Q+'>Removal history resolved</span>';"' _n
-    file write `fh' `"  if(r.m===1) s+='<span class='+Q+'chip info'+Q+'>CAWI</span>';"' _n
-    file write `fh' `"  if(r.mm===1) s+='<span class='+Q+'chip info'+Q+'>Mixed mode</span>';"' _n
-    file write `fh' `"  if(P.multiDay(r)) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Trustworthy first-pass work continued on more than one device-local date'+Q+'>Multiple field dates</span>';"' _n
-    file write `fh' `"  else if(r.on===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Recorded dates span days but local-clock quality is unreliable'+Q+'>Dates uncertain</span>';"' _n
-    file write `fh' `"  if(P.postEdit(r)) s+='<span class='+Q+'chip'+Q+' title='+Q+'Interviewer answer edits after completion outside a rejection cycle'+Q+'>Post-completion field edits</span>';"' _n
-    file write `fh' `"  else if((r.pcno||0)>0) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Supervisor/HQ/API review edits after completion'+Q+'>Post-completion review edits</span>';"' _n
-    file write `fh' `"  if(r.ho===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'More than one field actor contributed'+Q+'>Actor handoff</span>';"' _n
-    file write `fh' `"  if(r.wsm===1) s+='<span class='+Q+'chip'+Q+' title='+Q+'Paradata and final-data workflow status differ'+Q+'>Status mismatch</span>';"' _n
-    file write `fh' `"  if(r.to===1) s+='<span class='+Q+'chip info'+Q+' title='+Q+'Tablet timezone differs from the team or changed - hours unreliable'+Q+'>Clock suspect</span>';"' _n
-    file write `fh' `"  return s;"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function detailHtml(r,S,team){"' _n
-    file write `fh' `"  var ev=P.evidence(r,S,team,D.meta), s='', i;"' _n
-    file write `fh' `"  var ma=r.vr||r.r, maf=r.vr?r.vaf:r.paf, mat=r.vr?r.vact:r.pact, mans=r.vr?r.vans:r.pans, mansf=r.vr?r.vansf:r.pansf, mq=r.vr?r.vq:r.pq, mss=r.vr?r.vss:r.pss;"' _n
-    file write `fh' `"  s+='<div class='+Q+'facts'+Q+'><b>Interview:</b> <span class='+Q+'mono'+Q+'>'+esc(r.id)+'</span>'+"' _n
-    file write `fh' `"     '<span class='+Q+'cpy'+Q+' data-t='+Q+attr(r.id)+Q+'>copy id</span>';"' _n
-    file write `fh' `"  if(r.k) s+=' &nbsp; <b>Key:</b> <span class='+Q+'mono'+Q+'>'+esc(r.k)+'</span><span class='+Q+'cpy'+Q+' data-t='+Q+attr(r.k)+Q+'>copy key</span>';"' _n
-    file write `fh' `"  s+=hqLinks(r);"' _n
-    file write `fh' `"  s+=' &nbsp; <b>Status:</b> '+esc(r.ws||'-')+' <span class='+Q+'legend'+Q+'>('+esc(r.wss||'paradata')+')</span> &nbsp; <b>Field dates:</b> '+esc(r.d0||'-')+(r.d1&&r.d1!==r.d0?(' to '+esc(r.d1)):'')+"' _n
-    file write `fh' `"     ' &nbsp; <b>Primary actor:</b> '+esc(r.r||'-')+(r.vr&&r.vr!==r.r?(' &nbsp; <b>Metrics actor:</b> '+esc(r.vr)):'')+(r.ho===1?(' &nbsp; <b>Last editor:</b> '+esc(r.le||'-')):'')+"' _n
-    file write `fh' `"     ' &nbsp; <b>Interview workflow:</b> '+r.ss+' sessions ('+r.sf+' first-pass + '+r.sr+' rework), '+fmt(r.af,1)+' first-pass / '+fmt(r.act,1)+' total active min, '+fmt(r.sp,0)+' min elapsed span, '+fmt(r.lp,0)+' min longest pause' +"' _n
-    file write `fh' `"     ' &nbsp; <b>'+esc(ma)+' contribution:</b> '+fmtc(mans)+' answers ('+fmtc(mansf)+' first-pass), '+fmt(maf,1)+' first-pass / '+fmt(mat,1)+' total active min, '+fmtc(r.nt)+' timed'+(mq!==null?(', '+fmtc(mq)+' question instances'):'')+(mss!==null?(', '+fmtc(mss)+' sessions'):'')+"' _n
-    file write `fh' `"     ' &nbsp; <b>Restarts:</b> '+r.rs+' &nbsp; <b>Rejections:</b> '+r.rj+"' _n
-    file write `fh' `"     ((r.tz!==null)?(' &nbsp; <b>Device offset:</b> '+fmt(r.tz,1)+' h'):'')+'</div>';"' _n
-    file write `fh' `"  for(i=0;i<ev.length;i++){"' _n
-    file write `fh' `"    var cls=(ev[i].t==='hard')?'ev hard':'ev';"' _n
-    file write `fh' `"    var pre=(ev[i].t==='hard')?'<b style='+Q+'color:#8a1f1f'+Q+'>! </b>':((ev[i].t==='info')?'<span style='+Q+'color:#888'+Q+'>i </span>':'<span style='+Q+'color:#C9A227'+Q+'>&#9679; </span>');"' _n
-    file write `fh' `"    s+='<div class='+Q+cls+Q+'>'+pre+esc(ev[i].s)+'</div>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  if(!D.meta.lite && (r.h||r.g)){"' _n
-    file write `fh' `"    s+='<div style='+Q+'display:flex;flex-wrap:wrap;gap:18px;margin-top:8px'+Q+'>';"' _n
-    file write `fh' `"    if(r.h){"' _n
-    file write `fh' `"      var labH=[],hiH=[],x;"' _n
-    file write `fh' `"      for(x=0;x<24;x++){ labH.push(String(x)); if(P.inWindow(x,S.n1,S.n2)) hiH.push(x); }"' _n
-    file write `fh' `"      s+='<div style='+Q+'flex:1 1 320px'+Q+'><div class='+Q+'legend'+Q+'>Answers by hour (device time)</div>'+svgBars(r.h,labH,hiH,{w:460,hgt:100,lstep:3})+'</div>';"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    if(r.g){"' _n
-    file write `fh' `"      var labG=[],hiG=[],y;"' _n
-    file write `fh' `"      for(y=0;y<41;y++){ labG.push(y<40?String(y/2):'20+'); if(y<S.fs*2) hiG.push(y); }"' _n
-    file write `fh' `"      s+='<div style='+Q+'flex:1 1 320px'+Q+'><div class='+Q+'legend'+Q+'>Seconds per answer</div>'+svgBars(r.g,labG,hiG,{w:460,hgt:100,lstep:4})+'</div>';"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    s+='</div>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  return s;"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"function renderWorst(){"' _n
-    file write `fh' `"  var A=lastA, S=lastS, team=lastTeam;"' _n
-    file write `fh' `"  if(!A) return;"' _n
-    file write `fh' `"  var s='<tr><th></th><th>interview</th><th>metrics actor / primary</th><th>field date(s)</th><th>signals</th><th class=\"r\">first-pass min</th><th class=\"r\">sec/ans</th></tr>';"' _n
-    file write `fh' `"  var F=A.flagged, kk=Math.min(F.length,S.top), i;"' _n
-    file write `fh' `"  var tlab={A:'Investigate',V:'Verify',W:'Watch'};"' _n
-    file write `fh' `"  for(i=0;i<kk;i++){"' _n
-    file write `fh' `"    var r=F[i];"' _n
-    file write `fh' `"    var keyc=r.k?('<span class='+Q+'mono'+Q+'><b>'+esc(r.k)+'</b></span>'):('<span class='+Q+'mono'+Q+'>'+esc(r.id.substring(0,8))+'</span>');"' _n
-    file write `fh' `"    s+='<tr class='+Q+'wrow'+Q+' data-i='+Q+i+Q+'>'+"' _n
-    file write `fh' `"       '<td><span class='+Q+'tier '+r._t+Q+'>'+tlab[r._t]+'</span></td>'+"' _n
-    file write `fh' `"       '<td>'+keyc+'</td>'+"' _n
-    file write `fh' `"       '<td>'+esc(r.vr||r.r)+(r.vr&&r.vr!==r.r?('<br><span class='+Q+'legend'+Q+'>primary: '+esc(r.r)+'</span>'):'')+'</td>'+"' _n
-    file write `fh' `"       '<td>'+esc(r.d0||'-')+(r.d1&&r.d1!==r.d0?('<br>'+esc(r.d1)):'')+'</td>'+"' _n
-    file write `fh' `"       '<td>'+chipsFor(r)+'</td>'+"' _n
-    file write `fh' `"       '<td class=\"r\">'+fmt(r.af)+'</td>'+"' _n
-    file write `fh' `"       '<td class=\"r\">'+fmt(r.med)+'</td></tr>';"' _n
-    file write `fh' `"    if(expOpen[r.id]) s+='<tr class='+Q+'wdet'+Q+'><td colspan='+Q+'7'+Q+'>'+detailHtml(r,S,team)+'</td></tr>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  el('t_worst').innerHTML=s;"' _n
-    file write `fh' `"  el('w_none').textContent = F.length===0 ? 'Nothing to review for this selection - no signals and no cascades.' : (F.length>kk?('Showing '+kk+' of '+F.length+' - raise Show top to see more.'):'');"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"function renderAll(){"' _n
-    file write `fh' `"  var S=settings();"' _n
-    file write `fh' `"  var rows=P.filterRows(D.rows,S.resp,S.ws,S.fd,S.fv,D.actors);"' _n
-    file write `fh' `"  var benchmarkRows=P.filterRows(D.rows,'',S.ws,S.fd,S.fv,D.actors);"' _n
-    file write `fh' `"  var A=P.aggregate(rows,S,P.zctx(benchmarkRows));"' _n
-    file write `fh' `"  var team=P.team(benchmarkRows);"' _n
-    file write `fh' `"  lastA=A; lastS=S; lastTeam=team;"' _n
-    file write `fh' `"  var scope=S.resp?('actor '+S.resp):'all field actors';"' _n
-    file write `fh' `"  if(S.ws) scope+=(S.ws==='APP')?', approved interviews':(', status '+S.ws);"' _n
-    file write `fh' `"  if(S.fd && S.fv) scope+=', '+S.fd+' = '+S.fv;"' _n
-    file write `fh' _n
-    file write `fh' `"  el('k_started').textContent=fmtc(A.n);"' _n
-    file write `fh' `"  el('k_inv').textContent=fmtc(A.tiers.A);"' _n
-    file write `fh' `"  el('k_ver').textContent=fmtc(A.tiers.V);"' _n
-    file write `fh' `"  var acts=[],i;"' _n
-    file write `fh' `"  for(i=0;i<rows.length;i++) if(rows[i].af!==null) acts.push(rows[i].af);"' _n
-    file write `fh' `"  el('k_medact').textContent=fmt(P.median(acts));"' _n
-    file write `fh' `"  el('k_medans').textContent=fmt(team.med);"' _n
-    file write `fh' _n
-    file write `fh' `"  var verdict, vc, tA=A.tiers.A, tV=A.tiers.V, tW=A.tiers.W;"' _n
-    file write `fh' `"  if(tA>0){ verdict=fmtc(tA)+' interview(s) need investigation, '+fmtc(tV)+' to verify and '+fmtc(tW)+' to watch, out of '+fmtc(A.n)+' for '+scope+'.'; vc='bad'; }"' _n
-    file write `fh' `"  else if(tV>0){ verdict=fmtc(tV)+' interview(s) to verify and '+fmtc(tW)+' to watch, out of '+fmtc(A.n)+' for '+scope+' - no hard evidence at these thresholds.'; vc='warn'; }"' _n
-    file write `fh' `"  else if(tW>0){ verdict='Only single, isolated signals ('+fmtc(tW)+' interview(s) to watch) for '+scope+'.'; vc='warn'; }"' _n
-    file write `fh' `"  else { verdict='No behaviour signals raised for '+scope+' at the current sensitivity.'; vc='ok'; }"' _n
-    file write `fh' `"  el('verdict').textContent=verdict;"' _n
-    file write `fh' `"  el('verdict').className='verdict '+vc;"' _n
-    file write `fh' _n
-    file write `fh' `"  el('ch_flags').innerHTML=svgBars(A.tot,"' _n
-    file write `fh' `"    ['S speed','B streak','T short','N night','C churn','Z outlier','P peers','O overlap'],[7],"' _n
-    file write `fh' `"    {hgt:150,vals:true})+'<div class='+Q+'legend'+Q+'>S sustained speeding &nbsp; B a within-actor/session run of fast answers &nbsp; T first completion too quickly &nbsp; N night work &nbsp; C answer churn &nbsp; Z first-pass duration outlier &nbsp; P far faster than peers on the same questions &nbsp; O actor-specific shared UTC-minute screen</div>';"' _n
-    file write `fh' _n
-    file write `fh' `"  var BA=P.binsActive(rows), labA=[], hiA=[];"' _n
-    file write `fh' `"  for(i=0;i<20;i++){ labA.push(String(i*BA.w)); if((i+1)*BA.w<=S.minact) hiA.push(i); }"' _n
-    file write `fh' `"  el('ch_act').innerHTML=svgBars(BA.c,labA,hiA,{lstep:2});"' _n
-    file write `fh' `"  el('n_act').textContent='Bins of '+BA.w+' min; gold bins fall under the '+S.minact+'-minute floor.';"' _n
-    file write `fh' _n
-    file write `fh' `"  var BM=P.binsMed(rows), labM=[], hiM=[];"' _n
-    file write `fh' `"  for(i=0;i<21;i++){ labM.push(i<20?String(i):'20+'); if(i<S.fs) hiM.push(i); }"' _n
-    file write `fh' `"  el('ch_med').innerHTML=svgBars(BM,labM,hiM,{lstep:2});"' _n
-    file write `fh' `"  el('n_med').textContent='Gold bars: interviews where a typical question was answered in under '+S.fs+' seconds - too fast for a real conversation.';"' _n
-    file write `fh' _n
-    file write `fh' `"  var HT=P.hourTotals(rows), labH=[], hiH=[];"' _n
-    file write `fh' `"  for(i=0;i<24;i++){ labH.push(String(i)); if(P.inWindow(i,S.n1,S.n2)) hiH.push(i); }"' _n
-    file write `fh' `"  if(HT) el('ch_hour').innerHTML=svgBars(HT,labH,hiH,{lstep:2});"' _n
-    file write `fh' `"  else el('ch_hour').innerHTML='<p class=\"nodata\">Hour detail not embedded for this survey size.</p>';"' _n
-    file write `fh' _n
-    file write `fh' `"  var DT=P.dailyTotals(D.daily,S.resp), dc=[], dl=[], dstep=Math.max(1,Math.floor(DT.length/8));"' _n
-    file write `fh' `"  for(i=0;i<DT.length;i++){ dc.push(DT[i].c); dl.push(i%dstep===0?DT[i].d.substring(5):''); }"' _n
-    file write `fh' `"  el('ch_daily').innerHTML=svgBars(dc,dl,[],{lstep:1});"' _n
-    file write `fh' _n
-    file write `fh' `"  var L=P.league(rows,D.actors,S,S.resp), s='<tr><th>enumerator</th><th class=\"r\">interviews touched</th><th class=\"r\">med first-pass active min</th><th class=\"r\">med sec/ans</th><th class=\"r\" title=\"enumerator median sec per answer over team median: 0.5 means twice as fast as the team\">vs team</th><th class=\"r\">fast share</th><th class=\"r\">night share</th><th class=\"r\" title=\"shared UTC-minute screening buckets, summed for this actor\">overlap</th><th class=\"r\">flagged</th><th style=\"width:110px\">flag share</th></tr>';"' _n
-    file write `fh' `"  var k=Math.min(L.length,30);"' _n
-    file write `fh' `"  for(i=0;i<k;i++){"' _n
-    file write `fh' `"    var g=L[i];"' _n
-    file write `fh' `"    var vst=(g.medmed!==null&&team.med!==null&&team.med>0)?(g.medmed/team.med):null;"' _n
-    file write `fh' `"    s+=(g.fl>0?'<tr class=\"hot\">':'<tr>')+'<td>'+esc(g.r)+'</td><td class=\"r\">'+fmtc(g.n)+'</td><td class=\"r\">'+fmt(g.medact)+"' _n
-    file write `fh' `"       '</td><td class=\"r\">'+fmt(g.medmed)+'</td><td class=\"r\">'+fmt(vst,2)+'</td><td class=\"r\">'+fmt(g.mfsh,2)+'</td><td class=\"r\">'+fmt(g.mnsh,2)+"' _n
-    file write `fh' `"       '</td><td class=\"r\">'+fmtc(g.ov)+'</td><td class=\"r\">'+fmtc(g.fl)+'</td><td><span class=\"bar\" style=\"width:'+Math.round(100*g.share)+'px\"></span> '+fmt(100*g.share)+'%</td></tr>';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  el('t_league').innerHTML=s;"' _n
-    file write `fh' `"  el('l_more').textContent = L.length>k ? ('Top '+k+' of '+L.length+' enumerators by flag share.') : '';"' _n
-    file write `fh' _n
-    file write `fh' `"  renderWorst();"' _n
-    file write `fh' `"  renderQuestions();"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"function initControls(){"' _n
-    file write `fh' `"  var rs=Object.create(null), i, names=[];"' _n
-    file write `fh' `"  for(i=0;i<D.actors.length;i++) rs[D.actors[i].r]=1;"' _n
-    file write `fh' `"  for(var k in rs){ if(Object.prototype.hasOwnProperty.call(rs,k)&&k!=='') names.push(k); }"' _n
-    file write `fh' `"  names.sort();"' _n
-    file write `fh' `"  var s='<option value=\"\">All enumerators ('+names.length+')</option>';"' _n
-    file write `fh' `"  for(i=0;i<names.length;i++) s+='<option value='+Q+attr(names[i])+Q+'>'+esc(names[i])+'</option>';"' _n
-    file write `fh' `"  el('c_resp').innerHTML=s;"' _n
-    file write `fh' `"  var wsm=Object.create(null), wnames=[], napp=0;"' _n
-    file write `fh' `"  for(i=0;i<D.rows.length;i++){ var w=D.rows[i].ws||''; if(w) wsm[w]=(wsm[w]||0)+1; if(D.rows[i].wsc==='approvebyhq'||D.rows[i].wsc==='approvebysup') napp++; }"' _n
-    file write `fh' `"  for(var k2 in wsm){ if(Object.prototype.hasOwnProperty.call(wsm,k2)) wnames.push(k2); }"' _n
-    file write `fh' `"  wnames.sort();"' _n
-    file write `fh' `"  var so='<option value='+Q+Q+'>All statuses</option>';"' _n
-    file write `fh' `"  if(napp>0) so+='<option value='+Q+'APP'+Q+'>Approved only (Sup + HQ) ('+napp+')</option>';"' _n
-    file write `fh' `"  for(i=0;i<wnames.length;i++) so+='<option value='+Q+attr(wnames[i])+Q+'>'+esc(wnames[i])+' ('+wsm[wnames[i]]+')</option>';"' _n
-    file write `fh' `"  el('c_ws').innerHTML=so;"' _n
-    file write `fh' `"  var fds=(D.meta&&D.meta.fdims)?D.meta.fdims:[];"' _n
-    file write `fh' `"  if(fds.length){"' _n
-    file write `fh' `"    var fo='<option value='+Q+Q+'>None</option>';"' _n
-    file write `fh' `"    for(i=0;i<fds.length;i++) fo+='<option>'+esc(fds[i].v)+'</option>';"' _n
-    file write `fh' `"    el('c_fd').innerHTML=fo;"' _n
-    file write `fh' `"    fvOptions();"' _n
-    file write `fh' `"    el('c_fd').addEventListener('change',function(){ fvOptions(); renderAll(); });"' _n
-    file write `fh' `"  } else {"' _n
-    file write `fh' `"    el('ctl_fd').style.display='none';"' _n
-    file write `fh' `"    el('ctl_fv').style.display='none';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"  var hsel='';"' _n
-    file write `fh' `"  for(i=0;i<24;i++) hsel+='<option>'+i+'</option>';"' _n
-    file write `fh' `"  el('c_n1').innerHTML=hsel; el('c_n2').innerHTML=hsel;"' _n
-    file write `fh' `"  el('c_n1').value=22; el('c_n2').value=6;"' _n
-    file write `fh' `"  el('c_fs').value=D.meta.fastsecs;"' _n
-    file write `fh' `"  el('c_preset').value='standard';"' _n
-    file write `fh' `"  el('c_adv').addEventListener('click',function(){"' _n
-    file write `fh' `"    var a=el('advrow');"' _n
-    file write `fh' `"    a.style.display=(a.style.display==='none')?'flex':'none';"' _n
-    file write `fh' `"  });"' _n
-    file write `fh' `"  el('c_preset').addEventListener('change',function(){ applyPreset(el('c_preset').value); renderAll(); });"' _n
-    file write `fh' `"  var simp=['c_resp','c_ws','c_fv','c_top'];"' _n
-    file write `fh' `"  for(i=0;i<simp.length;i++) el(simp[i]).addEventListener('change',renderAll);"' _n
-    file write `fh' `"  var adv=['c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_peer','c_ov','c_nmin'];"' _n
-    file write `fh' `"  for(i=0;i<adv.length;i++) el(adv[i]).addEventListener('change',function(){ el('c_preset').value='custom'; renderAll(); });"' _n
-    file write `fh' `"  el('c_q').addEventListener('input',renderQuestions);"' _n
-    file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
-    file write `fh' `"  el('c_csv').addEventListener('click',function(){"' _n
-    file write `fh' `"    if(!lastA) return;"' _n
-    file write `fh' `"    var body=P.csv(lastA.flagged,lastS,lastTeam,D.meta);"' _n
-    file write `fh' `"    var a=document.createElement('a');"' _n
-    file write `fh' `"    a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(body);"' _n
-    file write `fh' `"    a.download='suso_review_list.csv';"' _n
-    file write `fh' `"    document.body.appendChild(a); a.click(); document.body.removeChild(a);"' _n
-    file write `fh' `"  });"' _n
-    file write `fh' `"  el('t_worst').addEventListener('click',function(ev){"' _n
-    file write `fh' `"    var t=ev.target||ev.srcElement;"' _n
-    file write `fh' `"    if(t && t.className && String(t.className).indexOf('cpy')>=0){"' _n
-    file write `fh' `"      copyText(t.getAttribute('data-t')||'');"' _n
-    file write `fh' `"      t.textContent='copied';"' _n
-    file write `fh' `"      return;"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"    while(t && t!==this && (!t.getAttribute || t.getAttribute('data-i')===null)) t=t.parentNode;"' _n
-    file write `fh' `"    if(t && t.getAttribute && t.getAttribute('data-i')!==null){"' _n
-    file write `fh' `"      var r=lastA.flagged[parseInt(t.getAttribute('data-i'),10)];"' _n
-    file write `fh' `"      if(r){ expOpen[r.id]=!expOpen[r.id]; renderWorst(); }"' _n
-    file write `fh' `"    }"' _n
-    file write `fh' `"  });"' _n
-    file write `fh' `"  if(D.meta.lite===1){"' _n
-    file write `fh' `"    el('c_n1').disabled=true; el('c_n2').disabled=true; el('c_fs').disabled=true;"' _n
-    file write `fh' `"    el('lite_note').textContent='Large survey: per-interview hour/gap detail was not embedded, so the night window and fast-seconds controls use the values fixed at build time.';"' _n
-    file write `fh' `"  }"' _n
-    file write `fh' `"}"' _n
-    file write `fh' `"initControls();"' _n
-    file write `fh' `"renderAll();"' _n
-    file write `fh' `"}"' _n
-    file write `fh' _n
-    file write `fh' `"</script></body></html>"' _n
+    _suso_para_report_js `fh'
     file close `fh'
 
     * ---- finish: leave the combined table in memory --------------------------------
@@ -9027,7 +9585,7 @@ program _suso_para_check, rclass
     file write `hf' `"<h2>Questions</h2>"' _n
     file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
     file write `hf' `"<div id="list"></div>"' _n
-    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.16) on `now'.</div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.20) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
     file write `hf' `"var D={"meta":{"statuses":[`jmeta'],"fdims":[`jfdims']},"rows":["' _n
     forvalues i = 1/`=_N' {
@@ -9432,7 +9990,7 @@ program _suso_para_suite, rclass
         if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
     }
     di as txt "suso paradata: building the QC suite ..."
-    di as txt "  code build: 1.7.16-PERFFIX"
+    di as txt "  code build: 1.7.20-QSTATUSHISTORY"
     tempfile EVX T1 T2 T3
     quietly save `"`EVX'"'
 
@@ -9912,7 +10470,10 @@ void _suso_suite_write(string scalar fout, string scalar title, string scalar su
     _suso_suite_pane(fh, 2, f2, note2)
     _suso_suite_pane(fh, 3, f3, note3)
     fwrite(fh, "<script>" + char(10))
-    fwrite(fh, "function sh(k){var i;for(i=1;i<=3;i++){document.getElementById('p'+i).style.display=(i===k)?'block':'none';document.getElementById('b'+i).className=(i===k)?'tb on':'tb';}}" + char(10))
+    fwrite(fh, "function sh(k){var i;for(i=1;i<=3;i++){document.getElementById('p'+i).style.display=(i===k)?'block':'none';document.getElementById('b'+i).className=(i===k)?'tb on':'tb';}if(k<=2)sendActor(document.querySelector('#p'+k+' iframe'));}" + char(10))
+    fwrite(fh, "var actorFilter=null;function sendActor(f){if(f&&actorFilter&&f.contentWindow)f.contentWindow.postMessage(actorFilter,'*');}" + char(10))
+    fwrite(fh, "window.addEventListener('message',function(e){var d=e.data||{},fs,i,src=false;if(d.type!=='suso-actor-filter'||typeof d.key!=='string'||typeof d.label!=='string'||d.key.length>500||d.label.length>500)return;fs=document.querySelectorAll('#p1 iframe,#p2 iframe');for(i=0;i<fs.length;i++)if(fs[i].contentWindow===e.source){src=true;break;}if(!src)return;actorFilter={type:'suso-actor-filter',key:d.key,label:d.label};for(i=0;i<fs.length;i++)if(fs[i].contentWindow!==e.source)sendActor(fs[i]);});" + char(10))
+    fwrite(fh, "(function(){var fs=document.querySelectorAll('#p1 iframe,#p2 iframe'),i;for(i=0;i<fs.length;i++)fs[i].addEventListener('load',function(){sendActor(this);});})();" + char(10))
     fwrite(fh, "document.getElementById('b1').addEventListener('click',function(){sh(1);});" + char(10))
     fwrite(fh, "document.getElementById('b2').addEventListener('click',function(){sh(2);});" + char(10))
     fwrite(fh, "document.getElementById('b3').addEventListener('click',function(){sh(3);});" + char(10))
