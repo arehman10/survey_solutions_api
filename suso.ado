@@ -1,4 +1,4 @@
-*! suso v1.7.20 build 2026-08-19-QSTATUSHISTORY  (status-aware question timing + local event history; see help)
+*! suso v1.7.22 build 2026-08-19-PRESERVEFIX  (Stata preserve-state fix; see help)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -260,7 +260,7 @@ end
 
 program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.20 (build 2026-08-19-QSTATUSHISTORY)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.22 (build 2026-08-19-PRESERVEFIX)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -270,8 +270,8 @@ program _suso_about, rclass
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
-    return local version "1.7.20"
-    return local build "2026-08-19-QSTATUSHISTORY"
+    return local version "1.7.22"
+    return local build "2026-08-19-PRESERVEFIX"
     return local expected_backend "1.7.11-AUDITFIX"
 end
 
@@ -288,7 +288,7 @@ program _suso_doctor, rclass
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
-    di as txt "  ado code build : " as res "1.7.20-QSTATUSHISTORY"
+    di as txt "  ado code build : " as res "1.7.22-PRESERVEFIX"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -314,7 +314,7 @@ program _suso_doctor, rclass
             if "$SUSO_JARBUILD"!="1.7.11-AUDITFIX" {
                 local ok 0
                 di as err "  WARNING       : suso.ado and suso.jar are from different builds."
-                di as err "                  Reinstall both files from the same v1.7.20 package, then restart Stata."
+                di as err "                  Reinstall both files from the same v1.7.22 package, then restart Stata."
             }
         }
         else {
@@ -325,7 +325,7 @@ program _suso_doctor, rclass
     }
     _suso_showconfig
     return scalar ok = `ok'
-    return local ado_build "1.7.20-QSTATUSHISTORY"
+    return local ado_build "1.7.22-PRESERVEFIX"
     return local backend_build "`backend'"
     return local java_version "`javaver'"
     capture macro drop SUSO_JAVAVER SUSO_JAVAOK SUSO_JARBUILD
@@ -5685,7 +5685,7 @@ program _suso_para_skips, rclass
             quietly file open `mf' using `"`messages'"', write replace text
             local mh 1
             file write `mf' "PARADATA SKIP/REMOVAL REVIEW" _n
-            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.20)" _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.22)" _n
             file write `mf' "Definition: a case is `cascade' or more consecutive AnswerRemoved events in a compact run near an AnswerSet event." _n
             file write `mf' "`ncasc' case(s) found; `nwiped' removal event(s); `naffectedqall' distinct question-run case(s) affected." _n
             if `hasfinaldata' file write `mf' "Final export assessment: `nfinalansweredall' answered; `nanswereddisabledall' answered while disabled; `nexpectedblankall' blank as expected because disabled; `nfinalcheckall' require review." _n
@@ -5996,7 +5996,7 @@ program _suso_para_skips, rclass
             file write `hf' `"<div id="sk_verify"></div>"' _n
             file write `hf' `"<h2>Resolved history - no action</h2>"' _n
             file write `hf' `"<details><summary id="sk_resolved_summary" style="cursor:pointer;font-size:13px;color:#555;padding:6px 0"></summary><div id="sk_resolved"></div></details><div id="sk_resolved_more" class="meta"></div>"' _n
-            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.20). Cases are screening signals from the paradata event stream, not proof of misconduct. Enumerator ownership is the actor who emitted the AnswerRemoved run; primary interviewer and last editor are not used as substitutes.</div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.22). Cases are screening signals from the paradata event stream, not proof of misconduct. Enumerator ownership is the actor who emitted the AnswerRemoved run; primary interviewer and last editor are not used as substitutes.</div>"' _n
             file write `hf' `"</div><script>"' _n
             file write `hf' `"var SK={cases:["' _n
             quietly use `"`DET2'"', clear
@@ -6103,6 +6103,14 @@ program _suso_para_report_js
     file write `fh' `"    for(i=0;i<src.length;i++) if(String(src[i].s||'')===sk) out.push(src[i]);"' _n
     file write `fh' `"    return out;"' _n
     file write `fh' `"  },"' _n
+    file write `fh' `"  questionCompare: function(a,b,key,dir){"' _n
+    file write `fh' `"    var av=a[key],bv=b[key],mul=(dir===1?-1:1);"' _n
+    file write `fh' `"    if(av===null||av===undefined){if(bv===null||bv===undefined)return a.v===b.v?0:(a.v<b.v?-1:1);return 1;}"' _n
+    file write `fh' `"    if(bv===null||bv===undefined)return -1;"' _n
+    file write `fh' `"    if(av===bv)return a.v===b.v?0:(a.v<b.v?-1:1);"' _n
+    file write `fh' `"    return (av<bv?-1:1)*mul;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  questionSort: function(rows,key,dir){return rows.sort(function(a,b){return P.questionCompare(a,b,key,dir);});},"' _n
     file write `fh' `"  removalView: function(rows,resp){"' _n
     file write `fh' `"    var scoped=[],groups=Object.create(null),rk=P.norm(resp),i,r,k,g,seen;"' _n
     file write `fh' `"    var out={histories:0,questions:0,check:0,reanswered:0,events:0,active:0,resolved:0,rows:scoped,patterns:[]};"' _n
@@ -6532,7 +6540,7 @@ program _suso_para_report_js
     file write `fh' `"  el('c_preset').value='standard';"' _n
     file write `fh' `"  applyPreset('standard');"' _n
     file write `fh' `"  el('c_top').value=25;"' _n
-    file write `fh' `"  expOpen=Object.create(null);"' _n
+    file write `fh' `"  expOpen=Object.create(null); qSortKey='o'; qSortDir=-1;"' _n
     file write `fh' `"  renderAll();"' _n
     file write `fh' `"  postActorFilter();"' _n
     file write `fh' `"}"' _n
@@ -6556,7 +6564,7 @@ program _suso_para_report_js
     file write `fh' `"  el('c_fv').innerHTML=s;"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
-    file write `fh' `"var qSortKey='med', qSortDir=1, qActorIndex=P.questionIndex(D.aq||[]);"' _n
+    file write `fh' `"var qSortKey='o', qSortDir=-1, qActorIndex=P.questionIndex(D.aq||[]);"' _n
     file write `fh' `"function qSort(k){"' _n
     file write `fh' `"  if(qSortKey===k) qSortDir=-qSortDir; else { qSortKey=k; qSortDir=-1; }"' _n
     file write `fh' `"  renderQuestions();"' _n
@@ -6566,13 +6574,7 @@ program _suso_para_report_js
     file write `fh' `"  var filt=(el('c_q').value||'').toLowerCase(), resp=el('c_resp').value, ws=el('c_ws').value;"' _n
     file write `fh' `"  var src=P.questionRows(D.q,qActorIndex,resp,ws), rows=[],i;"' _n
     file write `fh' `"  for(i=0;i<src.length;i++) if(!filt||src[i].v.toLowerCase().indexOf(filt)>=0) rows.push(src[i]);"' _n
-    file write `fh' `"  rows.sort(function(a,b){"' _n
-    file write `fh' `"    var av=a[qSortKey], bv=b[qSortKey];"' _n
-    file write `fh' `"    if(av===null&&bv===null) return a.v===b.v?0:(a.v<b.v?-1:1);"' _n
-    file write `fh' `"    if(av===null) return 1; if(bv===null) return -1;"' _n
-    file write `fh' `"    if(av===bv) return a.v===b.v?0:(a.v<b.v?-1:1);"' _n
-    file write `fh' `"    return (av<bv?-1:1)*(-qSortDir);"' _n
-    file write `fh' `"  });"' _n
+    file write `fh' `"  P.questionSort(rows,qSortKey,qSortDir);"' _n
     file write `fh' `"  var s='<tr><th class=\"srt\" onclick=\"qSort(String.fromCharCode(118))\">question</th>'+"' _n
     file write `fh' `"        '<th class=\"r srt\" title=\"First-pass AnswerSet saves; revisions and roster instances can count more than once\" onclick=\"qSort(String.fromCharCode(110))\">answer events</th>'+"' _n
     file write `fh' `"        '<th class=\"r srt\" title=\"Unique interview IDs with at least one event for this question\" onclick=\"qSort(String.fromCharCode(110,105))\">distinct interviews</th>'+"' _n
@@ -6803,6 +6805,7 @@ program _suso_para_report_js
     file write `fh' `"  var adv=['c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_peer','c_ov','c_nmin'];"' _n
     file write `fh' `"  for(i=0;i<adv.length;i++) el(adv[i]).addEventListener('change',function(){ el('c_preset').value='custom'; renderAll(); });"' _n
     file write `fh' `"  el('c_q').addEventListener('input',renderQuestions);"' _n
+    file write `fh' `"  el('c_qorder').addEventListener('click',function(){qSortKey='o';qSortDir=-1;renderQuestions();});"' _n
     file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
     file write `fh' `"  el('c_csv').addEventListener('click',function(){"' _n
     file write `fh' `"    if(!lastA) return;"' _n
@@ -6983,7 +6986,7 @@ end
 program _suso_para_questionpayload, rclass
     version 14.2
     syntax , STATUSMap(string) QSAVing(string) AQSAVing(string)              ///
-        PEERSAVing(string) [VARS(string)]
+        PEERSAVing(string) [VARS(string) QORDER(string)]
     _suso_para_need events
 
     local haspeerq 0
@@ -7012,14 +7015,47 @@ program _suso_para_questionpayload, rclass
         capture confirm variable para_var
         local hasvar = !_rc
         if `hasvar' {
+            local __qseq ""
+            capture confirm variable para_seq, exact
+            if !_rc local __qseq para_seq
             quietly keep interview__id para_actor para_actor_key para_var    ///
                 para_one para_fast para_ansgap para_fieldans para_firstpass  ///
-                para_ans para_rem para_ev
+                para_ans para_rem para_ev `__qseq'
+            if "`__qseq'"=="" quietly gen double para_seq = .
             quietly keep if para_fieldans & para_firstpass & para_var!=""
         }
         if `hasvar' & _N>0 _suso_para_varsel , vars(`"`vars'"')
         if `hasvar' & _N>0 {
             local hasq 1
+            * One invariant display rank is shared by every actor/status scope.
+            * With qx(), the parser's DOM row order is the static questionnaire
+            * design/CAPI order.  Variables absent from that preview follow it
+            * alphabetically.  Without qx(), the first source event is the
+            * deterministic fallback (then variable name when source order is
+            * unavailable or tied).  Scope-specific first occurrences must not
+            * reshuffle the table when a user changes a filter.
+            * Assign the invariant rank directly on eligible event rows.  The
+            * earlier implementation opened a second preserve here while this
+            * program's caller dataset was already preserved, which Stata
+            * correctly rejected with r(621).  Direct ranking also avoids
+            * writing and rereading a multi-million-row temporary copy.
+            if `"`qorder'"'!="" {
+                quietly merge m:1 para_var using `"`qorder'"',             ///
+                    keep(master match) nogenerate
+                tempvar qunknown
+                quietly gen byte `qunknown' = missing(qx_order)
+                quietly egen long qorder = group(`qunknown' qx_order       ///
+                    para_var), missing
+                quietly drop qx_order `qunknown'
+            }
+            else {
+                tempvar qfirst qnoseq
+                quietly egen double `qfirst' = min(para_seq), by(para_var)
+                quietly gen byte `qnoseq' = missing(`qfirst')
+                quietly egen long qorder = group(`qnoseq' `qfirst'         ///
+                    para_var), missing
+                quietly drop `qfirst' `qnoseq'
+            }
             quietly drop para_fieldans para_firstpass para_ans para_rem para_ev
             quietly compress
             quietly merge m:1 interview__id using `"`statusmap'"',           ///
@@ -7047,14 +7083,14 @@ program _suso_para_questionpayload, rclass
             collapse (sum) qn=para_one qni=`tag' qnf=para_fast              ///
                 (count) qnt=para_ansgap                                    ///
                 (p50) qmed=para_ansgap (p90) qp90=para_ansgap,             ///
-                by(`qscope' para_var) fast
+                by(`qscope' qorder para_var) fast
             quietly gen double qfsh = qnf/qnt if qnt>0
             quietly decode `qscope', gen(`scopestr')
             quietly replace `scopestr' = ""    if `qscope'==0
             quietly replace `scopestr' = "APP" if `qscope'==-1
             quietly drop `qscope'
             quietly rename `scopestr' qscope
-            gsort qscope -qmed para_var
+            quietly sort qscope qorder para_var
             quietly save `"`qsaving'"'
 
             quietly use `"`QEVENTS'"', clear
@@ -7068,14 +7104,14 @@ program _suso_para_questionpayload, rclass
                     (count) aqnt=para_ansgap                                ///
                     (p50) aqmed=para_ansgap (p90) aqp90=para_ansgap         ///
                     (first) aq_actor=para_actor,                            ///
-                    by(para_actor_key `qscope' para_var) fast
+                    by(para_actor_key `qscope' qorder para_var) fast
                 quietly gen double aqfsh = aqnf/aqnt if aqnt>0
                 quietly decode `qscope', gen(`scopestr')
                 quietly replace `scopestr' = ""    if `qscope'==0
                 quietly replace `scopestr' = "APP" if `qscope'==-1
                 quietly drop `qscope'
                 quietly rename `scopestr' qscope
-                gsort para_actor_key qscope -aqmed para_var
+                quietly sort para_actor_key qscope qorder para_var
                 quietly save `"`aqsaving'"'
             }
         }
@@ -7391,7 +7427,7 @@ program _suso_para_report, rclass
     local htitle `"`r(out)'"'
 
     di as txt "suso paradata: building the interactive QC report ..."
-    tempfile EVD EVSK SK QT AQT QTK QWS DAILY HHF GGF MERGED RSD RSDFOCUS FLK HQF ///
+    tempfile EVD EVSK SK QT AQT QTK QWS QXO DAILY HHF GGF MERGED RSD RSDFOCUS FLK HQF ///
         KEYF MODEF TZF REJF REJDF OVF OVDF OVB OVP OVACT OVADF OVS PCEF VERF NQF RTF FRF ACTF ACTPF
     tempname derivecap skipcap
     local nevents = _N
@@ -7420,6 +7456,33 @@ program _suso_para_report, rclass
         quietly _suso_para_hqmap using `"`data'"', saving(`"`HQF'"')
         local hasassignment = r(hasassignment)
     }
+
+    * Preserve the questionnaire preview's document order as a compact map.
+    * This is the static design/CAPI sequence; effective skip logic means one
+    * interview may traverse only a subset of it.  Duplicate variable metadata
+    * keeps the first design position, and roster instances later collapse onto
+    * their base para_var.  Parsing here also makes a bad qx() fail before the
+    * multi-million-event behaviour derivation begins.
+    local hasqxorder 0
+    local qorderopt ""
+    if `"`qx'"'!="" {
+        preserve
+            quietly _suso_para_qxload , file(`"`qx'"')
+            quietly gen long qx_order = _n
+            quietly keep qx_var qx_order
+            quietly drop if strtrim(qx_var)==""
+            quietly bysort qx_var (qx_order): keep if _n==1
+            quietly rename qx_var para_var
+            quietly isid para_var
+            quietly save `"`QXO'"'
+        restore
+        local hasqxorder 1
+        local qorderopt `"qorder(`"`QXO'"')"'
+    }
+    local qordernote "<b>Default order:</b> first occurrence in the loaded paradata; tied or unavailable source positions are alphabetical. Supply qx() for the questionnaire design order."
+    local qorderbutton "Default order"
+    if `hasqxorder' local qordernote "<b>Default order:</b> the static design/CAPI sequence in the supplied questionnaire preview, among questions observed in this scope. Skip logic means any one interview may see only its enabled path; roster instances remain at their base variable position, and event variables absent from the preview are appended alphabetically."
+    if `hasqxorder' local qorderbutton "Questionnaire order"
 
     di as txt "  [behaviour 1/5] deriving sessions, actors and answer timing once ..."
     _suso_para_derive , gapmins(`gapmins') fastsecs(`fastsecs') `allroles'     ///
@@ -7525,7 +7588,7 @@ program _suso_para_report, rclass
     quietly use `"`EVD'"', clear
     quietly _suso_para_questionpayload , statusmap(`"`QWS'"')                 ///
         qsaving(`"`QT'"') aqsaving(`"`AQT'"') peersaving(`"`QTK'"')          ///
-        vars(`"`vars'"')
+        vars(`"`vars'"') `qorderopt'
     local hasq = r(hasq)
     local hasaq = r(hasaq)
     local haspeerq = r(haspeerq)
@@ -8503,8 +8566,8 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="note">Actor-level comparison: every contributor is measured from their own events, including correction-only actors; nobody inherits the primary actor's pace or the last editor's identity. <b>vs team</b> is the actor's typical answer speed relative to the team (0.5 = twice as fast). Shared-minute counts are actor-specific screening buckets. Gold rows have at least one flagged contribution; judge shares only where the interview count is reasonable. <span id="l_more"></span></div>"' _n
     file write `fh' `"<section><table id="t_league"></table></section>"' _n
     file write `fh' `"<h2>Question timing</h2>"' _n
-    file write `fh' `"<div class="note"><b>Actor / enumerator</b> and <b>Interview status</b> both filter this table. Status is the record's current/final status when this report was built (data() status takes precedence over paradata). <b>Answer events</b> are first-pass AnswerSet saves, so one interview can contribute several events through a revision, repeated save, or roster instance; for example, 405 events across 381 distinct interviews means 24 additional saves/instances. <b>Distinct interviews</b> counts unique interview IDs. <b>Timed reaches</b> is the subset with a valid within-session gap and is the denominator used by median, p90, and the &lt; `fastsecs' s share; repeated taps remain in Answer events but are not timed reaches. vars() limits the questions; the Filter variable/value controls do not currently change Question timing. Every observed matching variable is shown (questionnaire items with zero first-pass events are not); type to search and click a column header to sort. <span id="q_more"></span></div>"' _n
-    file write `fh' `"<section><div class="ctrl" style="max-width:280px;margin-bottom:8px"><label>Filter questions</label><input id="c_q" type="text" placeholder="variable name contains..."></div><table id="t_q"></table></section>"' _n
+    file write `fh' `"<div class="note"><b>Actor / enumerator</b> and <b>Interview status</b> both filter this table. Status is the record's current/final status when this report was built (data() status takes precedence over paradata). <b>Answer events</b> are first-pass AnswerSet saves, so one interview can contribute several events through a revision, repeated save, or roster instance; for example, 405 events across 381 distinct interviews means 24 additional saves/instances. <b>Distinct interviews</b> counts unique interview IDs. <b>Timed reaches</b> is the subset with a valid within-session gap and is the denominator used by median, p90, and the &lt; `fastsecs' s share; repeated taps remain in Answer events but are not timed reaches. `qordernote' vars() limits the questions; the Filter variable/value controls do not currently change Question timing. Every observed matching variable is shown (questionnaire items with zero first-pass events are not); type to search and click a column header to sort. Reset restores the default order. <span id="q_more"></span></div>"' _n
+    file write `fh' `"<section><div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:8px"><div class="ctrl" style="max-width:280px"><label>Filter questions</label><input id="c_q" type="text" placeholder="variable name contains..."></div><button id="c_qorder" class="pbtn ghost" type="button">`qorderbutton'</button></div><table id="t_q"></table></section>"' _n
     * Removal summaries are rendered from one compact row per already-detected
     * full-stream run.  This lets the actor control recompute and re-rank the
     * table without ever changing cascade adjacency or attribution.
@@ -8636,7 +8699,7 @@ program _suso_para_report, rclass
     local rnesc `"`r(out)'"'
     local veline ""
     if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.20) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.22) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
     _suso_para_history_js `fh'
@@ -8777,8 +8840,9 @@ program _suso_para_report, rclass
             local med = cond(missing(qmed[`i']), "null", string(qmed[`i'],"%12.1f"))
             local p90 = cond(missing(qp90[`i']), "null", string(qp90[`i'],"%12.1f"))
             local fsh = cond(missing(qfsh[`i']), "null", string(qfsh[`i'],"%12.3f"))
+            local qo  = cond(missing(qorder[`i']), "null", string(qorder[`i'],"%12.0f"))
             local sep = cond(`i'==1, "", ",")
-            file write `fh' `"`sep'{"s":"`sj'","v":"`vj'","n":`=qn[`i']',"ni":`=qni[`i']',"nt":`=qnt[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
+            file write `fh' `"`sep'{"s":"`sj'","v":"`vj'","o":`qo',"n":`=qn[`i']',"ni":`=qni[`i']',"nt":`=qnt[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
         }
     }
     file write `fh' `"],"' _n
@@ -8797,8 +8861,9 @@ program _suso_para_report, rclass
             local med = cond(missing(aqmed[`i']), "null", string(aqmed[`i'],"%12.1f"))
             local p90 = cond(missing(aqp90[`i']), "null", string(aqp90[`i'],"%12.1f"))
             local fsh = cond(missing(aqfsh[`i']), "null", string(aqfsh[`i'],"%12.3f"))
+            local qo  = cond(missing(qorder[`i']), "null", string(qorder[`i'],"%12.0f"))
             local sep = cond(`i'==1, "", ",")
-            file write `fh' `"`sep'{"r":"`arj'","k":"`akj'","s":"`sj'","v":"`vj'","n":`=aqn[`i']',"ni":`=aqni[`i']',"nt":`=aqnt[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
+            file write `fh' `"`sep'{"r":"`arj'","k":"`akj'","s":"`sj'","v":"`vj'","o":`qo',"n":`=aqn[`i']',"ni":`=aqni[`i']',"nt":`=aqnt[`i']',"med":`med',"p90":`p90',"fsh":`fsh'}"' _n
         }
     }
     file write `fh' `"],"' _n
@@ -9585,7 +9650,7 @@ program _suso_para_check, rclass
     file write `hf' `"<h2>Questions</h2>"' _n
     file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
     file write `hf' `"<div id="list"></div>"' _n
-    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.20) on `now'.</div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.22) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
     file write `hf' `"var D={"meta":{"statuses":[`jmeta'],"fdims":[`jfdims']},"rows":["' _n
     forvalues i = 1/`=_N' {
@@ -9990,7 +10055,7 @@ program _suso_para_suite, rclass
         if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
     }
     di as txt "suso paradata: building the QC suite ..."
-    di as txt "  code build: 1.7.20-QSTATUSHISTORY"
+    di as txt "  code build: 1.7.22-PRESERVEFIX"
     tempfile EVX T1 T2 T3
     quietly save `"`EVX'"'
 
