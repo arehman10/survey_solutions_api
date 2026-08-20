@@ -5,7 +5,7 @@ d suso is a Stata interface to the World Bank Survey Solutions REST API and
 d includes paradata timing, behaviour flags, historical removal review,
 d hierarchy-aware final-data enablement adjudication, a tabbed QC suite, and
 d direct Headquarters interview/assignment links in the paradata HTML.
-d Build: 2026-08-19-QSTATUSHISTORY (v1.7.20; Java backend 1.7.11-AUDITFIX).
+d Build: 2026-08-19-PRESERVEFIX (v1.7.22; Java backend 1.7.11-AUDITFIX).
 d
 d Requires: Stata 14.2 or newer and Java 11 or newer.
 d Distribution-Date: 20260819
