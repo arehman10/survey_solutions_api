@@ -1,4 +1,4 @@
-*! suso v1.7.25 build 2026-08-21-TRIAGENAV  (triage-first report navigation; see help)
+*! suso v1.7.26 build 2026-08-21-SUITETRIAGE  (suite-wide triage navigation; see help)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -260,7 +260,7 @@ end
 
 program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.25 (build 2026-08-21-TRIAGENAV)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.26 (build 2026-08-21-SUITETRIAGE)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -270,8 +270,8 @@ program _suso_about, rclass
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
-    return local version "1.7.25"
-    return local build "2026-08-21-TRIAGENAV"
+    return local version "1.7.26"
+    return local build "2026-08-21-SUITETRIAGE"
     return local expected_backend "1.7.11-AUDITFIX"
 end
 
@@ -288,7 +288,7 @@ program _suso_doctor, rclass
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
-    di as txt "  ado code build : " as res "1.7.25-TRIAGENAV"
+    di as txt "  ado code build : " as res "1.7.26-SUITETRIAGE"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -314,7 +314,7 @@ program _suso_doctor, rclass
             if "$SUSO_JARBUILD"!="1.7.11-AUDITFIX" {
                 local ok 0
                 di as err "  WARNING       : suso.ado and suso.jar are from different builds."
-                di as err "                  Reinstall both files from the same v1.7.25 package, then restart Stata."
+                di as err "                  Reinstall both files from the same v1.7.26 package, then restart Stata."
             }
         }
         else {
@@ -325,7 +325,7 @@ program _suso_doctor, rclass
     }
     _suso_showconfig
     return scalar ok = `ok'
-    return local ado_build "1.7.25-TRIAGENAV"
+    return local ado_build "1.7.26-SUITETRIAGE"
     return local backend_build "`backend'"
     return local java_version "`javaver'"
     capture macro drop SUSO_JAVAVER SUSO_JAVAOK SUSO_JARBUILD
@@ -4535,10 +4535,60 @@ program _suso_para_skip_page_js
     file write `hf' `"function initActors(){var a=SKP.actors(SK.cases),s=el('sk_actor'),o=document.createElement('option');s.innerHTML='';o.value='';o.textContent='All removal-run actors ('+a.length+')';s.appendChild(o);for(var i=0;i<a.length;i++){o=document.createElement('option');o.value=a[i].k;o.textContent=a[i].n+' ('+a[i].c+')';s.appendChild(o);}}"' _n
     file write `hf' `"function initStatuses(){var a=SKP.statuses(SK.cases),s=el('sk_status'),o=document.createElement('option'),has=false,i;for(i=0;i<SK.cases.length;i++)if(SK.cases[i].wc==='approvebysup'||SK.cases[i].wc==='approvebyhq'){has=true;break;}s.innerHTML='';o.value='';o.textContent='All statuses';s.appendChild(o);for(i=0;i<a.length;i++){o=document.createElement('option');o.value=a[i].k;o.textContent=a[i].k+' ('+a[i].c+')';s.appendChild(o);}if(has){o=document.createElement('option');o.value='APP';o.textContent='Approved only (Sup + HQ)';s.insertBefore(o,s.options[1]||null);}}"' _n
     file write `hf' `"function actorLabel(k){var o=el('sk_actor').options;for(var i=0;i<o.length;i++)if(o[i].value===k)return o[i].text.replace(/ \([0-9]+\)$/,'');return k;}"' _n
-    file write `hf' `"function renderSkip(){var k=el('sk_actor').value,w=el('sk_status').value,a=SKP.scope(SK.cases,k,w),st=SKP.stats(a),p=SKP.patterns(a),g=SKP.groups(a),i,s='',sb=[];el('sk_hist').textContent=st.h.toLocaleString();el('sk_q').textContent=st.q.toLocaleString();el('sk_need').textContent=st.need.toLocaleString();el('sk_re').textContent=st.re.toLocaleString();el('sk_ev').textContent=st.ev.toLocaleString();el('sk_compact').textContent=(st.ch+' / '+st.cev);el('sk_outside').textContent=st.out.toLocaleString();if(k)sb.push(actorLabel(k));if(w)sb.push(w==='APP'?'Approved only (Sup + HQ)':w);el('sk_scope').textContent='Showing '+st.h.toLocaleString()+' exhaustive removal histories'+(sb.length?' for '+sb.join(' / '):' in the current vars()/role scope')+'. Loaded totals: '+SK.meta.role.toLocaleString()+' role-scoped and '+SK.meta.allRole.toLocaleString()+' all-role raw events.';for(i=0;i<p.length;i++)s+='<tr><td>'+E(p[i].l)+'</td><td class=\"r\">'+p[i].h.toLocaleString()+'</td><td class=\"r\">'+p[i].ch.toLocaleString()+'</td><td class=\"r\">'+p[i].ni.toLocaleString()+'</td><td class=\"r\">'+p[i].ev.toLocaleString()+'</td><td class=\"r\">'+p[i].out.toLocaleString()+'</td></tr>';el('sk_patterns').innerHTML=s;el('sk_patterns_empty').textContent=p.length?'':'No removal histories for this selection.';s='';for(i=0;i<g.length;i++)s+='<details open><summary class=\"gate\"><b>'+E(g[i].l)+'</b> &nbsp;-&nbsp; '+g[i].cases.length+' case(s), '+g[i].need+' question-history unit(s) to check, in '+g[i].ni+' interview(s)</summary>'+g[i].cases.map(function(x){return x.card;}).join('')+'</details>';if(!g.length)s='<div class=\"state resolved\"><b>No final-data checks are indicated for this selection.</b> Every matching identifiable item is answered or correctly blank under final questionnaire logic.</div>';el('sk_verify').innerHTML=s;var r=[];for(i=0;i<a.length;i++)if(a[i].t==='C')r.push(a[i]);el('sk_resolved_summary').textContent='Show '+r.length+' resolved historical case(s)';el('sk_resolved').innerHTML=r.map(function(x){return x.card;}).join('');el('sk_resolved_more').textContent=r.length?'':'No resolved histories for this selection.';var hA=false;for(i=0;i<a.length;i++)if(a[i].t==='A'){hA=true;break;}if(parent!==window)parent.postMessage({type:'suso-tab-badge',n:st.need,sev:(hA?'b':(st.need>0?'w':'g'))},'*');}"' _n
+    file write `hf' `"function renderSkip(){var k=el('sk_actor').value,w=el('sk_status').value,a=SKP.scope(SK.cases,k,w),st=SKP.stats(a),p=SKP.patterns(a),g=SKP.groups(a),i,s='',sb=[];el('sk_hist').textContent=st.h.toLocaleString();el('sk_q').textContent=st.q.toLocaleString();el('sk_need').textContent=st.need.toLocaleString();el('sk_re').textContent=st.re.toLocaleString();el('sk_ev').textContent=st.ev.toLocaleString();el('sk_compact').textContent=(st.ch+' / '+st.cev);el('sk_outside').textContent=st.out.toLocaleString();if(k)sb.push(actorLabel(k));if(w)sb.push(w==='APP'?'Approved only (Sup + HQ)':w);el('sk_scope').textContent='Showing '+st.h.toLocaleString()+' exhaustive removal histories'+(sb.length?' for '+sb.join(' / '):' in the current vars()/role scope')+'. Loaded totals: '+SK.meta.role.toLocaleString()+' role-scoped and '+SK.meta.allRole.toLocaleString()+' all-role raw events.';for(i=0;i<p.length;i++)s+='<tr><td>'+E(p[i].l)+'</td><td class=\"r\">'+p[i].h.toLocaleString()+'</td><td class=\"r\">'+p[i].ch.toLocaleString()+'</td><td class=\"r\">'+p[i].ni.toLocaleString()+'</td><td class=\"r\">'+p[i].ev.toLocaleString()+'</td><td class=\"r\">'+p[i].out.toLocaleString()+'</td></tr>';el('sk_patterns').innerHTML=s;el('sk_patterns_empty').textContent=p.length?'':'No removal histories for this selection.';s='';for(i=0;i<g.length;i++)s+='<details open><summary class=\"gate\"><b>'+E(g[i].l)+'</b> &nbsp;-&nbsp; '+g[i].cases.length+' case(s), '+g[i].need+' question-history unit(s) to check, in '+g[i].ni+' interview(s)</summary>'+g[i].cases.map(function(x){return x.card;}).join('')+'</details>';if(!g.length)s='<div class=\"state resolved\"><b>No final-data checks are indicated for this selection.</b> Every matching identifiable item is answered or correctly blank under final questionnaire logic.</div>';el('sk_verify').innerHTML=s;var r=[];for(i=0;i<a.length;i++)if(a[i].t==='C')r.push(a[i]);el('sk_resolved_summary').textContent='Show '+r.length+' resolved historical case(s)';el('sk_resolved').innerHTML=r.map(function(x){return x.card;}).join('');el('sk_resolved_more').textContent=r.length?'':'No resolved histories for this selection.';var hA=false;for(i=0;i<a.length;i++)if(a[i].t==='A'){hA=true;break;}if(parent!==window)parent.postMessage({type:'suso-tab-badge',n:st.need,sev:(hA?'b':(st.need>0?'w':'g'))},'*');updateSkipSections(st,a,p,hA);}"' _n
     file write `hf' `"function setActor(k,label,notify){var s=el('sk_actor'),found=false;for(var i=0;i<s.options.length;i++)if(s.options[i].value===k){found=true;break;}if(k&&!found){var o=document.createElement('option');o.value=k;o.textContent=(label||k)+' (0)';s.appendChild(o);}s.value=k||'';renderSkip();if(notify&&parent!==window)parent.postMessage({type:'suso-actor-filter',key:s.value,label:s.value?actorLabel(s.value):''},'*');}"' _n
     file write `hf' `"function setStatus(k,notify){var s=el('sk_status'),found=!k,o;for(var i=0;k&&i<s.options.length;i++)if(s.options[i].value===k){found=true;break;}if(k&&!found){o=document.createElement('option');o.value=k;o.textContent=(k==='APP'?'Approved only (Sup + HQ)':k)+' (0)';s.appendChild(o);}s.value=k||'';renderSkip();if(notify&&parent!==window)parent.postMessage({type:'suso-status-filter',key:s.value},'*');}"' _n
-    file write `hf' `"initActors();initStatuses();renderSkip();el('sk_actor').addEventListener('change',function(){setActor(this.value,actorLabel(this.value),true);});el('sk_status').addEventListener('change',function(){setStatus(this.value,true);});window.addEventListener('message',function(ev){var d=ev.data||{};if(ev.source!==parent)return;if(d.type==='suso-actor-filter'&&typeof d.key==='string'&&typeof d.label==='string'&&d.key.length<=500&&d.label.length<=500)setActor(d.key,d.label,false);if(d.type==='suso-status-filter'&&typeof d.key==='string'&&d.key.length<=500)setStatus(d.key,false);});"' _n
+    file write `hf' `"/* triage sections: live severity, pills, findings (Skips & removals) */"' _n
+    file write `hf' `"var secState=Object.create(null), secDefaultsDone=false;"' _n
+    file write `hf' `"function secApply(id){"' _n
+    file write `hf' `"  var s=el(id); if(!s) return;"' _n
+    file write `hf' `"  var st=secState[id]||(secState[id]={open:false,sev:''});"' _n
+    file write `hf' `"  s.className='sblock'+(st.sev?(' sv-'+st.sev):'')+(st.open?' open':'');"' _n
+    file write `hf' `"  var b=s.querySelector('.shead');"' _n
+    file write `hf' `"  if(b) b.setAttribute('aria-expanded',st.open?'true':'false');"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"function secOpen(id,open){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.open=!!open; secApply(id); }"' _n
+    file write `hf' `"function secToggle(id){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.open=!st.open; secApply(id); }"' _n
+    file write `hf' `"function secSev(id,sev){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.sev=sev||''; secApply(id); }"' _n
+    file write `hf' `"function setPill(pid,cid,n,sev){"' _n
+    file write `hf' `"  var txt=(n>0)?n.toLocaleString():'\u2713', cls=(n>0)?sev:'g';"' _n
+    file write `hf' `"  var p=el(pid); if(p){ p.textContent=txt; p.className='pillc '+cls; p.style.display=''; }"' _n
+    file write `hf' `"  var c=el(cid); if(c){ c.textContent=txt; c.className='n '+cls; c.style.display=''; }"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"function setFind(fid,txt){ var f=el(fid); if(f) f.textContent=txt; }"' _n
+    file write `hf' `"function plural(n,s,p){ return n===1?s:(p||(s+'s')); }"' _n
+    file write `hf' `"function initSkipSections(){"' _n
+    file write `hf' `"  var i, hs=document.querySelectorAll('.sblock .shead');"' _n
+    file write `hf' `"  for(i=0;i<hs.length;i++)(function(b){ b.addEventListener('click',function(){ var s=b.parentNode; if(s&&s.id) secToggle(s.id); }); })(hs[i]);"' _n
+    file write `hf' `"  var cs=document.querySelectorAll('.chipx');"' _n
+    file write `hf' `"  for(i=0;i<cs.length;i++)(function(a){ a.addEventListener('click',function(ev){"' _n
+    file write `hf' `"    if(ev&&ev.preventDefault) ev.preventDefault();"' _n
+    file write `hf' `"    var id=a.getAttribute('data-sec'); if(!id) return;"' _n
+    file write `hf' `"    secOpen(id,true);"' _n
+    file write `hf' `"    var s=el(id); if(s&&s.scrollIntoView) s.scrollIntoView({behavior:'smooth',block:'start'});"' _n
+    file write `hf' `"  }); })(cs[i]);"' _n
+    file write `hf' `"  var ea=el('sk_expall'), ec=el('sk_collall'), all=document.querySelectorAll('.sblock'), j;"' _n
+    file write `hf' `"  if(ea) ea.addEventListener('click',function(){ for(j=0;j<all.length;j++) if(all[j].id) secOpen(all[j].id,true); });"' _n
+    file write `hf' `"  if(ec) ec.addEventListener('click',function(){ for(j=0;j<all.length;j++) if(all[j].id) secOpen(all[j].id,false); });"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"function updateSkipSections(st,a,p,hasA){"' _n
+    file write `hf' `"  var i, cases=st.h-st.resolved, ids=Object.create(null), niv=0;"' _n
+    file write `hf' `"  for(i=0;i<a.length;i++) if(a[i].t!=='C'&&!ids[a[i].id]){ ids[a[i].id]=1; niv++; }"' _n
+    file write `hf' `"  secSev('s_ver', hasA?'b':(st.need>0?'w':'g'));"' _n
+    file write `hf' `"  setPill('p_ver','cb_ver',st.need,(hasA?'b':'w'));"' _n
+    file write `hf' `"  setFind('f_ver', cases>0"' _n
+    file write `hf' `"    ? (cases.toLocaleString()+' '+plural(cases,'case')+' - '+st.need.toLocaleString()+' question-history '+plural(st.need,'unit')+' to check - '+niv.toLocaleString()+' '+plural(niv,'interview'))"' _n
+    file write `hf' `"    : 'No final-data checks are indicated for this selection');"' _n
+    file write `hf' `"  secSev('s_pat','');"' _n
+    file write `hf' `"  setFind('f_pat', st.h>0"' _n
+    file write `hf' `"    ? (p.length.toLocaleString()+' pattern '+plural(p.length,'group')+' across '+st.h.toLocaleString()+' '+plural(st.h,'history','histories'))"' _n
+    file write `hf' `"    : 'No removal histories for this selection');"' _n
+    file write `hf' `"  secSev('s_res','g');"' _n
+    file write `hf' `"  setPill('p_res','cb_res',st.resolved,'g');"' _n
+    file write `hf' `"  setFind('f_res', st.resolved.toLocaleString()+' resolved historical '+plural(st.resolved,'case'));"' _n
+    file write `hf' `"  if(!secDefaultsDone){ secDefaultsDone=true; secOpen('s_ver',true); }"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"initActors();initStatuses();initSkipSections();renderSkip();el('sk_actor').addEventListener('change',function(){setActor(this.value,actorLabel(this.value),true);});el('sk_status').addEventListener('change',function(){setStatus(this.value,true);});window.addEventListener('message',function(ev){var d=ev.data||{};if(ev.source!==parent)return;if(d.type==='suso-actor-filter'&&typeof d.key==='string'&&typeof d.label==='string'&&d.key.length<=500&&d.label.length<=500)setActor(d.key,d.label,false);if(d.type==='suso-status-filter'&&typeof d.key==='string'&&d.key.length<=500)setStatus(d.key,false);});"' _n
 end
 
 * ---- skips: historical answer-removal runs and nearby/linked answers --------
@@ -5952,7 +6002,7 @@ program _suso_para_skips, rclass
             quietly file open `mf' using `"`messages'"', write replace text
             local mh 1
             file write `mf' "PARADATA SKIP/REMOVAL REVIEW" _n
-            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.25)" _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.26)" _n
             file write `mf' "Definition: every consecutive same-actor AnswerRemoved history is inventoried; cascade(`cascade')/window(`window') marks the compact-priority subset." _n
             file write `mf' "`nhist' histories and `nremevents' raw role-scoped event(s); `ncasc' compact histories / `nwiped' compact events; `noutsideevents' outside-pattern events; `naffectedqall' question-history units." _n
             file write `mf' "Loaded all-role raw total: `nraw_allroles_global'; current role-scope raw total: `nraw_role_global'." _n
@@ -6250,7 +6300,26 @@ program _suso_para_skips, rclass
             file write `hf' `".small{font-size:10.5px;color:#888}.tech{margin-top:8px}.tech summary{cursor:pointer;color:#556575;font-size:11.5px}.techsum{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:8px 12px;margin:12px 0}.techsum>summary{cursor:pointer;color:#556575;font-size:12.5px;font-weight:600}"' _n
             file write `hf' `"details{margin:4px 0}summary.gate{cursor:pointer;font-size:13.5px;color:#002244;padding:8px 10px;background:#f5f7f9;border:1px solid #dce2e8;border-radius:6px;margin-top:14px}"' _n
             file write `hf' `".foot{font-size:11px;color:#777;margin-top:24px;line-height:1.5}"' _n
-            file write `hf' `"@media print{body{background:#fff}.case{border:1px solid #bbb;border-left-width:4px}}"' _n
+            file write `hf' `"@media print{body{background:#fff}.case{border:1px solid #bbb;border-left-width:4px}.sbody{display:block!important}.chipnav{position:static}.shead .chev{display:none}}"' _n
+            file write `hf' `".chipnav{position:sticky;top:0;z-index:6;background:#f4f5f7;padding:8px 0 6px;margin:0 0 4px;border-bottom:1px solid #e3e6ea;display:flex;gap:6px;flex-wrap:wrap;align-items:center}"' _n
+            file write `hf' `".chipx{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #dfe4e8;border-radius:14px;padding:4px 11px;font-size:12px;color:#33404d;text-decoration:none;cursor:pointer}"' _n
+            file write `hf' `".chipx:hover{border-color:#9fb2c4}"' _n
+            file write `hf' `".chipx .n{font-weight:700;font-size:11px;padding:0 6px;border-radius:8px;font-variant-numeric:tabular-nums}"' _n
+            file write `hf' `".chipx .n.b{background:#fbeaea;color:#8a1f1f}.chipx .n.w{background:#fdf6e3;color:#7a5b00}.chipx .n.g{color:#1e6b34}"' _n
+            file write `hf' `".chiputil{margin-left:auto;color:#556575;background:transparent;border:0;font:inherit;font-size:12px;cursor:pointer;padding:4px 8px;border-radius:14px}"' _n
+            file write `hf' `".chiputil:hover{background:#fff;box-shadow:inset 0 0 0 1px #dfe4e8}.chiputil+.chiputil{margin-left:0}"' _n
+            file write `hf' `".sblock{background:#fff;border:1px solid #e3e6ea;border-radius:8px;margin:10px 0;overflow:hidden}"' _n
+            file write `hf' `".sblock.sv-b{border-left:3px solid #a33}.sblock.sv-w{border-left:3px solid #C9A227}.sblock.sv-g{border-left:3px solid #7fbf95}"' _n
+            file write `hf' `".shead{display:flex;width:100%;align-items:baseline;gap:10px;padding:11px 16px;background:transparent;border:0;cursor:pointer;text-align:left;font-family:inherit}"' _n
+            file write `hf' `".shead h2{margin:0;font-size:15px;color:#002244;font-weight:600;border-bottom:0;padding-bottom:0}"' _n
+            file write `hf' `".pillc{font-size:11px;font-weight:700;padding:1px 8px;border-radius:9px;position:relative;top:-1px;font-variant-numeric:tabular-nums}"' _n
+            file write `hf' `".pillc.b{background:#fbeaea;color:#8a1f1f}.pillc.w{background:#fdf6e3;color:#7a5b00}.pillc.g{background:#eaf5ec;color:#1e6b34}"' _n
+            file write `hf' `".shead .sfind{color:#556575;font-size:12.5px;margin-left:auto;text-align:right;max-width:52%}"' _n
+            file write `hf' `".shead .chev{color:#8a97a4;font-size:11px;flex:0 0 auto;transition:transform .15s}"' _n
+            file write `hf' `".sblock.open .chev{transform:rotate(90deg)}"' _n
+            file write `hf' `".sbody{display:none;padding:2px 16px 14px;border-top:1px solid #eef0f2}"' _n
+            file write `hf' `".sblock.open .sbody{display:block}"' _n
+            file write `hf' `"@media (prefers-reduced-motion: reduce){.shead .chev{transition:none}}"' _n
             file write `hf' `"</style></head><body>"' _n
             file write `hf' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
             file write `hf' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
@@ -6267,18 +6336,28 @@ program _suso_para_skips, rclass
             file write `hf' `"<div class="card warn"><div class="v" id="sk_need">-</div><div class="k">need final-data check</div></div>"' _n
             file write `hf' `"<div class="card"><div class="v" id="sk_re">-</div><div class="k">answered again later</div></div>"' _n
             file write `hf' `"</div>"' _n
+            file write `hf' `"<nav class='chipnav' aria-label='Review sections'>"' _n
+            file write `hf' `"<a class='chipx' href='#s_ver' data-sec='s_ver'>Verification cases<span class='n' id='cb_ver' style='display:none'></span></a>"' _n
+            file write `hf' `"<a class='chipx' href='#s_pat' data-sec='s_pat'>Patterns</a>"' _n
+            file write `hf' `"<a class='chipx' href='#s_res' data-sec='s_res'>Resolved<span class='n' id='cb_res' style='display:none'></span></a>"' _n
+            file write `hf' `"<button type='button' class='chiputil' id='sk_expall'>Expand all</button>"' _n
+            file write `hf' `"<button type='button' class='chiputil' id='sk_collall'>Collapse all</button>"' _n
+            file write `hf' `"</nav>"' _n
             file write `hf' `"<div class="how"><b>Coverage:</b> every role-scoped AnswerRemoved event is retained, including singleton and paired histories. <b>Compact priority</b> means at least `cascade' consecutive removals, a fully timed run within `window' seconds, and a bounded nearby AnswerSet. Outside-pattern and timing-unknown histories still receive final-state adjudication. Question identity unavailable is an explicit review category. A questionnaire relationship is context, not proof of cause.</div>"' _n
             quietly save `"`DET2'"'
 
-            file write `hf' `"<details class="techsum"><summary>Technical pattern summary</summary>"' _n
+            file write `hf' `"<div class='sblock' id='s_pat'><button class='shead' type='button' aria-expanded='false'><h2>Technical pattern summary</h2><span class='sfind' id='f_pat'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
             file write `hf' `"<div class="meta">This table covers every filtered inventory history. Compact histories are the threshold/window subset; outside events are retained rather than discarded.</div>"' _n
-            file write `hf' `"<table><thead><tr><th>relationship / variable</th><th class="r">all histories</th><th class="r">compact</th><th class="r">interviews</th><th class="r">raw events</th><th class="r">outside events</th></tr></thead><tbody id="sk_patterns"></tbody></table><div id="sk_patterns_empty" class="meta"></div></details>"' _n
-            file write `hf' `"<h2>Cases needing verification</h2>"' _n
+            file write `hf' `"<table><thead><tr><th>relationship / variable</th><th class="r">all histories</th><th class="r">compact</th><th class="r">interviews</th><th class="r">raw events</th><th class="r">outside events</th></tr></thead><tbody id="sk_patterns"></tbody></table><div id="sk_patterns_empty" class="meta"></div>"' _n
+            file write `hf' `"</div></div>"' _n
+            file write `hf' `"<div class='sblock' id='s_ver'><button class='shead' type='button' aria-expanded='false'><h2>Cases needing verification</h2><span class='pillc' id='p_ver' style='display:none'></span><span class='sfind' id='f_ver'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
             file write `hf' `"<div class="note">These cases contain an enabled blank, unevaluable logic, a missing variable/roster instance, an answer while disabled, or an identity-unavailable removal. Blank-but-disabled questions are resolved automatically.</div>"' _n
             file write `hf' `"<div id="sk_verify"></div>"' _n
-            file write `hf' `"<h2>Resolved history - no action</h2>"' _n
+            file write `hf' `"</div></div>"' _n
+            file write `hf' `"<div class='sblock' id='s_res'><button class='shead' type='button' aria-expanded='false'><h2>Resolved history - no action</h2><span class='pillc' id='p_res' style='display:none'></span><span class='sfind' id='f_res'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
             file write `hf' `"<details><summary id="sk_resolved_summary" style="cursor:pointer;font-size:13px;color:#555;padding:6px 0"></summary><div id="sk_resolved"></div></details><div id="sk_resolved_more" class="meta"></div>"' _n
-            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.25). Exhaustive histories are audit inventory; compact classification is a prioritization signal, not proof of misconduct. Actor ownership is the actor who emitted the AnswerRemoved run. Current/final status uses data() when supplied, otherwise paradata workflow history.</div>"' _n
+            file write `hf' `"</div></div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.26). Exhaustive histories are audit inventory; compact classification is a prioritization signal, not proof of misconduct. Actor ownership is the actor who emitted the AnswerRemoved run. Current/final status uses data() when supplied, otherwise paradata workflow history.</div>"' _n
             file write `hf' `"</div><script>"' _n
             file write `hf' `"var SK={meta:{allRole:`nraw_allroles_global',role:`nraw_role_global',globalHistories:`nhist_global',globalCompact:`ncasc_global',globalCompactEvents:`ncompactevents_global'},cases:["' _n
             quietly use `"`DET2'"', clear
@@ -9303,7 +9382,7 @@ program _suso_para_report, rclass
     local rnesc `"`r(out)'"'
     local veline ""
     if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.25) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.26) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
     _suso_para_history_js `fh'
@@ -10170,7 +10249,7 @@ program _suso_para_check, rclass
     file write `hf' `".card{flex:1 1 130px;background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:10px 13px;border-top:3px solid #002244}"' _n
     file write `hf' `".card.dim{border-top-color:#9aa7b5}.card.warn{border-top-color:#C9A227}"' _n
     file write `hf' `".card .v{font-size:20px;font-weight:700;color:#002244}.card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
-    file write `hf' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;position:sticky;top:0;z-index:5;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
+    file write `hf' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
     file write `hf' `".ctrl{display:flex;flex-direction:column;gap:3px}"' _n
     file write `hf' `".ctrl label{font-size:10.5px;color:#555;text-transform:uppercase;letter-spacing:.03em}"' _n
     file write `hf' `".ctrl input,.ctrl select{font-size:13px;padding:4px 6px;border:1px solid #c9cfd6;border-radius:5px;min-width:64px}"' _n
@@ -10202,6 +10281,28 @@ program _suso_para_check, rclass
     file write `hf' `".verdict.ok{background:#eef7f0;border-color:#bfe0c8;color:#1e6b34}.verdict.warn{background:#fdf6e3;border-color:#ecd9a0;color:#7a5b00}.verdict.bad{background:#fbeeee;border-color:#e6c3c3;color:#8a1f1f}"' _n
     file write `hf' `".foot{font-size:11px;color:#777;margin-top:24px;line-height:1.5}"' _n
     file write `hf' `"#l_more{font-size:11.5px;color:#8a6d00}"' _n
+    file write `hf' `".datasetline{color:#68737f;font-size:12px;margin:-4px 0 12px}"' _n
+    file write `hf' `".chipnav{position:sticky;top:0;z-index:6;background:#f4f5f7;padding:8px 0 6px;margin:0 0 4px;border-bottom:1px solid #e3e6ea;display:flex;gap:6px;flex-wrap:wrap;align-items:center}"' _n
+    file write `hf' `".chipx{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #dfe4e8;border-radius:14px;padding:4px 11px;font-size:12px;color:#33404d;text-decoration:none;cursor:pointer}"' _n
+    file write `hf' `".chipx:hover{border-color:#9fb2c4}"' _n
+    file write `hf' `".chipx .n{font-weight:700;font-size:11px;padding:0 6px;border-radius:8px;font-variant-numeric:tabular-nums}"' _n
+    file write `hf' `".chipx .n.b{background:#fbeaea;color:#8a1f1f}.chipx .n.w{background:#fdf6e3;color:#7a5b00}.chipx .n.g{color:#1e6b34}"' _n
+    file write `hf' `".chiputil{margin-left:auto;color:#556575;background:transparent;border:0;font:inherit;font-size:12px;cursor:pointer;padding:4px 8px;border-radius:14px}"' _n
+    file write `hf' `".chiputil:hover{background:#fff;box-shadow:inset 0 0 0 1px #dfe4e8}.chiputil+.chiputil{margin-left:0}"' _n
+    file write `hf' `".sblock{background:#fff;border:1px solid #e3e6ea;border-radius:8px;margin:10px 0;overflow:hidden}"' _n
+    file write `hf' `".sblock.sv-b{border-left:3px solid #a33}.sblock.sv-w{border-left:3px solid #C9A227}.sblock.sv-g{border-left:3px solid #7fbf95}"' _n
+    file write `hf' `".shead{display:flex;width:100%;align-items:baseline;gap:10px;padding:11px 16px;background:transparent;border:0;cursor:pointer;text-align:left;font-family:inherit}"' _n
+    file write `hf' `".shead h2{margin:0;font-size:15px;color:#002244;font-weight:600;border-bottom:0;padding-bottom:0}"' _n
+    file write `hf' `".pillc{font-size:11px;font-weight:700;padding:1px 8px;border-radius:9px;position:relative;top:-1px;font-variant-numeric:tabular-nums}"' _n
+    file write `hf' `".pillc.b{background:#fbeaea;color:#8a1f1f}.pillc.w{background:#fdf6e3;color:#7a5b00}.pillc.g{background:#eaf5ec;color:#1e6b34}"' _n
+    file write `hf' `".shead .sfind{color:#556575;font-size:12.5px;margin-left:auto;text-align:right;max-width:52%}"' _n
+    file write `hf' `".shead .chev{color:#8a97a4;font-size:11px;flex:0 0 auto;transition:transform .15s}"' _n
+    file write `hf' `".sblock.open .chev{transform:rotate(90deg)}"' _n
+    file write `hf' `".sbody{display:none;padding:2px 16px 14px;border-top:1px solid #eef0f2}"' _n
+    file write `hf' `".sblock.open .sbody{display:block}"' _n
+    file write `hf' `".sbody section{border:0;padding:0;margin-top:4px}"' _n
+    file write `hf' `"@media print{.sbody{display:block!important}.chipnav{position:static}.shead .chev{display:none}.panel{box-shadow:none}}"' _n
+    file write `hf' `"@media (prefers-reduced-motion: reduce){.shead .chev{transition:none}}"' _n
     file write `hf' `"</style></head><body>"' _n
     file write `hf' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
     file write `hf' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
@@ -10209,12 +10310,14 @@ program _suso_para_check, rclass
     file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; `dsrc'</div></div>"' _n
     file write `hf' `"<div class="wrap">"' _n
     file write `hf' `"<div class="cards">"' _n
-    file write `hf' `"<div class="card dim"><div class="v">`nobsc'</div><div class="k">records audited</div></div>"' _n
-    file write `hf' `"<div class="card"><div class="v">`k_eval'</div><div class="k">conditions evaluated</div></div>"' _n
-    file write `hf' `"<div class="card dim"><div class="v">`k_nocond'</div><div class="k">always on</div></div>"' _n
-    file write `hf' `"<div class="card warn"><div class="v">`k_noev'</div><div class="k">not evaluable</div></div>"' _n
-    file write `hf' `"<div class="card dim"><div class="v">`k_absent'</div><div class="k">not in this file</div></div>"' _n
+    file write `hf' `"<div class="card"><div class="v" id="k_recs">-</div><div class="k">records in view</div></div>"' _n
+    file write `hf' `"<div class="card"><div class="v" id="k_shown">-</div><div class="k">questions in view</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_imiss">-</div><div class="k">unanswered when enabled</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_viol">-</div><div class="k">answers on disabled qs</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_bad">-</div><div class="k">out-of-list values</div></div>"' _n
+    file write `hf' `"<div class="card warn"><div class="v" id="k_vund">-</div><div class="k">answered, gate undetermined</div></div>"' _n
     file write `hf' `"</div>"' _n
+    file write `hf' `"<div class="datasetline">Audit: `nobsc' records audited &nbsp;-&nbsp; `k_eval' conditions evaluated &nbsp;-&nbsp; `k_nocond' always on &nbsp;-&nbsp; `k_noev' not evaluable &nbsp;-&nbsp; `k_absent' not in this file</div>"' _n
     file write `hf' `"<div class="panel">"' _n
     file write `hf' `"<div class="ctrl"><label>Search variable or text</label><input id="c_q" type="text" placeholder="e.g. a3 or sales"></div>"' _n
     file write `hf' `"<div class="ctrl"><label>Section</label><select id="c_sec"></select></div>"' _n
@@ -10228,37 +10331,37 @@ program _suso_para_check, rclass
     file write `hf' `"</div>"' _n
     file write `hf' `"<div class="note"><b>Population scope:</b> Interview status and Filter variable are alternative breakdowns. Choosing one clears the other; use the command's <span class="mono">if</span> qualifier when both restrictions must be applied together.</div>"' _n
     file write `hf' `"<div class="legend2"><b>Reading the counts:</b> asked = the skip logic says the question applies to the record &nbsp;&middot;&nbsp; viol = answered while the logic says it should be off (hard problem) &nbsp;&middot;&nbsp; unans = applies but no answer was recorded &nbsp;&middot;&nbsp; bad codes = a value outside the option list &nbsp;&middot;&nbsp; undetermined = the enabling condition could not be resolved after Boolean short-circuiting</div>"' _n
+    file write `hf' `"<nav class='chipnav' aria-label='Audit sections'>"' _n
+    file write `hf' `"<a class='chipx' href='#s_imiss' data-sec='s_imiss'>Nonresponse<span class='n' id='cb_imiss' style='display:none'></span></a>"' _n
+    file write `hf' `"<a class='chipx' href='#sec_viol' data-sec='sec_viol'>Disabled answers<span class='n' id='cb_viol' style='display:none'></span></a>"' _n
+    file write `hf' `"<a class='chipx' href='#sec_vund' data-sec='sec_vund'>Undetermined gate<span class='n' id='cb_vund' style='display:none'></span></a>"' _n
+    file write `hf' `"<a class='chipx' href='#sec_bad' data-sec='sec_bad'>Out-of-list<span class='n' id='cb_bad' style='display:none'></span></a>"' _n
+    file write `hf' `"<a class='chipx' href='#s_list' data-sec='s_list'>Questions</a>"' _n
+    file write `hf' `"<button type='button' class='chiputil' id='dq_expall'>Expand all</button>"' _n
+    file write `hf' `"<button type='button' class='chiputil' id='dq_collall'>Collapse all</button>"' _n
+    file write `hf' `"</nav>"' _n
     file write `hf' `"<div id="v_chk" class="verdict ok"></div>"' _n
-    file write `hf' `"<div class="cards">"' _n
-    file write `hf' `"<div class="card"><div class="v" id="k_recs">-</div><div class="k">records in view</div></div>"' _n
-    file write `hf' `"<div class="card"><div class="v" id="k_shown">-</div><div class="k">questions in view</div></div>"' _n
-    file write `hf' `"<div class="card warn"><div class="v" id="k_imiss">-</div><div class="k">unanswered when enabled</div></div>"' _n
-    file write `hf' `"<div class="card warn"><div class="v" id="k_viol">-</div><div class="k">answers on disabled qs</div></div>"' _n
-    file write `hf' `"<div class="card warn"><div class="v" id="k_bad">-</div><div class="k">out-of-list values</div></div>"' _n
-    file write `hf' `"<div class="card warn"><div class="v" id="k_vund">-</div><div class="k">answered, gate undetermined</div></div>"' _n
-    file write `hf' `"</div>"' _n
-    file write `hf' `"<h2>Item nonresponse (enabled but unanswered)</h2>"' _n
+    file write `hf' `"<div class='sblock' id='s_imiss'><button class='shead' type='button' aria-expanded='false'><h2>Item nonresponse (enabled but unanswered)</h2><span class='pillc' id='p_imiss' style='display:none'></span><span class='sfind' id='f_imiss'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `hf' `"<div class="note">Top questions by unanswered share among records where the question was enabled (10+ enabled records). Service and desk questions often sit at 100% - use the filters or search to focus on interview content, and raise Min share to cut noise.</div>"' _n
     file write `hf' `"<section id="ch_imiss"></section>"' _n
-    file write `hf' `"<div id="sec_viol">"' _n
-    file write `hf' `"<h2>Answers on disabled questions</h2>"' _n
+    file write `hf' `"</div></div>"' _n
+    file write `hf' `"<div class='sblock' id='sec_viol'><button class='shead' type='button' aria-expanded='false'><h2>Answers on disabled questions</h2><span class='pillc' id='p_viol' style='display:none'></span><span class='sfind' id='f_viol'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `hf' `"<div class="note">Hard skip violations: an answer is present although the skip logic disables the question. These enter via preloading, API writes, or questionnaire version changes.</div>"' _n
     file write `hf' `"<section id="ch_viol"></section>"' _n
-    file write `hf' `"</div>"' _n
-    file write `hf' `"<div id="sec_vund">"' _n
-    file write `hf' `"<h2>Answered while the gate is undetermined</h2>"' _n
+    file write `hf' `"</div></div>"' _n
+    file write `hf' `"<div class='sblock' id='sec_vund'><button class='shead' type='button' aria-expanded='false'><h2>Answered while the gate is undetermined</h2><span class='pillc' id='p_vund' style='display:none'></span><span class='sfind' id='f_vund'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `hf' `"<div class="note">An answer exists while the effective gate remains undetermined after Boolean short-circuiting. Review the condition and source data: this can reflect a missing required input, an unsupported residual expression, preloading, or a questionnaire-version change.</div>"' _n
     file write `hf' `"<section id="ch_vund"></section>"' _n
-    file write `hf' `"</div>"' _n
-    file write `hf' `"<div id="sec_bad">"' _n
-    file write `hf' `"<h2>Single-select values outside the option list</h2>"' _n
+    file write `hf' `"</div></div>"' _n
+    file write `hf' `"<div class='sblock' id='sec_bad'><button class='shead' type='button' aria-expanded='false'><h2>Single-select values outside the option list</h2><span class='pillc' id='p_bad' style='display:none'></span><span class='sfind' id='f_bad'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `hf' `"<div class="note">Values not in the questionnaire option list - open the question below to see which values (often special codes missing from the instrument definition).</div>"' _n
     file write `hf' `"<section id="ch_bad"></section>"' _n
-    file write `hf' `"</div>"' _n
-    file write `hf' `"<h2>Questions</h2>"' _n
+    file write `hf' `"</div></div>"' _n
+    file write `hf' `"<div class='sblock' id='s_list'><button class='shead' type='button' aria-expanded='false'><h2>Questions</h2><span class='sfind' id='f_list'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
     file write `hf' `"<div id="list"></div>"' _n
-    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.25) on `now'.</div>"' _n
+    file write `hf' `"</div></div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.26) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
     file write `hf' `"var D={"meta":{"statuses":[`jmeta'],"fdims":[`jfdims']},"rows":["' _n
     forvalues i = 1/`=_N' {
@@ -10474,6 +10577,59 @@ program _suso_para_check, rclass
     file write `hf' `"  }"' _n
     file write `hf' `"  el('c_fv').innerHTML=s;"' _n
     file write `hf' `"}"' _n
+    file write `hf' `"/* triage sections: live severity, pills, findings (Data QC) */"' _n
+    file write `hf' `"var secState=Object.create(null), secDefaultsDone=false;"' _n
+    file write `hf' `"function secApply(id){"' _n
+    file write `hf' `"  var s=el(id); if(!s) return;"' _n
+    file write `hf' `"  var st=secState[id]||(secState[id]={open:false,sev:''});"' _n
+    file write `hf' `"  s.className='sblock'+(st.sev?(' sv-'+st.sev):'')+(st.open?' open':'');"' _n
+    file write `hf' `"  var b=s.querySelector('.shead');"' _n
+    file write `hf' `"  if(b) b.setAttribute('aria-expanded',st.open?'true':'false');"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"function secOpen(id,open){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.open=!!open; secApply(id); }"' _n
+    file write `hf' `"function secToggle(id){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.open=!st.open; secApply(id); }"' _n
+    file write `hf' `"function secSev(id,sev){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.sev=sev||''; secApply(id); }"' _n
+    file write `hf' `"function setPill(pid,cid,n,sev){"' _n
+    file write `hf' `"  var txt=(n>0)?fc(n):'\u2713', cls=(n>0)?sev:'g';"' _n
+    file write `hf' `"  var p=el(pid); if(p){ p.textContent=txt; p.className='pillc '+cls; p.style.display=''; }"' _n
+    file write `hf' `"  var c=el(cid); if(c){ c.textContent=txt; c.className='n '+cls; c.style.display=''; }"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"function setFind(fid,txt){ var f=el(fid); if(f) f.textContent=txt; }"' _n
+    file write `hf' `"function plural(n,s,p){ return n===1?s:(p||(s+'s')); }"' _n
+    file write `hf' `"function initDqSections(){"' _n
+    file write `hf' `"  var i, hs=document.querySelectorAll('.sblock .shead');"' _n
+    file write `hf' `"  for(i=0;i<hs.length;i++)(function(b){ b.addEventListener('click',function(){ var s=b.parentNode; if(s&&s.id) secToggle(s.id); }); })(hs[i]);"' _n
+    file write `hf' `"  var cs=document.querySelectorAll('.chipx');"' _n
+    file write `hf' `"  for(i=0;i<cs.length;i++)(function(a){ a.addEventListener('click',function(ev){"' _n
+    file write `hf' `"    if(ev&&ev.preventDefault) ev.preventDefault();"' _n
+    file write `hf' `"    var id=a.getAttribute('data-sec'); if(!id) return;"' _n
+    file write `hf' `"    secOpen(id,true);"' _n
+    file write `hf' `"    var s=el(id); if(s&&s.scrollIntoView) s.scrollIntoView({behavior:'smooth',block:'start'});"' _n
+    file write `hf' `"  }); })(cs[i]);"' _n
+    file write `hf' `"  var ea=el('dq_expall'), ec=el('dq_collall'), all=document.querySelectorAll('.sblock'), j;"' _n
+    file write `hf' `"  if(ea) ea.addEventListener('click',function(){ for(j=0;j<all.length;j++) if(all[j].id) secOpen(all[j].id,true); });"' _n
+    file write `hf' `"  if(ec) ec.addEventListener('click',function(){ for(j=0;j<all.length;j++) if(all[j].id) secOpen(all[j].id,false); });"' _n
+    file write `hf' `"}"' _n
+    file write `hf' `"function updateDqSections(K,scope){"' _n
+    file write `hf' `"  secSev('s_imiss', K.im>0?'w':'g'); setPill('p_imiss','cb_imiss',K.im,'w');"' _n
+    file write `hf' `"  setFind('f_imiss', K.im>0"' _n
+    file write `hf' `"    ? (fc(K.im)+' unanswered enabled '+plural(K.im,'cell')+' across '+fc(K.n)+' '+plural(K.n,'question'))"' _n
+    file write `hf' `"    : 'No enabled-but-unanswered cells in this view');"' _n
+    file write `hf' `"  secSev('sec_viol', K.vi>0?'b':'g'); setPill('p_viol','cb_viol',K.vi,'b');"' _n
+    file write `hf' `"  setFind('f_viol', K.vi>0"' _n
+    file write `hf' `"    ? (fc(K.vi)+' '+plural(K.vi,'answer')+' on disabled questions')"' _n
+    file write `hf' `"    : 'No answers on disabled questions in this view');"' _n
+    file write `hf' `"  secSev('sec_vund', K.vu>0?'b':'g'); setPill('p_vund','cb_vund',K.vu,'b');"' _n
+    file write `hf' `"  setFind('f_vund', K.vu>0"' _n
+    file write `hf' `"    ? (fc(K.vu)+' answered while the gate is undetermined')"' _n
+    file write `hf' `"    : 'No undetermined-gate answers in this view');"' _n
+    file write `hf' `"  secSev('sec_bad', K.bd>0?'b':'g'); setPill('p_bad','cb_bad',K.bd,'b');"' _n
+    file write `hf' `"  setFind('f_bad', K.bd>0"' _n
+    file write `hf' `"    ? (fc(K.bd)+' out-of-list '+plural(K.bd,'value'))"' _n
+    file write `hf' `"    : 'No out-of-list values in this view');"' _n
+    file write `hf' `"  setFind('f_list', fc(K.n)+' '+plural(K.n,'question')+' in view - '+scope);"' _n
+    file write `hf' `"  if(!secDefaultsDone){ secDefaultsDone=true; secOpen('s_list',true); }"' _n
+    file write `hf' `"}"' _n
     file write `hf' `"function renderAll(){"' _n
     file write `hf' `"  var S=settings();"' _n
     file write `hf' `"  var rows0;"' _n
@@ -10500,16 +10656,14 @@ program _suso_para_check, rclass
     file write `hf' `"  el('v_chk').textContent=vtx;"' _n
     file write `hf' `"  el('v_chk').className='verdict '+vcl;"' _n
     file write `hf' `"  if(window.parent!==window)window.parent.postMessage({type:'suso-tab-badge',n:hard,sev:(hard>0?'b':(K.im>0?'w':'g'))},'*');"' _n
+    file write `hf' `"  updateDqSections(K,scope);"' _n
     file write `hf' `"  hbars('ch_imiss', C.topBy(rows,'im',10,S.minsh,15), 'im');"' _n
     file write `hf' `"  var tv=C.topBy(rows,'vi',0,0,15);"' _n
-    file write `hf' `"  el('sec_viol').style.display = tv.length ? '' : 'none';"' _n
-    file write `hf' `"  if(tv.length) hbars('ch_viol', tv, 'vi');"' _n
+    file write `hf' `"  if(tv.length) hbars('ch_viol', tv, 'vi'); else el('ch_viol').innerHTML='<p class=\"nodata\">None in this view.</p>';"' _n
     file write `hf' `"  var tb=C.topBy(rows,'bd',0,0,15);"' _n
-    file write `hf' `"  el('sec_bad').style.display = tb.length ? '' : 'none';"' _n
-    file write `hf' `"  if(tb.length) hbars('ch_bad', tb, 'bd');"' _n
+    file write `hf' `"  if(tb.length) hbars('ch_bad', tb, 'bd'); else el('ch_bad').innerHTML='<p class=\"nodata\">None in this view.</p>';"' _n
     file write `hf' `"  var tu=C.topBy(rows,'vu',0,0,15);"' _n
-    file write `hf' `"  el('sec_vund').style.display = tu.length ? '' : 'none';"' _n
-    file write `hf' `"  if(tu.length) hbars('ch_vund', tu, 'vu');"' _n
+    file write `hf' `"  if(tu.length) hbars('ch_vund', tu, 'vu'); else el('ch_vund').innerHTML='<p class=\"nodata\">None in this view.</p>';"' _n
     file write `hf' `"  renderList(C.srt(rows, S.sort), S);"' _n
     file write `hf' `"}"' _n
     file write `hf' _n
@@ -10550,6 +10704,7 @@ program _suso_para_check, rclass
     file write `hf' `"    el(ids[i]).addEventListener('change',renderAll);"' _n
     file write `hf' `"    el(ids[i]).addEventListener('input',renderAll);"' _n
     file write `hf' `"  }"' _n
+    file write `hf' `"  initDqSections();"' _n
     file write `hf' `"  renderAll();"' _n
     file write `hf' `"}"' _n
     file write `hf' `"init();"' _n
@@ -10664,7 +10819,7 @@ program _suso_para_suite, rclass
         if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
     }
     di as txt "suso paradata: building the QC suite ..."
-    di as txt "  code build: 1.7.25-TRIAGENAV"
+    di as txt "  code build: 1.7.26-SUITETRIAGE"
     tempfile EVX T1 T2 T3
     quietly save `"`EVX'"'
 
