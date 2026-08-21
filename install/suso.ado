@@ -1,4 +1,4 @@
-*! suso v1.7.22 build 2026-08-19-PRESERVEFIX  (Stata preserve-state fix; see help)
+*! suso v1.7.25 build 2026-08-21-TRIAGENAV  (triage-first report navigation; see help)
 *! suso v1.6.0  18jun2026  (suso backup: full-workspace archive orchestrator (from data_backup notebook) + internal export start->poll->download helper)
 *! Author: Attique Ur Rehman, Economist, The World Bank (DEC, Enterprise Surveys)
 *!         attique@worldbank.org  ·  https://sites.google.com/view/attique-ur-rehman
@@ -260,7 +260,7 @@ end
 
 program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.22 (build 2026-08-19-PRESERVEFIX)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.25 (build 2026-08-21-TRIAGENAV)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -270,8 +270,8 @@ program _suso_about, rclass
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
-    return local version "1.7.22"
-    return local build "2026-08-19-PRESERVEFIX"
+    return local version "1.7.25"
+    return local build "2026-08-21-TRIAGENAV"
     return local expected_backend "1.7.11-AUDITFIX"
 end
 
@@ -288,7 +288,7 @@ program _suso_doctor, rclass
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
-    di as txt "  ado code build : " as res "1.7.22-PRESERVEFIX"
+    di as txt "  ado code build : " as res "1.7.25-TRIAGENAV"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -314,7 +314,7 @@ program _suso_doctor, rclass
             if "$SUSO_JARBUILD"!="1.7.11-AUDITFIX" {
                 local ok 0
                 di as err "  WARNING       : suso.ado and suso.jar are from different builds."
-                di as err "                  Reinstall both files from the same v1.7.22 package, then restart Stata."
+                di as err "                  Reinstall both files from the same v1.7.25 package, then restart Stata."
             }
         }
         else {
@@ -325,7 +325,7 @@ program _suso_doctor, rclass
     }
     _suso_showconfig
     return scalar ok = `ok'
-    return local ado_build "1.7.22-PRESERVEFIX"
+    return local ado_build "1.7.25-TRIAGENAV"
     return local backend_build "`backend'"
     return local java_version "`javaver'"
     capture macro drop SUSO_JAVAVER SUSO_JAVAOK SUSO_JARBUILD
@@ -4515,6 +4515,32 @@ program _suso_para_triggerfinal, rclass
     return scalar nreturnedold = r(N)
 end
 
+* ---- standalone Skip page browser engine (split for Stata program-size cap) ---
+program _suso_para_skip_page_js
+    version 14.2
+    args hf
+    if "`hf'"=="" exit 198
+    file write `hf' `"var SKP={"' _n
+    file write `hf' `"norm:function(s){return String(s===null||s===undefined?'':s).trim().toLowerCase().replace(/[^a-z0-9]/g,'');},"' _n
+    file write `hf' `"statusOK:function(x,s){if(!s)return true;if(s==='APP')return x.wc==='approvebysup'||x.wc==='approvebyhq';return x.ws===s||this.norm(x.wc)===this.norm(s)||this.norm(x.ws)===this.norm(s);},"' _n
+    file write `hf' `"scope:function(a,k,s){var z=[];for(var i=0;i<a.length;i++)if((!k||a[i].ak===k)&&this.statusOK(a[i],s))z.push(a[i]);return z;},"' _n
+    file write `hf' `"stats:function(a){var z={h:a.length,q:0,need:0,re:0,ev:0,ch:0,cev:0,out:0,tu:0,resolved:0};for(var i=0;i<a.length;i++){z.q+=a[i].q;z.need+=a[i].need;z.re+=a[i].re;z.ev+=a[i].ev;z.ch+=a[i].cp?1:0;z.cev+=a[i].cev;z.out+=a[i].out;z.tu+=a[i].tu?1:0;if(a[i].t==='C')z.resolved++;}return z;},"' _n
+    file write `hf' `"actors:function(a){var m=Object.create(null),z=[],i,x;for(i=0;i<a.length;i++){x=a[i];if(!m[x.ak])m[x.ak]={k:x.ak,n:x.an,c:0};m[x.ak].c++;}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k))z.push(m[k]);z.sort(function(x,y){return x.n.localeCompare(y.n)||x.k.localeCompare(y.k);});return z;},"' _n
+    file write `hf' `"statuses:function(a){var m=Object.create(null),z=[],i,x;for(i=0;i<a.length;i++){x=a[i];if(!x.ws)continue;if(!m[x.ws])m[x.ws]={k:x.ws,c:0};m[x.ws].c++;}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k))z.push(m[k]);z.sort(function(x,y){return x.k.localeCompare(y.k);});return z;},"' _n
+    file write `hf' `"patterns:function(a){var m=Object.create(null),z=[],i,x,p;for(i=0;i<a.length;i++){x=a[i];p=m[x.gk];if(!p)p=m[x.gk]={k:x.gk,l:x.gl,h:0,ch:0,ev:0,cev:0,out:0,ids:Object.create(null)};p.h++;p.ch+=x.cp?1:0;p.ev+=x.ev;p.cev+=x.cev;p.out+=x.out;p.ids[x.id]=1;}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k)){p=m[k];p.ni=Object.keys(p.ids).length;delete p.ids;z.push(p);}z.sort(function(x,y){return y.ev-x.ev||y.h-x.h||x.l.localeCompare(y.l);});return z;},"' _n
+    file write `hf' `"groups:function(a){var m=Object.create(null),z=[],i,x,g;for(i=0;i<a.length;i++){x=a[i];if(x.t==='C')continue;g=m[x.gk];if(!g)g=m[x.gk]={k:x.gk,l:x.gl,need:0,ids:Object.create(null),cases:[]};g.need+=x.need;g.ids[x.id]=1;g.cases.push(x);}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k)){g=m[k];g.ni=Object.keys(g.ids).length;delete g.ids;g.cases.sort(function(x,y){var sx=x.t==='A'?2:1,sy=y.t==='A'?2:1;return sy-sx||y.need-x.need||y.q-x.q||x.id.localeCompare(y.id);});z.push(g);}z.sort(function(x,y){return y.need-x.need||x.l.localeCompare(y.l);});return z;}"' _n
+    file write `hf' `"};if(typeof module!=='undefined'&&module.exports)module.exports=SKP;"' _n
+    file write `hf' `"function E(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}"' _n
+    file write `hf' `"function el(x){return document.getElementById(x);}"' _n
+    file write `hf' `"function initActors(){var a=SKP.actors(SK.cases),s=el('sk_actor'),o=document.createElement('option');s.innerHTML='';o.value='';o.textContent='All removal-run actors ('+a.length+')';s.appendChild(o);for(var i=0;i<a.length;i++){o=document.createElement('option');o.value=a[i].k;o.textContent=a[i].n+' ('+a[i].c+')';s.appendChild(o);}}"' _n
+    file write `hf' `"function initStatuses(){var a=SKP.statuses(SK.cases),s=el('sk_status'),o=document.createElement('option'),has=false,i;for(i=0;i<SK.cases.length;i++)if(SK.cases[i].wc==='approvebysup'||SK.cases[i].wc==='approvebyhq'){has=true;break;}s.innerHTML='';o.value='';o.textContent='All statuses';s.appendChild(o);for(i=0;i<a.length;i++){o=document.createElement('option');o.value=a[i].k;o.textContent=a[i].k+' ('+a[i].c+')';s.appendChild(o);}if(has){o=document.createElement('option');o.value='APP';o.textContent='Approved only (Sup + HQ)';s.insertBefore(o,s.options[1]||null);}}"' _n
+    file write `hf' `"function actorLabel(k){var o=el('sk_actor').options;for(var i=0;i<o.length;i++)if(o[i].value===k)return o[i].text.replace(/ \([0-9]+\)$/,'');return k;}"' _n
+    file write `hf' `"function renderSkip(){var k=el('sk_actor').value,w=el('sk_status').value,a=SKP.scope(SK.cases,k,w),st=SKP.stats(a),p=SKP.patterns(a),g=SKP.groups(a),i,s='',sb=[];el('sk_hist').textContent=st.h.toLocaleString();el('sk_q').textContent=st.q.toLocaleString();el('sk_need').textContent=st.need.toLocaleString();el('sk_re').textContent=st.re.toLocaleString();el('sk_ev').textContent=st.ev.toLocaleString();el('sk_compact').textContent=(st.ch+' / '+st.cev);el('sk_outside').textContent=st.out.toLocaleString();if(k)sb.push(actorLabel(k));if(w)sb.push(w==='APP'?'Approved only (Sup + HQ)':w);el('sk_scope').textContent='Showing '+st.h.toLocaleString()+' exhaustive removal histories'+(sb.length?' for '+sb.join(' / '):' in the current vars()/role scope')+'. Loaded totals: '+SK.meta.role.toLocaleString()+' role-scoped and '+SK.meta.allRole.toLocaleString()+' all-role raw events.';for(i=0;i<p.length;i++)s+='<tr><td>'+E(p[i].l)+'</td><td class=\"r\">'+p[i].h.toLocaleString()+'</td><td class=\"r\">'+p[i].ch.toLocaleString()+'</td><td class=\"r\">'+p[i].ni.toLocaleString()+'</td><td class=\"r\">'+p[i].ev.toLocaleString()+'</td><td class=\"r\">'+p[i].out.toLocaleString()+'</td></tr>';el('sk_patterns').innerHTML=s;el('sk_patterns_empty').textContent=p.length?'':'No removal histories for this selection.';s='';for(i=0;i<g.length;i++)s+='<details open><summary class=\"gate\"><b>'+E(g[i].l)+'</b> &nbsp;-&nbsp; '+g[i].cases.length+' case(s), '+g[i].need+' question-history unit(s) to check, in '+g[i].ni+' interview(s)</summary>'+g[i].cases.map(function(x){return x.card;}).join('')+'</details>';if(!g.length)s='<div class=\"state resolved\"><b>No final-data checks are indicated for this selection.</b> Every matching identifiable item is answered or correctly blank under final questionnaire logic.</div>';el('sk_verify').innerHTML=s;var r=[];for(i=0;i<a.length;i++)if(a[i].t==='C')r.push(a[i]);el('sk_resolved_summary').textContent='Show '+r.length+' resolved historical case(s)';el('sk_resolved').innerHTML=r.map(function(x){return x.card;}).join('');el('sk_resolved_more').textContent=r.length?'':'No resolved histories for this selection.';var hA=false;for(i=0;i<a.length;i++)if(a[i].t==='A'){hA=true;break;}if(parent!==window)parent.postMessage({type:'suso-tab-badge',n:st.need,sev:(hA?'b':(st.need>0?'w':'g'))},'*');}"' _n
+    file write `hf' `"function setActor(k,label,notify){var s=el('sk_actor'),found=false;for(var i=0;i<s.options.length;i++)if(s.options[i].value===k){found=true;break;}if(k&&!found){var o=document.createElement('option');o.value=k;o.textContent=(label||k)+' (0)';s.appendChild(o);}s.value=k||'';renderSkip();if(notify&&parent!==window)parent.postMessage({type:'suso-actor-filter',key:s.value,label:s.value?actorLabel(s.value):''},'*');}"' _n
+    file write `hf' `"function setStatus(k,notify){var s=el('sk_status'),found=!k,o;for(var i=0;k&&i<s.options.length;i++)if(s.options[i].value===k){found=true;break;}if(k&&!found){o=document.createElement('option');o.value=k;o.textContent=(k==='APP'?'Approved only (Sup + HQ)':k)+' (0)';s.appendChild(o);}s.value=k||'';renderSkip();if(notify&&parent!==window)parent.postMessage({type:'suso-status-filter',key:s.value},'*');}"' _n
+    file write `hf' `"initActors();initStatuses();renderSkip();el('sk_actor').addEventListener('change',function(){setActor(this.value,actorLabel(this.value),true);});el('sk_status').addEventListener('change',function(){setStatus(this.value,true);});window.addEventListener('message',function(ev){var d=ev.data||{};if(ev.source!==parent)return;if(d.type==='suso-actor-filter'&&typeof d.key==='string'&&typeof d.label==='string'&&d.key.length<=500&&d.label.length<=500)setActor(d.key,d.label,false);if(d.type==='suso-status-filter'&&typeof d.key==='string'&&d.key.length<=500)setStatus(d.key,false);});"' _n
+end
+
 * ---- skips: historical answer-removal runs and nearby/linked answers --------
 * A "cascade" is a compact run of >= cascade() consecutive AnswerRemoved events
 * near an AnswerSet. It is a screening signal, not proof of causation or proof
@@ -4523,7 +4549,7 @@ program _suso_para_skips, rclass
     version 14.2
     syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ///
         QX(string) DATA(string) MESSages(string) HTML(string) DETail(string) VARS(string) ///
-        HQURL(string) FULL ALLRoles PREComputed(string) ]
+        HQURL(string) FULL ALLRoles PREComputed(string) STATUSMap(string) ]
     _suso_para_need events
     if `"`precomputed'"'=="" quietly _suso_para_derive , gapmins(30) fastsecs(2) `allroles'
     else {
@@ -4568,8 +4594,8 @@ program _suso_para_skips, rclass
         quietly _suso_para_hqmap using `"`data'"', saving(`"`SKHQ'"')
         local hasassignment = r(hasassignment)
     }
-    if `cascade'<2 {
-        di as err "suso paradata skips: cascade() is the minimum run of AnswerRemoved events; use 2 or more."
+    if `cascade'<1 {
+        di as err "suso paradata skips: cascade() is the minimum run of AnswerRemoved events; use 1 or more."
         exit 198
     }
     if `window'<=0 {
@@ -4618,11 +4644,25 @@ program _suso_para_skips, rclass
         if _rc quietly gen str160 para_roster = ""
         capture confirm variable para_qkey
         if _rc {
-            quietly gen str244 para_qkey = para_var if para_var!=""
+            quietly gen str244 para_qkey = substr(para_var +               ///
+                cond(para_roster!="", "||" + para_roster, ""),1,244)      ///
+                if para_var!=""
             di as txt "  note: this prepared event table predates roster-aware keys; non-roster transitions remain exact, roster transitions should be rebuilt with {bf:suso paradata load}."
         }
         capture confirm variable para_qdisp
-        if _rc quietly gen str244 para_qdisp = para_var if para_var!=""
+        if _rc quietly gen str244 para_qdisp = substr(para_var +           ///
+            cond(para_roster!="", " [roster " + para_roster + "]", ""),  ///
+            1,244) if para_var!=""
+        * Some reduced/older prepared tables have a usable variable/roster
+        * address but a blank qkey.  Normalize those rows before state history
+        * and run-level distinct-item accounting; otherwise a real removal is
+        * silently dropped from every final-state bucket.
+        quietly replace para_qkey = substr(para_var + cond(para_roster!="",  ///
+            "||" + para_roster, ""), 1, 244) if para_var!="" &              ///
+            (para_qkey=="" | (para_roster!="" & para_qkey==para_var))
+        quietly replace para_qdisp = substr(para_var + cond(para_roster!="", ///
+            " [roster " + para_roster + "]", ""), 1, 244) if para_var!="" & ///
+            (para_qdisp=="" | (para_roster!="" & para_qdisp==para_var))
     }
     else {
         * Reduced paradata may contain no Parameters payload at all.  Keep the
@@ -4641,6 +4681,34 @@ program _suso_para_skips, rclass
 
     capture drop sk_*
     quietly gen byte sk_isrem = para_fieldrem
+
+    * Keep the complete all-role raw count next to the role-scoped inventory.
+    * By default para_fieldrem is interviewer-role fieldwork; allroles makes it
+    * coincide with the eligible all-role stream.  The two totals are reported
+    * explicitly so "all removals" is never ambiguous.
+    quietly count if para_rem
+    local nraw_allroles_global = r(N)
+    quietly count if sk_isrem
+    local nraw_role_global = r(N)
+
+    * One canonical current/final workflow status per interview.  This is the
+    * same map used by Behaviour and Question timing: data() wins when it has
+    * interview__status; otherwise the last workflow event is used.
+    tempfile SKSTATUS
+    local skstatusfile `"`statusmap'"'
+    if `"`skstatusfile'"'!="" {
+        capture confirm file `"`skstatusfile'"'
+        if _rc {
+            di as err "suso paradata skips: internal status map was not found."
+            exit 601
+        }
+    }
+    else {
+        local __statusdata ""
+        if `"`data'"'!="" local __statusdata `"data(`"`data'"')"'
+        quietly _suso_para_statusmap , saving(`"`SKSTATUS'"') `__statusdata' replace
+        local skstatusfile `"`SKSTATUS'"'
+    }
 
     * vars() is an output filter only. Cascade construction must always use the
     * untouched event stream; otherwise dropping intervening events changes
@@ -4766,11 +4834,13 @@ program _suso_para_skips, rclass
     }
     restore
 
-    * Runs are constructed on the FULL event stream. The whole removal run must
-    * be compact, and a candidate gate may be the nearest AnswerSet immediately
-    * before OR after the run (SuSo versions differ in event ordering).
+    * Runs are constructed on the FULL event stream.  Every maximal consecutive
+    * same-actor AnswerRemoved run is an inventory history.  cascade()/window()
+    * classify a compact-priority subset; they never delete a raw removal from
+    * the inventory.  AnswerSet context is reconstructed for every history,
+    * independently of whether that history meets the compact threshold.
     sort interview__id para_ord para_seq
-    tempvar rise rmin rmax rspan dtprev dtnext prevnear nextnear
+    tempvar rise rmin rmax rspan rtimed dtprev dtnext prevnear nextnear
     quietly by interview__id: gen byte `rise' = sk_isrem & ///
         (sk_isrem[_n-1]!=1 | para_actor_key!=para_actor_key[_n-1])
     quietly by interview__id: gen double sk_run = sum(`rise')
@@ -4779,27 +4849,46 @@ program _suso_para_skips, rclass
     quietly by interview__id sk_run sk_isrem: gen byte sk_first = (_n==1) & sk_isrem
     quietly egen double `rmin' = min(cond(sk_isrem, para_tsu, .)), by(interview__id sk_run)
     quietly egen double `rmax' = max(cond(sk_isrem, para_tsu, .)), by(interview__id sk_run)
+    quietly egen long `rtimed' = total(cond(sk_isrem & !missing(para_tsu),1,0)), ///
+        by(interview__id sk_run)
     quietly gen double `rspan' = `rmax' - `rmin'
     quietly gen double `dtprev' = para_tsu - sk_lastts if sk_first
     quietly gen double `dtnext' = sk_nextts - `rmax' if sk_first
-    quietly gen byte `prevnear' = sk_first & sk_len>=`cascade' & !missing(sk_len) ///
+    quietly gen byte sk_history1 = sk_first
+    quietly gen byte sk_history = sk_isrem
+    quietly gen byte sk_prevcontext = 0
+    quietly gen byte sk_nextcontext = 0
+    quietly gen byte `prevnear' = sk_first & `rtimed'==sk_len & !missing(sk_len) ///
         & inrange(`dtprev', 0, `window'*1000) & `rspan'<=`window'*1000 & sk_lastvar!=""
-    quietly gen byte `nextnear' = sk_first & sk_len>=`cascade' & !missing(sk_len) ///
+    quietly gen byte `nextnear' = sk_first & `rtimed'==sk_len & !missing(sk_len) ///
         & inrange(`dtnext', 0, `window'*1000) & `rspan'<=`window'*1000 & sk_nextvar!=""
     quietly gen byte sk_prevnear = `prevnear'
     quietly gen byte sk_nextnear = `nextnear'
-    quietly gen byte sk_useprev = sk_prevnear & (!sk_nextnear | (`dtprev'<=`dtnext'))
-    quietly gen byte sk_casc1 = sk_prevnear | sk_nextnear
+    quietly replace sk_prevcontext = sk_prevnear
+    quietly replace sk_nextcontext = sk_nextnear
+    quietly gen byte sk_useprev = sk_prevcontext & (!sk_nextcontext |        ///
+        missing(`dtnext') | (!missing(`dtprev') & `dtprev'<=`dtnext'))
+    quietly replace sk_useprev = 1 if sk_prevcontext & sk_nextcontext &      ///
+        missing(`dtprev') & missing(`dtnext')
+    quietly gen byte sk_casc1 = sk_first & sk_len>=`cascade' &              ///
+        (sk_prevnear | sk_nextnear)
+    quietly gen byte sk_timing_unknown1 = sk_first & !sk_casc1 &           ///
+        (`rtimed'<sk_len |                                                  ///
+        (sk_lastvar!="" & missing(sk_lastts)) |                            ///
+        (sk_nextvar!="" & missing(sk_nextts)))
     tempvar runiscasc
     quietly egen byte `runiscasc' = max(sk_casc1), by(interview__id sk_run)
     quietly gen byte sk_casc = sk_isrem & `runiscasc'
-    quietly gen str80 sk_trig = cond(sk_useprev, sk_lastvar, sk_nextvar) if sk_casc1
-    quietly gen strL sk_trigval = cond(sk_useprev, sk_lastval, sk_nextval) if sk_casc1
-    quietly gen str160 sk_trigroster = cond(sk_useprev, sk_lastroster, sk_nextroster) if sk_casc1
-    quietly gen str244 sk_trigqkey = cond(sk_useprev, sk_lastqkey, sk_nextqkey) if sk_casc1
-    quietly gen double sk_trigts = cond(sk_useprev, sk_lastts, sk_nextts) if sk_casc1
-    quietly gen double sk_trigord = cond(sk_useprev, sk_lastord, sk_nextord) if sk_casc1
-    quietly gen double sk_trigseq = cond(sk_useprev, sk_lastseq, sk_nextseq) if sk_casc1
+    quietly gen byte sk_timing_unknown = sk_isrem & sk_timing_unknown1
+    quietly bysort interview__id sk_run (para_ord para_seq):                 ///
+        replace sk_timing_unknown = sk_timing_unknown[_n-1] if _n>1 & sk_isrem
+    quietly gen str80 sk_trig = cond(sk_useprev, sk_lastvar, sk_nextvar) if sk_first
+    quietly gen strL sk_trigval = cond(sk_useprev, sk_lastval, sk_nextval) if sk_first
+    quietly gen str160 sk_trigroster = cond(sk_useprev, sk_lastroster, sk_nextroster) if sk_first
+    quietly gen str244 sk_trigqkey = cond(sk_useprev, sk_lastqkey, sk_nextqkey) if sk_first
+    quietly gen double sk_trigts = cond(sk_useprev, sk_lastts, sk_nextts) if sk_first
+    quietly gen double sk_trigord = cond(sk_useprev, sk_lastord, sk_nextord) if sk_first
+    quietly gen double sk_trigseq = cond(sk_useprev, sk_lastseq, sk_nextseq) if sk_first
     foreach sv in sk_trig sk_trigval sk_trigroster sk_trigqkey {
         quietly bysort interview__id sk_run (para_ord para_seq): ///
             replace `sv' = `sv'[_n-1] if `sv'=="" & _n>1
@@ -4808,38 +4897,42 @@ program _suso_para_skips, rclass
         quietly bysort interview__id sk_run (para_ord para_seq): ///
             replace `nv' = `nv'[_n-1] if missing(`nv') & _n>1
     }
-    quietly replace sk_trig = "" if !sk_casc
-    quietly replace sk_trigval = "" if !sk_casc
-    quietly replace sk_trigroster = "" if !sk_casc
-    quietly replace sk_trigqkey = "" if !sk_casc
-    quietly replace sk_useprev = . if !sk_casc
-    quietly replace sk_trigts = . if !sk_casc
-    quietly replace sk_trigord = . if !sk_casc
-    quietly replace sk_trigseq = . if !sk_casc
-
-    * Apply vars() only AFTER a run exists. Keep a run when either its candidate
-    * trigger or at least one affected question matches the requested patterns.
+    * Apply vars() only AFTER every inventory history and its compact flag exist.
+    * Keep a focused history when either its context AnswerSet or at least one
+    * affected removal matches.  Global construction/counts remain untouched.
+    quietly gen byte sk_focus1 = sk_first
     if `"`vars'"'!="" & `hasvar' {
         tempvar remsel runsel trigsel runtrigsel
         quietly gen byte `remsel' = sk_vsel & sk_isrem
         quietly egen byte `runsel' = max(`remsel'), by(interview__id sk_run)
         quietly gen byte `trigsel' = 0
         foreach p of local vars {
-            quietly replace `trigsel' = 1 if sk_casc1 & ///
-                ((sk_prevnear & strmatch(sk_lastvar, "`p'")) | ///
-                 (sk_nextnear & strmatch(sk_nextvar, "`p'")))
+            quietly replace `trigsel' = 1 if sk_first & ///
+                ((sk_prevcontext & strmatch(sk_lastvar, "`p'")) | ///
+                 (sk_nextcontext & strmatch(sk_nextvar, "`p'")))
         }
         quietly egen byte `runtrigsel' = max(`trigsel'), by(interview__id sk_run)
-        quietly replace sk_casc1 = 0 if sk_casc1 & `runsel'==0 & `runtrigsel'==0
-        quietly replace sk_casc  = 0 if sk_casc  & `runsel'==0 & `runtrigsel'==0
-        quietly replace sk_trig = "" if !sk_casc
-        quietly replace sk_trigval = "" if !sk_casc
-        quietly replace sk_trigroster = "" if !sk_casc
-        quietly replace sk_trigqkey = "" if !sk_casc
-        quietly replace sk_trigts = . if !sk_casc
-        quietly replace sk_trigord = . if !sk_casc
-        quietly replace sk_trigseq = . if !sk_casc
+        quietly replace sk_focus1 = sk_first & (`runsel'==1 | `runtrigsel'==1)
     }
+    tempvar runfocus
+    quietly egen byte `runfocus' = max(sk_focus1), by(interview__id sk_run)
+    quietly gen byte sk_viewhistory1 = sk_first & `runfocus'
+    quietly gen byte sk_viewrem = sk_isrem & `runfocus'
+    quietly gen byte sk_viewcasc1 = sk_casc1 & `runfocus'
+    quietly gen byte sk_viewcasc = sk_casc & `runfocus'
+    quietly gen byte sk_viewtimingunknown1 = sk_timing_unknown1 & `runfocus'
+    quietly gen byte sk_viewtimingunknown = sk_timing_unknown & `runfocus'
+
+    quietly count if sk_history1
+    local nhist_global = r(N)
+    quietly count if sk_casc1
+    local ncasc_global = r(N)
+    quietly count if sk_casc
+    local ncompactevents_global = r(N)
+    quietly count if sk_timing_unknown1
+    local ntimingunknown_global = r(N)
+    quietly count if sk_timing_unknown
+    local ntimingunknownevents_global = r(N)
 
     * Determine the final state of each distinct question INSTANCE affected by
     * each run. Roster rows with the same variable name remain separate.
@@ -4848,20 +4941,30 @@ program _suso_para_skips, rclass
             keep(master match) nogenerate
     }
     else quietly gen byte sk_finalans = .
-    tempvar qtag
-    if `hasvar' {
-        quietly egen byte `qtag' = tag(interview__id sk_run para_qkey) ///
-            if sk_casc & sk_isrem & para_qkey!=""
-        quietly replace `qtag' = 0 if missing(`qtag')
-        quietly gen byte sk_qtag = `qtag'
-    }
-    * Without question identifiers the number of distinct affected questions is
-    * unknowable.  Represent one explicit unknown unit per run, never one per
-    * removal event (which would manufacture a question count).
-    else quietly gen byte sk_qtag = sk_casc1
+    tempvar namedtag blanktag
+    quietly egen byte `namedtag' = tag(interview__id sk_run para_qkey) ///
+        if sk_viewrem & para_qkey!=""
+    quietly replace `namedtag' = 0 if missing(`namedtag')
+    * A history may mix named questions with removal rows whose identity payload
+    * is blank.  Retain exactly one explicit identity-unavailable unit per such
+    * history.  It is a separate final-check category and is never passed to the
+    * final-data matcher as though an empty variable name were real.
+    quietly egen byte `blanktag' = tag(interview__id sk_run) ///
+        if sk_viewrem & para_qkey==""
+    quietly replace `blanktag' = 0 if missing(`blanktag')
+    quietly gen byte sk_hist_namedtag = `namedtag'
+    quietly gen byte sk_identityunknown = `blanktag'
+    quietly gen byte sk_hist_qtag = sk_hist_namedtag | sk_identityunknown
+    quietly gen byte sk_qtag = sk_hist_qtag & sk_casc
+
+    * Existing casc_* fields remain the compact-priority layer used by Behaviour
+    * risk logic.  Parallel hist_* fields adjudicate the exhaustive inventory.
     quietly gen byte sk_reanswered = sk_qtag & sk_finalans==1
     quietly gen byte sk_open       = sk_qtag & sk_finalans==0
     quietly gen byte sk_unknown    = sk_qtag & missing(sk_finalans)
+    quietly gen byte sk_hist_reanswered = sk_hist_qtag & sk_finalans==1
+    quietly gen byte sk_hist_open       = sk_hist_qtag & sk_finalans==0
+    quietly gen byte sk_hist_unknown    = sk_hist_qtag & missing(sk_finalans)
 
     * One row per affected question instance. This is later compared with the
     * supplied final export and the effective questionnaire logic.
@@ -4869,32 +4972,46 @@ program _suso_para_skips, rclass
     local hascasev 0
     if `hasvar' {
         preserve
-        quietly keep if sk_qtag
-        quietly keep interview__id sk_run para_var para_roster para_qkey para_qdisp
-        quietly rename (para_var para_roster para_qkey para_qdisp)               ///
-            (affected_var affected_roster affected_qkey affected_qdisp)
-        quietly save `"`CASEV'"'
-        local hascasev 1
+        quietly keep if sk_hist_namedtag
+        if _N>0 {
+            quietly keep interview__id sk_run para_var para_roster para_qkey ///
+                para_qdisp sk_casc
+            quietly rename (para_var para_roster para_qkey para_qdisp sk_casc) ///
+                (affected_var affected_roster affected_qkey affected_qdisp compact)
+            quietly save `"`CASEV'"'
+            local hascasev 1
+        }
         restore
     }
 
-    quietly count if sk_casc1
+    quietly count if sk_viewhistory1
+    local nhist = r(N)
+    quietly count if sk_viewrem
+    local nremevents = r(N)
+    quietly count if sk_viewcasc1
     local ncasc = r(N)
-    quietly count if sk_casc
+    quietly count if sk_viewcasc
     local nwiped = r(N)                 // backward-compatible: removal-event count
-    local nremevents = `nwiped'
-    quietly count if sk_qtag
+    local noutsideevents = `nremevents' - `nwiped'
+    quietly count if sk_viewtimingunknown1
+    local ntimingunknown = r(N)
+    quietly count if sk_viewtimingunknown
+    local ntimingunknownevents = r(N)
+    quietly count if sk_hist_qtag
     local naffectedqall = r(N)          // distinct question-within-run cases
-    quietly count if sk_reanswered
+    quietly count if sk_hist_reanswered
     local nreansweredall = r(N)
-    quietly count if sk_open
+    quietly count if sk_hist_open
     local nopenall = r(N)
-    quietly count if sk_unknown
+    quietly count if sk_hist_unknown
     local nunknownall = r(N)
+    quietly count if sk_identityunknown
+    local nidentityunknownall = r(N)
 
     * ---- cascade-level detail: exact candidate transition + affected states ----
     local hasdet 0
     local hasfinaldata 0
+    if `"`data'"'!="" local hasfinaldata 1
     local nfinalansweredall 0
     local nanswereddisabledall 0
     local nexpectedblankall 0
@@ -4903,12 +5020,17 @@ program _suso_para_skips, rclass
     local nnotindataall 0
     local nfinalcheckall = `nopenall' + `nunknownall'
     tempfile skdet
-    if `ncasc'>0 {
+    if `nhist'>0 {
         local hasdet 1
         preserve
-        quietly keep if sk_casc
+        quietly keep if sk_viewrem
         sort interview__id sk_run para_ord para_seq
         quietly by interview__id sk_run: gen long sk_k = _n
+        quietly gen str80 sk_itemvar = para_var
+        quietly gen str244 sk_itemdisp = para_qdisp
+        quietly replace sk_itemvar = "(identity unavailable)" if sk_identityunknown
+        quietly replace sk_itemdisp = "(question identity unavailable in paradata)" ///
+            if sk_identityunknown
 
         * Build distinct, roster-aware lists for all affected instances and for
         * each final-state bucket shown to supervisors.
@@ -4919,20 +5041,20 @@ program _suso_para_skips, rclass
         quietly gen strL sk_wu = ""
         if `hasvar' {
             quietly by interview__id sk_run: replace sk_wvars = ///
-                cond(_n==1, cond(sk_qtag, para_var, ""), ///
-                cond(sk_qtag, sk_wvars[_n-1] + cond(sk_wvars[_n-1]=="", "", ", ") + para_var, sk_wvars[_n-1]))
+                cond(_n==1, cond(sk_hist_qtag, sk_itemvar, ""), ///
+                cond(sk_hist_qtag, sk_wvars[_n-1] + cond(sk_wvars[_n-1]=="", "", ", ") + sk_itemvar, sk_wvars[_n-1]))
             quietly by interview__id sk_run: replace sk_wl = ///
-                cond(_n==1, cond(sk_qtag, para_qdisp, ""), ///
-                cond(sk_qtag, sk_wl[_n-1] + cond(sk_wl[_n-1]=="", "", ", ") + para_qdisp, sk_wl[_n-1]))
+                cond(_n==1, cond(sk_hist_qtag, sk_itemdisp, ""), ///
+                cond(sk_hist_qtag, sk_wl[_n-1] + cond(sk_wl[_n-1]=="", "", ", ") + sk_itemdisp, sk_wl[_n-1]))
             quietly by interview__id sk_run: replace sk_wr = ///
-                cond(_n==1, cond(sk_reanswered, para_qdisp, ""), ///
-                cond(sk_reanswered, sk_wr[_n-1] + cond(sk_wr[_n-1]=="", "", ", ") + para_qdisp, sk_wr[_n-1]))
+                cond(_n==1, cond(sk_hist_reanswered, sk_itemdisp, ""), ///
+                cond(sk_hist_reanswered, sk_wr[_n-1] + cond(sk_wr[_n-1]=="", "", ", ") + sk_itemdisp, sk_wr[_n-1]))
             quietly by interview__id sk_run: replace sk_wo = ///
-                cond(_n==1, cond(sk_open, para_qdisp, ""), ///
-                cond(sk_open, sk_wo[_n-1] + cond(sk_wo[_n-1]=="", "", ", ") + para_qdisp, sk_wo[_n-1]))
+                cond(_n==1, cond(sk_hist_open, sk_itemdisp, ""), ///
+                cond(sk_hist_open, sk_wo[_n-1] + cond(sk_wo[_n-1]=="", "", ", ") + sk_itemdisp, sk_wo[_n-1]))
             quietly by interview__id sk_run: replace sk_wu = ///
-                cond(_n==1, cond(sk_unknown, para_qdisp, ""), ///
-                cond(sk_unknown, sk_wu[_n-1] + cond(sk_wu[_n-1]=="", "", ", ") + para_qdisp, sk_wu[_n-1]))
+                cond(_n==1, cond(sk_hist_unknown, sk_itemdisp, ""), ///
+                cond(sk_hist_unknown, sk_wu[_n-1] + cond(sk_wu[_n-1]=="", "", ", ") + sk_itemdisp, sk_wu[_n-1]))
         }
 
         collapse (last) wvars=sk_wvars wl=sk_wl wl_reanswered=sk_wr             ///
@@ -4942,25 +5064,29 @@ program _suso_para_skips, rclass
             pvar=sk_lastvar pval=sk_lastval proster=sk_lastroster               ///
             pqkey=sk_lastqkey pord=sk_lastord pseq=sk_lastseq pts=sk_lastts     ///
             (max) tend=para_tsu                                                  ///
-            (count) nrem=sk_k (sum) nqrem=sk_qtag nreanswered=sk_reanswered    ///
-            nopen=sk_open nunknown=sk_unknown (min) ts0=para_tsu                ///
+            (count) nrem=sk_k (sum) nqrem=sk_hist_qtag                         ///
+            nreanswered=sk_hist_reanswered nopen=sk_hist_open                  ///
+            nunknown=sk_hist_unknown n_identityunknown=sk_identityunknown      ///
+            (min) ts0=para_tsu                                                  ///
             (first) trigger=sk_trig trigval=sk_trigval                          ///
             trigger_roster=sk_trigroster trigger_qkey=sk_trigqkey              ///
             trigger_tsu=sk_trigts trigger_ord=sk_trigord trigger_seq=sk_trigseq ///
             useprev=sk_useprev prevok=sk_prevnear nextok=sk_nextnear            ///
+            prevcontext=sk_prevcontext nextcontext=sk_nextcontext               ///
+            compact=sk_casc timing_unknown=sk_timing_unknown                    ///
             actor=sk_actor actor_key=sk_actor_key resp=sk_resp,               ///
             by(interview__id sk_run) fast
 
-        * Only candidates that passed the bounded proximity test may adjudicate a run.
-        quietly replace pvar = "" if prevok!=1
+        * Context is retained for every inventory history.  prevok/nextok state
+        * whether it also passed the bounded compact-pattern proximity test.
+        quietly replace pvar = "" if prevcontext!=1
         quietly replace pval = "" if pvar==""
         quietly replace proster = "" if pvar==""
         quietly replace pqkey = "" if pvar==""
         quietly replace pord = . if pvar==""
         quietly replace pseq = . if pvar==""
         quietly replace pts = . if pvar==""
-        quietly replace avar = "" if nextok!=1 | missing(ats) | (ats-tend)<0 | ///
-            (ats-tend)>`window'*1000
+        quietly replace avar = "" if nextcontext!=1
         quietly replace aval = "" if avar==""
         quietly replace aroster = "" if avar==""
         quietly replace aqkey = "" if avar==""
@@ -5201,8 +5327,6 @@ program _suso_para_skips, rclass
             if `hasqx' local qxopt `"qxmeta(`"`QXMETA'"')"'
             quietly _suso_para_casefinal using `"`CASEV'"', data(`"`data'"') ///
                 saving(`"`FINALV'"') `qxopt'
-            local hasfinaldata 1
-
             quietly use `"`FINALV'"', clear
             quietly gen byte __fa = final_status==1
             quietly gen byte __ad = final_status==7
@@ -5245,7 +5369,7 @@ program _suso_para_skips, rclass
             quietly summarize n_notindata
             local nnotindataall = r(sum)
             quietly summarize n_final_check
-            local nfinalcheckall = r(sum)
+            local nfinalcheckall = r(sum) + `nidentityunknownall'
             quietly gen str244 __suso_runkey = interview__id + "|" + ///
                 strtrim(string(sk_run,"%21.0g"))
             quietly bysort __suso_runkey: keep if _n==1
@@ -5309,6 +5433,17 @@ program _suso_para_skips, rclass
             if _rc quietly gen strL `v' = ""
         }
 
+        quietly merge m:1 interview__id using `"`skstatusfile'"',             ///
+            keep(master match) nogenerate
+        foreach v in ws ws_paradata ws_data ws_source ws_class {
+            capture confirm variable `v', exact
+            if _rc quietly gen str40 `v' = ""
+            quietly replace `v' = "" if missing(`v')
+        }
+        capture confirm variable ws_mismatch, exact
+        if _rc quietly gen byte ws_mismatch = 0
+        quietly replace ws_mismatch = 0 if missing(ws_mismatch)
+
         quietly gen byte final_data_checked = `hasfinaldata'
         foreach v in n_final_answered n_answered_disabled n_expected_blank      ///
             n_blank_enabled n_logic_unknown n_notindata n_final_check {
@@ -5321,11 +5456,37 @@ program _suso_para_skips, rclass
             capture confirm variable `v'
             if _rc quietly gen strL `v' = ""
         }
+        quietly gen strL wl_identity_unknown = ""
+        quietly replace wl_identity_unknown = "(question identity unavailable in paradata)" ///
+            if n_identityunknown>0
+        quietly replace n_final_check = n_final_check + n_identityunknown      ///
+            if final_data_checked
+        quietly replace wl_final_check = strtrim(wl_final_check +              ///
+            cond(wl_final_check!="" & n_identityunknown>0, ", ", "") +       ///
+            wl_identity_unknown) if final_data_checked
         quietly replace n_final_check = nopen+nunknown if !final_data_checked
         quietly replace wl_final_check = strtrim(wl_open + ///
             cond(wl_open!="" & wl_unknown!="", ", ", "") + wl_unknown) ///
             if !final_data_checked
 
+        * Recompute exhaustive final-state totals after adding identity-unknown
+        * units.  Also save one row per history for the parallel hist_*/casc_*
+        * interview summaries below.
+        quietly summarize n_final_answered
+        local nfinalansweredall = r(sum)
+        quietly summarize n_answered_disabled
+        local nanswereddisabledall = r(sum)
+        quietly summarize n_expected_blank
+        local nexpectedblankall = r(sum)
+        quietly summarize n_blank_enabled
+        local nblankenabledall = r(sum)
+        quietly summarize n_logic_unknown
+        local nlogicunknownall = r(sum)
+        quietly summarize n_notindata
+        local nnotindataall = r(sum)
+        quietly summarize n_final_check
+        local nfinalcheckall = r(sum)
+        quietly save `"`FINALCASE'"', replace
         quietly save `"`skdet'"'
         if `"`detail'"'!="" quietly copy `"`skdet'"' `"`detail'"', replace
         restore
@@ -5334,13 +5495,32 @@ program _suso_para_skips, rclass
         if `hasfinaldata' {
             preserve
                 quietly use `"`FINALCASE'"', clear
-                quietly collapse (sum) casc_finalanswered=n_final_answered       ///
-                    casc_answered_disabled=n_answered_disabled                   ///
-                    casc_expectedblank=n_expected_blank                          ///
-                    casc_blank_enabled=n_blank_enabled                           ///
-                    casc_logicunknown=n_logic_unknown casc_notindata=n_notindata ///
-                    casc_finalcheck=n_final_check, by(interview__id) fast
+                foreach z in final_answered answered_disabled expected_blank    ///
+                    blank_enabled logic_unknown notindata final_check {
+                    quietly gen long __c_`z' = 0
+                }
+                quietly replace __c_final_answered = n_final_answered*compact
+                quietly replace __c_answered_disabled = n_answered_disabled*compact
+                quietly replace __c_expected_blank = n_expected_blank*compact
+                quietly replace __c_blank_enabled = n_blank_enabled*compact
+                quietly replace __c_logic_unknown = n_logic_unknown*compact
+                quietly replace __c_notindata = n_notindata*compact
+                quietly replace __c_final_check = n_final_check*compact
+                quietly collapse (sum) hist_finalanswered=n_final_answered      ///
+                    hist_answered_disabled=n_answered_disabled                  ///
+                    hist_expectedblank=n_expected_blank                         ///
+                    hist_blank_enabled=n_blank_enabled                          ///
+                    hist_logicunknown=n_logic_unknown hist_notindata=n_notindata ///
+                    hist_finalcheck=n_final_check                               ///
+                    casc_finalanswered=__c_final_answered                       ///
+                    casc_answered_disabled=__c_answered_disabled                ///
+                    casc_expectedblank=__c_expected_blank                       ///
+                    casc_blank_enabled=__c_blank_enabled                        ///
+                    casc_logicunknown=__c_logic_unknown                         ///
+                    casc_notindata=__c_notindata                                ///
+                    casc_finalcheck=__c_final_check, by(interview__id) fast
                 quietly gen byte casc_datachecked = 1
+                quietly gen byte hist_datachecked = 1
                 quietly save `"`FINALINT'"', replace
             restore
         }
@@ -5350,11 +5530,47 @@ program _suso_para_skips, rclass
         * review and trigger summary use the adjudicated one-row-per-run table.
     }
 
-    * ---- stage 1: collapse to (interview x trigger) — everything below is small,
-    *      so the multi-million-row events are copied/sorted exactly once ----
-    collapse (sum) n_answers=para_fieldans n_removed=para_fieldrem n_cascades=sk_casc1 ///
-        casc_removed=sk_casc casc_questions=sk_qtag casc_open=sk_open            ///
-        casc_reanswered=sk_reanswered casc_unknown=sk_unknown                    ///
+    quietly gen byte sk_viewoutside = sk_viewrem & !sk_viewcasc
+    quietly gen byte sk_outside = sk_isrem & !sk_casc
+    tempfile SKACT
+    local hasact 0
+    if `nhist'>0 {
+        preserve
+            quietly keep if sk_viewhistory1
+            quietly replace sk_actor_key = "__unknown_removal_actor__" if sk_actor_key==""
+            quietly replace sk_actor = "Unknown removal actor" if sk_actor==""
+            quietly sort interview__id sk_actor_key sk_actor
+            quietly by interview__id sk_actor_key: keep if _n==1
+            quietly gen byte __oneactor = 1
+            quietly collapse (sum) n_removal_actors=__oneactor                ///
+                (first) removal_actor=sk_actor, by(interview__id) fast
+            quietly replace removal_actor = "Multiple removal actors" if    ///
+                n_removal_actors>1
+            quietly save `"`SKACT'"'
+            local hasact 1
+        restore
+    }
+
+    * ---- stage 1: collapse to (interview x context answer) -----------------
+    * Compatibility casc_* fields remain compact-only.  removal_/hist_* fields
+    * are the exhaustive inventory, while *_all fields stay global when vars()
+    * requests a focused view.
+    collapse (sum) n_answers=para_fieldans n_removed=para_fieldrem            ///
+        n_removed_allroles=para_rem removed_view=sk_viewrem                   ///
+        n_removal_histories=sk_viewhistory1                                   ///
+        n_removal_histories_all=sk_history1                                   ///
+        n_cascades=sk_viewcasc1 n_cascades_all=sk_casc1                       ///
+        casc_removed=sk_viewcasc casc_removed_all=sk_casc                     ///
+        outside_removed=sk_viewoutside outside_removed_all=sk_outside         ///
+        timing_unknown_histories=sk_viewtimingunknown1                        ///
+        timing_unknown_histories_all=sk_timing_unknown1                       ///
+        timing_unknown_events=sk_viewtimingunknown                            ///
+        timing_unknown_events_all=sk_timing_unknown                           ///
+        removal_questions=sk_hist_qtag removal_open=sk_hist_open              ///
+        removal_reanswered=sk_hist_reanswered removal_unknown=sk_hist_unknown ///
+        removal_identityunknown=sk_identityunknown                            ///
+        casc_questions=sk_qtag casc_open=sk_open                              ///
+        casc_reanswered=sk_reanswered casc_unknown=sk_unknown                 ///
         (first) responsible=sk_resp, by(interview__id sk_trig) fast
     tempfile sk1
     quietly save `"`sk1'"'
@@ -5364,7 +5580,7 @@ program _suso_para_skips, rclass
     di as txt "{hline 72}"
 
     * ---- survey-level: adjudicated answer variables recurring across runs -------
-    if `hasvar' & `ncasc'>0 & `hasdet' {
+    if `hasvar' & `nhist'>0 & `hasdet' {
         quietly use `"`skdet'"', clear
         quietly keep if trigger!=""
         if _N>0 {
@@ -5399,12 +5615,29 @@ program _suso_para_skips, rclass
 
     * ---- stage 2: one row per interview ----
     quietly gen byte sk_tg = (sk_trig!="")
-    collapse (sum) n_answers n_removed n_cascades casc_removed casc_questions    ///
-        casc_open casc_reanswered casc_unknown n_triggers=sk_tg                    ///
+    collapse (sum) n_answers n_removed n_removed_allroles removed_view          ///
+        n_removal_histories n_removal_histories_all n_cascades n_cascades_all   ///
+        casc_removed casc_removed_all outside_removed outside_removed_all       ///
+        timing_unknown_histories timing_unknown_histories_all                  ///
+        timing_unknown_events timing_unknown_events_all                        ///
+        removal_questions removal_open removal_reanswered removal_unknown       ///
+        removal_identityunknown casc_questions casc_open casc_reanswered        ///
+        casc_unknown n_triggers=sk_tg                                           ///
         (first) responsible, by(interview__id) fast
-    if `hasfinaldata' quietly merge 1:1 interview__id using `"`FINALINT'"', ///
+    if `hasact' quietly merge 1:1 interview__id using `"`SKACT'"',            ///
         keep(master match) nogenerate
-    foreach v in casc_finalanswered casc_answered_disabled casc_expectedblank  ///
+    capture confirm variable removal_actor, exact
+    if _rc quietly gen str40 removal_actor = ""
+    capture confirm variable n_removal_actors, exact
+    if _rc quietly gen long n_removal_actors = 0
+    if `hasfinaldata' & `hasdet' quietly merge 1:1 interview__id using `"`FINALINT'"', ///
+        keep(master match) nogenerate
+    quietly merge 1:1 interview__id using `"`skstatusfile'"',                ///
+        keep(master match) nogenerate
+    foreach v in hist_finalanswered hist_answered_disabled hist_expectedblank  ///
+        hist_blank_enabled hist_logicunknown hist_notindata hist_finalcheck     ///
+        hist_datachecked                                                       ///
+        casc_finalanswered casc_answered_disabled casc_expectedblank          ///
         casc_blank_enabled casc_logicunknown casc_notindata casc_finalcheck       ///
         casc_datachecked {
         capture confirm variable `v'
@@ -5413,12 +5646,33 @@ program _suso_para_skips, rclass
     }
     quietly gen double wipe_share = casc_removed/max(n_answers,1)
     label variable interview__id "interview id"
-    label variable responsible   "interviewer (at last answer)"
+    label variable responsible   "primary interviewer / last-editor context"
+    label variable removal_actor "actual removal-run actor (multiple if applicable)"
+    label variable n_removal_actors "distinct actors with focused removal histories"
     label variable n_answers     "AnswerSet events"
-    label variable n_removed     "AnswerRemoved events (all)"
-    label variable n_cascades    "historical AnswerRemoved cascades"
-    label variable casc_removed    "AnswerRemoved events in detected cascades"
-    label variable casc_questions  "distinct question-within-run cases affected"
+    label variable n_removed     "AnswerRemoved events in current role scope (global)"
+    label variable n_removed_allroles "AnswerRemoved events across all roles (global)"
+    label variable removed_view  "all AnswerRemoved events in focused inventory histories"
+    label variable n_removal_histories "all focused consecutive removal histories"
+    label variable n_removal_histories_all "all consecutive removal histories (global)"
+    label variable n_cascades    "focused compact-priority removal histories"
+    label variable n_cascades_all "compact-priority removal histories (global)"
+    label variable casc_removed    "focused AnswerRemoved events in compact histories"
+    label variable casc_removed_all "AnswerRemoved events in compact histories (global)"
+    label variable outside_removed "focused raw events outside compact-priority histories"
+    label variable removal_questions "all focused question-within-history units"
+    label variable removal_open "inventory units whose final paradata event is AnswerRemoved"
+    label variable removal_reanswered "inventory units re-answered later"
+    label variable removal_unknown "inventory units with unknown paradata final state"
+    label variable removal_identityunknown "histories with an identity-unavailable question unit"
+    label variable hist_finalanswered "inventory units answered in final data"
+    label variable hist_answered_disabled "inventory final answers present while disabled"
+    label variable hist_expectedblank "inventory final blanks expected because disabled"
+    label variable hist_blank_enabled "inventory final blanks while enabled"
+    label variable hist_logicunknown "inventory final blanks with enablement unknown"
+    label variable hist_notindata "inventory units absent from supplied data"
+    label variable hist_finalcheck "inventory units needing final-data review"
+    label variable casc_questions  "compact-priority question-within-run cases affected"
     label variable casc_open       "affected questions whose final event is AnswerRemoved"
     label variable casc_reanswered "affected questions re-answered later"
     label variable casc_unknown      "affected questions with unknown paradata final state"
@@ -5436,11 +5690,14 @@ program _suso_para_skips, rclass
     sort interview__id
     char _dta[suso_paradata] skips
 
-    quietly count if n_cascades>0
+    quietly count if n_removal_histories>0
     local naff = r(N)
     local nints = _N
-    di as txt "  cascades " as res "`ncasc'" as txt "  |  question-run cases affected " as res "`naffectedqall'" ///
-        as txt "  |  removal events " as res "`nwiped'" as txt "  |  re-answered later " as res "`nreansweredall'" ///
+    di as txt "  removal histories " as res "`nhist'" as txt "  |  raw events " ///
+        as res "`nremevents'" as txt "  |  compact histories/events " as res ///
+        "`ncasc'/`nwiped'" as txt "  |  outside-pattern events " as res "`noutsideevents'"
+    di as txt "  question-history units " as res "`naffectedqall'"             ///
+        as txt "  |  re-answered later " as res "`nreansweredall'" ///
         as txt "  |  interviews affected " as res "`naff'" as txt " of " as res "`nints'"
     if `hasfinaldata' di as txt "  final export: answered " as res "`nfinalansweredall'" ///
         as txt "  |  blank as expected (disabled) " as res "`nexpectedblankall'" ///
@@ -5451,18 +5708,18 @@ program _suso_para_skips, rclass
 
     * ---- top interviews ----
     if `naff'>0 {
-        gsort -casc_removed -n_cascades interview__id
+        gsort -removed_view -n_removal_histories interview__id
         local k = min(`top', `naff')
-        di as txt _n "  interviews with the largest historical removal runs (top `k'):"
-        di as txt "  {ul:interview}  {ul:interviewer }  {ul:cascades}  {ul:removal events}  {ul:answer vars}  {ul:removed/set}"
+        di as txt _n "  interviews with the most removal events (top `k'):"
+        di as txt "  {ul:interview}  {ul:actual removal actor}  {ul:histories}  {ul:raw events}  {ul:compact}  {ul:outside}"
         forvalues i = 1/`k' {
             local id8 = substr(interview__id[`i'],1,8)
-            local rsp : di %-12s abbrev(responsible[`i'],12)
-            local nc : di %8.0f n_cascades[`i']
-            local wp : di %5.0f casc_removed[`i']
-            local ng : di %5.0f n_triggers[`i']
-            local ws : di %9.2f wipe_share[`i']
-            di as txt "  " as res "`id8'" as txt "   `rsp'" as txt "`nc'  `wp'  `ng'  `ws'"
+            local rsp : di %-20s abbrev(removal_actor[`i'],20)
+            local nh : di %9.0f n_removal_histories[`i']
+            local nr : di %5.0f removed_view[`i']
+            local nc : di %7.0f casc_removed[`i']
+            local no : di %7.0f outside_removed[`i']
+            di as txt "  " as res "`id8'" as txt "   `rsp'  `nh'  `nr'  `nc'  `no'"
         }
         sort interview__id
 
@@ -5478,8 +5735,8 @@ program _suso_para_skips, rclass
             quietly gen double casc_share = n_casc/n_ints
             gsort -casc_share -wiped responsible
             local k = min(10, _N)
-            di as txt _n "  interviewers, by share of interviews with a cascade (top `k'):"
-            di as txt "  {ul:interviewer     }  {ul:ints}  {ul:w/ cascade}  {ul:share}  {ul:flips}  {ul:removal events}"
+            di as txt _n "  primary-interviewer context, by compact-history share (top `k'):"
+            di as txt "  {ul:primary context }  {ul:ints}  {ul:w/ compact}  {ul:share}  {ul:histories}  {ul:compact events}"
             forvalues i = 1/`k' {
                 local rsp : di %-16s abbrev(responsible[`i'],16)
                 local ni : di %4.0f n_ints[`i']
@@ -5551,19 +5808,20 @@ program _suso_para_skips, rclass
         quietly replace why = "Check final data - " + strofreal(n_answered_disabled) + ///
             " answered while disabled; " + strofreal(n_blank_enabled) + ///
             " blank while enabled; " + strofreal(n_logic_unknown) + ///
-            " logic unknown; " + strofreal(n_notindata) + " not in supplied data" ///
+            " logic unknown; " + strofreal(n_notindata) + " not in supplied data; " + ///
+            strofreal(n_identityunknown) + " question identity unavailable" ///
             if final_data_checked & n_final_check>0
 
         quietly replace why = "Resolved - all affected questions were answered again" ///
             if !final_data_checked & nopen==0 & nunknown==0
         quietly replace tier = "V" if !final_data_checked & (nopen>0 | nunknown>0)
         quietly replace why = "Check final data - " + strofreal(nopen) + ///
-            " question(s) still end in AnswerRemoved; " + strofreal(nunknown) + ///
+            " question-history unit(s) still end in AnswerRemoved; " + strofreal(nunknown) + ///
             " have unknown paradata state" if !final_data_checked & tier=="V"
 
         * Priority is allowed only when unresolved final-data checks remain.
         quietly replace tier = "A" if tier=="V" & __ckint>=3
-        quietly replace why = "Priority check - three or more unresolved final-data questions in this interview" ///
+        quietly replace why = "Priority check - three or more unresolved question-history units in this interview" ///
             if tier=="A"
         capture quietly drop __ckint
         quietly save `"`skdet'"', replace
@@ -5601,10 +5859,11 @@ program _suso_para_skips, rclass
             if r(N)>0 local clrline "`clrline'`=cond("`clrline'"=="","",", ")'`w' x`r(N)'"
         }
         gsort -nqrem -nrem interview__id sk_run
-        quietly gen strL m_head = "CASE " + strofreal(_n) + " of `ncasc'.  Interview " ///
+        quietly gen strL m_head = "HISTORY " + strofreal(_n) + " of `nhist'.  Interview " ///
             + interview__id + ".  Enumerator: " + cond(actor!="", actor, resp)          ///
-            + ".  Removal run on " + string(ts0/86400000, "%tdDD_Mon_CCYY") + " at " ///
-            + string(ts0, "%tcHH:MM") + " UTC."
+            + cond(missing(ts0), ".  Removal-run time unavailable.",         ///
+            ".  Removal run on " + string(ts0/86400000, "%tdDD_Mon_CCYY") + " at " + ///
+            string(ts0, "%tcHH:MM") + " UTC.")
         quietly gen strL m_event = "HISTORICAL ANSWER EVENT: " + transition_text
         quietly gen strL m_finalevent = cond(trigger_final_text!="", ///
             "CURRENT FINAL VALUE: " + trigger_final_text, "")
@@ -5623,6 +5882,8 @@ program _suso_para_skips, rclass
             "This is a questionnaire relationship, not proof of cause." if reltype==1 & linkmode==3
         quietly replace m_rel = "RELATIONSHIP: affected questionnaire questions have enabling conditions, but none references [" + ///
             trigger + "]; it is the nearest AnswerSet only." if reltype==2
+        quietly replace m_rel = "RELATIONSHIP: no bounded nearby AnswerSet was identified; this history remains in the exhaustive removal inventory." ///
+            if trigger==""
         quietly replace m_rel = "RELATIONSHIP: affected items are ordinary questionnaire questions with no effective enabling condition. They are not service fields; [" + ///
             trigger + "] is the nearest AnswerSet only." if reltype==3
         quietly replace m_rel = "RELATIONSHIP: affected field names were not found in the parsed questionnaire metadata; [" + ///
@@ -5633,6 +5894,10 @@ program _suso_para_skips, rclass
         quietly gen strL m_what = "REMOVAL HISTORY: " + strofreal(nrem) + ///
             " AnswerRemoved event(s) affected " + strofreal(nqrem) + ///
             " distinct question/roster instance(s)."
+        quietly replace m_what = m_what + cond(compact,                       ///
+            " It meets the compact-priority rule.",                          ///
+            cond(timing_unknown, " Compact-pattern timing could not be classified.", ///
+            " It is outside the compact-priority rule."))
         quietly gen strL m_state = "CURRENT PARADATA STATE: " + strofreal(nreanswered) + ///
             " answered again; " + strofreal(nopen) + " still end in AnswerRemoved; " + ///
             strofreal(nunknown) + " have unknown state."
@@ -5642,7 +5907,9 @@ program _suso_para_skips, rclass
             strofreal(n_answered_disabled) + " answered while disabled; " + ///
             strofreal(n_blank_enabled) + " blank while enabled; " + ///
             strofreal(n_logic_unknown) + " with logic unknown; " + ///
-            strofreal(n_notindata) + " not found in supplied data." if final_data_checked
+            strofreal(n_notindata) + " not found in supplied data; " +        ///
+            strofreal(n_identityunknown) + " question identity unavailable." ///
+            if final_data_checked
 
         quietly gen strL m_q = ""
         quietly gen strL m_s = ""
@@ -5685,15 +5952,16 @@ program _suso_para_skips, rclass
             quietly file open `mf' using `"`messages'"', write replace text
             local mh 1
             file write `mf' "PARADATA SKIP/REMOVAL REVIEW" _n
-            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.22)" _n
-            file write `mf' "Definition: a case is `cascade' or more consecutive AnswerRemoved events in a compact run near an AnswerSet event." _n
-            file write `mf' "`ncasc' case(s) found; `nwiped' removal event(s); `naffectedqall' distinct question-run case(s) affected." _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.25)" _n
+            file write `mf' "Definition: every consecutive same-actor AnswerRemoved history is inventoried; cascade(`cascade')/window(`window') marks the compact-priority subset." _n
+            file write `mf' "`nhist' histories and `nremevents' raw role-scoped event(s); `ncasc' compact histories / `nwiped' compact events; `noutsideevents' outside-pattern events; `naffectedqall' question-history units." _n
+            file write `mf' "Loaded all-role raw total: `nraw_allroles_global'; current role-scope raw total: `nraw_role_global'." _n
             if `hasfinaldata' file write `mf' "Final export assessment: `nfinalansweredall' answered; `nanswereddisabledall' answered while disabled; `nexpectedblankall' blank as expected because disabled; `nfinalcheckall' require review." _n
             else file write `mf' "No data() supplied; `nopenall' still end in AnswerRemoved and `nunknownall' have unknown paradata state." _n
             file write `mf' _n "BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention - `nclr' cases are resolved and require no action." _n
             forvalues r = 1/`=_N' {
                 if `rtag'[`r']!=1 continue
-                file write `mf' _n "INVESTIGATE " (`reviewer'[`r']) ": " (strofreal(`ri'[`r'])) " interview(s) with priority unresolved histories, " (strofreal(`rq'[`r'])) " questions affected across sections." _n
+                file write `mf' _n "INVESTIGATE " (`reviewer'[`r']) ": " (strofreal(`ri'[`r'])) " interview(s) with priority unresolved histories, " (strofreal(`rq'[`r'])) " question-history units affected." _n
                 file write `mf' "  interviews: " (`rids'[`r']) _n
                 file write `mf' "  do: open each in Headquarters and review the exact answer transition, unresolved variables, and final export." _n
             }
@@ -5705,7 +5973,7 @@ program _suso_para_skips, rclass
             file write `mf' _n "Case-by-case detail below is for reference only." _n
         }
         di as txt _n "  {hline 70}"
-        di as res "  BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention — `nclr' of `ncasc' cases are resolved (no action)."
+        di as res "  BOTTOM LINE: `=`ninv'+`nver'' finding(s) need attention — `nclr' of `nhist' histories are resolved (no action)."
         di as txt "  {hline 70}"
         forvalues r = 1/`=_N' {
             if `rtag'[`r']!=1 continue
@@ -5794,6 +6062,7 @@ program _suso_para_skips, rclass
             quietly gen strL h_finalevent = trigger_final_text
             quietly gen strL h_check = wl_final_check
             quietly gen strL h_key = ikey
+            quietly gen strL h_ws = ws
             quietly gen str100 h_gkey = cond(reltype==1, ///
                 cond(linkmode==2,"indirect:",cond(linkmode==3,"mixedlink:","direct:")) + trigger, ///
                 cond(reltype==3, "always", cond(reltype==4, "external", ///
@@ -5823,7 +6092,7 @@ program _suso_para_skips, rclass
             mata: suso_urlencode_var("h_iid", "h_iid_url")
             mata: suso_urlencode_var("hq_assignment", "h_assignment_url")
             foreach v in h_ac h_iid h_tg h_tv0 h_qt h_sc h_en h_wl h_event ///
-                h_eventstatus h_finalevent h_check h_key h_group hq_assignment ///
+                h_eventstatus h_finalevent h_check h_key h_ws h_group hq_assignment ///
                 wl_final_answered wl_answered_disabled wl_expected_blank {
                 quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
                 quietly replace `v' = subinstr(subinstr(`v',char(34),"&#34;",.),char(39),"&#39;",.)
@@ -5852,17 +6121,18 @@ program _suso_para_skips, rclass
             quietly replace h_chip = "<div class=" + char(34) + "chip " + ///
                 h_class + char(34) + ">Check final data - " + ///
                 strofreal(cond(final_data_checked,n_final_check,nopen+nunknown)) + ///
-                " question(s)</div>" if tier=="V"
+                " question-history unit(s)</div>" if tier=="V"
             quietly replace h_chip = "<div class=" + char(34) + "chip " + ///
                 h_class + char(34) + ">Priority check - " + ///
                 strofreal(cond(final_data_checked,n_final_check,nopen+nunknown)) + ///
-                " question(s)</div>" if tier=="A"
+                " question-history unit(s)</div>" if tier=="A"
 
             quietly gen strL h_l1 = "<div class=" + char(34) + "c1" + char(34) + ">" ///
                 + cond(h_key!="", "<b class=" + char(34) + "mono" + char(34) + ">" + h_key + "</b> &nbsp;&middot;&nbsp; <span class=" + char(34) + "mono small" + char(34) + ">" + h_iid + "</span>", ///
                        "<span class=" + char(34) + "mono" + char(34) + ">" + h_iid + "</span>") ///
                 + " &nbsp;&middot;&nbsp; <b>" + h_ac + "</b> &nbsp;&middot;&nbsp; " ///
-                + string(ts0/86400000, "%tdDD_Mon_CCYY") + " " + string(ts0, "%tcHH:MM") + " UTC" + h_links + "</div>"
+                + cond(missing(ts0),"time unavailable",string(ts0/86400000, "%tdDD_Mon_CCYY") + " " + string(ts0, "%tcHH:MM") + " UTC") + ///
+                cond(h_ws!=""," &nbsp;&middot;&nbsp; " + h_ws,"") + h_links + "</div>"
 
             quietly gen strL h_eventbox = "<div class=" + char(34) + "eventbox" + char(34) + "><div class=" + char(34) + "eventstatus" + char(34) + ">" + h_eventstatus + "</div><b>Historical answer event:</b> " + h_event
             quietly replace h_eventbox = h_eventbox + "<div class=" + char(34) + "eventquestion" + char(34) + "><b>Question:</b> &quot;" + h_qt + "&quot;</div>" if h_qt!=""
@@ -5878,12 +6148,14 @@ program _suso_para_skips, rclass
             quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>Fields outside questionnaire metadata:</b> none of the affected names was found in the parsed questionnaire. The nearby AnswerSet is timing context only.</div>" if reltype==4
             quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>Mixed field types:</b> affected items include questionnaire questions and fields absent from questionnaire metadata. No causal link was established.</div>" if reltype==5
             quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>Questionnaire relationship not assessed:</b> no questionnaire metadata was supplied. The nearby AnswerSet is timing context only.</div>" if reltype==6
+            quietly replace h_rel = "<div class=" + char(34) + "relbox" + char(34) + "><b>No bounded nearby AnswerSet:</b> this history remains in the exhaustive inventory, but no answer-event relationship is asserted.</div>" if h_tg==""
 
-            quietly gen strL h_l2 = "<div class=" + char(34) + "c2" + char(34) + "><b>Removal history:</b> " + strofreal(nrem) + " AnswerRemoved event(s) affected <b>" + strofreal(nqrem) + "</b> distinct question/roster instance(s).</div>"
+            quietly gen strL h_l2 = "<div class=" + char(34) + "c2" + char(34) + "><b>Removal history:</b> " + strofreal(nrem) + " AnswerRemoved event(s) affected <b>" + strofreal(nqrem) + "</b> distinct question/roster unit(s). <b>Pattern:</b> " + cond(compact,"compact priority",cond(timing_unknown,"timing unknown","outside compact rule")) + ".</div>"
             quietly gen strL h_state = "<div class=" + char(34) + "state resolved" + char(34) + "><b>Final data assessment:</b> " + strofreal(n_final_answered) + " answered; " + strofreal(n_expected_blank) + " blank as expected because disabled; 0 require review.</div>" if tier=="C" & final_data_checked
             quietly replace h_state = "<div class=" + char(34) + "state resolved" + char(34) + "><b>Current paradata state:</b> all affected items were answered again.</div>" if tier=="C" & !final_data_checked
             quietly replace h_state = "<div class=" + char(34) + "state verify" + char(34) + "><b>Final data assessment:</b> " + strofreal(n_final_answered) + " answered; " + strofreal(n_expected_blank) + " blank as expected because disabled; " + strofreal(n_answered_disabled) + " answered while disabled; " + strofreal(n_blank_enabled) + " blank while enabled; " + strofreal(n_logic_unknown) + " logic unknown; " + strofreal(n_notindata) + " not in supplied data.</div>" if tier=="V"
             quietly replace h_state = "<div class=" + char(34) + "state priority" + char(34) + "><b>Final data assessment:</b> " + strofreal(n_final_answered) + " answered; " + strofreal(n_expected_blank) + " blank as expected because disabled; " + strofreal(n_final_check) + " require review.</div>" if tier=="A"
+            quietly replace h_state = subinstr(h_state,".</div>","; " + strofreal(n_identityunknown) + " question identity unavailable.</div>",1) if n_identityunknown>0
 
             quietly gen strL h_do = "<div class=" + char(34) + "action resolved" + char(34) + "><b>No action needed.</b> Final values are present or correctly blank under the final questionnaire logic.</div>" if tier=="C" & final_data_checked
             quietly replace h_do = "<div class=" + char(34) + "action resolved" + char(34) + "><b>No action needed.</b> Keep this only as interview history.</div>" if tier=="C" & !final_data_checked
@@ -5908,7 +6180,7 @@ program _suso_para_skips, rclass
             * JSON-escape in Mata directly from variables.  This avoids routing
             * questionnaire text, actor names, or answer values through Stata
             * macro expansion and neutralizes </script>-style payloads.
-            foreach __jv in actor_key actor group group_key iid card {
+            foreach __jv in actor_key actor group group_key iid ws wc card {
                 quietly gen strL j_`__jv' = ""
             }
             quietly replace j_actor_key = js_actor_key
@@ -5916,8 +6188,10 @@ program _suso_para_skips, rclass
             quietly replace j_group = js_group
             quietly replace j_group_key = h_gkey
             quietly replace j_iid = interview__id
+            quietly replace j_ws = ws
+            quietly replace j_wc = ws_class
             quietly replace j_card = h_card
-            foreach __jv in actor_key actor group group_key iid card {
+            foreach __jv in actor_key actor group group_key iid ws wc card {
                 mata: suso_jsonesc_var("j_`__jv'", "j_`__jv'")
             }
             quietly gen strL j_obj = "{" + char(34) + "ak" + char(34) +       ///
@@ -5927,12 +6201,18 @@ program _suso_para_skips, rclass
                 j_group_key + char(34) + "," + char(34) + "gl" + char(34) +  ///
                 ":" + char(34) + j_group + char(34) + "," + char(34) +       ///
                 "id" + char(34) + ":" + char(34) + j_iid + char(34) +        ///
+                "," + char(34) + "ws" + char(34) + ":" + char(34) + j_ws + char(34) + ///
+                "," + char(34) + "wc" + char(34) + ":" + char(34) + j_wc + char(34) + ///
                 "," + char(34) + "t" + char(34) + ":" + char(34) + tier +   ///
                 char(34) + "," + char(34) + "q" + char(34) + ":" +          ///
                 strofreal(nqrem) + "," + char(34) + "need" + char(34) + ":" + ///
                 strofreal(n_final_check) + "," + char(34) + "re" + char(34) + ///
                 ":" + strofreal(nreanswered) + "," + char(34) + "ev" +      ///
                 char(34) + ":" + strofreal(nrem) + "," + char(34) +          ///
+                "cp" + char(34) + ":" + strofreal(compact) + "," + char(34) + ///
+                "tu" + char(34) + ":" + strofreal(timing_unknown) + "," + char(34) + ///
+                "cev" + char(34) + ":" + strofreal(nrem*compact) + "," + char(34) + ///
+                "out" + char(34) + ":" + strofreal(nrem*(1-compact)) + "," + char(34) + ///
                 "card" + char(34) + ":" + char(34) + j_card + char(34) + "}"
             local ncheckall = `nfinalcheckall'
             local now = trim("`c(current_date)' `c(current_time)'")
@@ -5975,54 +6255,38 @@ program _suso_para_skips, rclass
             file write `hf' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' _n
             file write `hf' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
             file write `hf' `"<div class="mast"><h1>Skip Removal Review`wst'</h1>"' _n
-            file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; a case is `cascade'+ compact consecutive AnswerRemoved events near an AnswerSet; final values may be restored later</div></div>"' _n
+            file write `hf' `"<div class="sub">Generated `now' &nbsp;-&nbsp; every consecutive same-actor AnswerRemoved history is inventoried; cascade(`cascade') and window(`window') classify the compact-priority subset</div></div>"' _n
             file write `hf' `"<div class="wrap">"' _n
-            file write `hf' `"<div class="filterbar"><div><label for="sk_actor">Removal-run actor / enumerator</label><select id="sk_actor"></select></div><div class="scope" id="sk_scope"></div></div>"' _n
+            file write `hf' `"<div class="filterbar"><div><label for="sk_actor">Removal-run actor / enumerator</label><select id="sk_actor"></select></div><div><label for="sk_status">Current/final interview status</label><select id="sk_status"></select></div><div class="scope" id="sk_scope"></div></div>"' _n
             file write `hf' `"<div class="cards">"' _n
             file write `hf' `"<div class="card"><div class="v" id="sk_hist">-</div><div class="k">removal histories</div></div>"' _n
-            file write `hf' `"<div class="card"><div class="v" id="sk_q">-</div><div class="k">question-run cases affected</div></div>"' _n
+            file write `hf' `"<div class="card dim"><div class="v" id="sk_ev">-</div><div class="k">raw AnswerRemoved events</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v" id="sk_compact">-</div><div class="k">compact histories / events</div></div>"' _n
+            file write `hf' `"<div class="card dim"><div class="v" id="sk_outside">-</div><div class="k">events outside compact pattern</div></div>"' _n
+            file write `hf' `"<div class="card"><div class="v" id="sk_q">-</div><div class="k">question-history units affected</div></div>"' _n
             file write `hf' `"<div class="card warn"><div class="v" id="sk_need">-</div><div class="k">need final-data check</div></div>"' _n
             file write `hf' `"<div class="card"><div class="v" id="sk_re">-</div><div class="k">answered again later</div></div>"' _n
-            file write `hf' `"<div class="card dim"><div class="v" id="sk_ev">-</div><div class="k">technical removal events</div></div>"' _n
             file write `hf' `"</div>"' _n
-            file write `hf' `"<div class="how"><b>How to read each card:</b> first read <b>Observed answer event</b>, which now states whether the exact question/roster instance changed value, repeated the same value, was first observed, or was re-entered after removal. Next read <b>Questionnaire relationship</b>, then the removal history and current state. When data() is supplied, blank-but-disabled questions move to <b>Resolved history</b>; only final blanks that are enabled, not evaluable, or absent from the supplied export remain under <b>Cases needing verification</b>. A questionnaire relationship is not automatic proof of cause.</div>"' _n
+            file write `hf' `"<div class="how"><b>Coverage:</b> every role-scoped AnswerRemoved event is retained, including singleton and paired histories. <b>Compact priority</b> means at least `cascade' consecutive removals, a fully timed run within `window' seconds, and a bounded nearby AnswerSet. Outside-pattern and timing-unknown histories still receive final-state adjudication. Question identity unavailable is an explicit review category. A questionnaire relationship is context, not proof of cause.</div>"' _n
             quietly save `"`DET2'"'
 
             file write `hf' `"<details class="techsum"><summary>Technical pattern summary</summary>"' _n
-            file write `hf' `"<div class="meta">This table counts raw removal histories. Cause not identified means no questionnaire relationship was found. A direct link means the conditions mention the variable; an indirect link means they mention a calculated variable that depends on it. Neither proves cause.</div>"' _n
-            file write `hf' `"<table><thead><tr><th>relationship / variable</th><th class="r">histories</th><th class="r">interviews</th><th class="r">removal events</th></tr></thead><tbody id="sk_patterns"></tbody></table><div id="sk_patterns_empty" class="meta"></div></details>"' _n
+            file write `hf' `"<div class="meta">This table covers every filtered inventory history. Compact histories are the threshold/window subset; outside events are retained rather than discarded.</div>"' _n
+            file write `hf' `"<table><thead><tr><th>relationship / variable</th><th class="r">all histories</th><th class="r">compact</th><th class="r">interviews</th><th class="r">raw events</th><th class="r">outside events</th></tr></thead><tbody id="sk_patterns"></tbody></table><div id="sk_patterns_empty" class="meta"></div></details>"' _n
             file write `hf' `"<h2>Cases needing verification</h2>"' _n
-            file write `hf' `"<div class="note">These cases contain at least one final blank that is enabled, whose effective logic could not be evaluated, or whose variable/roster instance is absent from the supplied data. Blank-but-disabled questions are resolved automatically.</div>"' _n
+            file write `hf' `"<div class="note">These cases contain an enabled blank, unevaluable logic, a missing variable/roster instance, an answer while disabled, or an identity-unavailable removal. Blank-but-disabled questions are resolved automatically.</div>"' _n
             file write `hf' `"<div id="sk_verify"></div>"' _n
             file write `hf' `"<h2>Resolved history - no action</h2>"' _n
             file write `hf' `"<details><summary id="sk_resolved_summary" style="cursor:pointer;font-size:13px;color:#555;padding:6px 0"></summary><div id="sk_resolved"></div></details><div id="sk_resolved_more" class="meta"></div>"' _n
-            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.22). Cases are screening signals from the paradata event stream, not proof of misconduct. Enumerator ownership is the actor who emitted the AnswerRemoved run; primary interviewer and last editor are not used as substitutes.</div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.25). Exhaustive histories are audit inventory; compact classification is a prioritization signal, not proof of misconduct. Actor ownership is the actor who emitted the AnswerRemoved run. Current/final status uses data() when supplied, otherwise paradata workflow history.</div>"' _n
             file write `hf' `"</div><script>"' _n
-            file write `hf' `"var SK={cases:["' _n
+            file write `hf' `"var SK={meta:{allRole:`nraw_allroles_global',role:`nraw_role_global',globalHistories:`nhist_global',globalCompact:`ncasc_global',globalCompactEvents:`ncompactevents_global'},cases:["' _n
             quietly use `"`DET2'"', clear
             forvalues i = 1/`=_N' {
                 file write `hf' (cond(`i'==1,"",",")) (j_obj[`i']) _n
             }
             file write `hf' `"]};"' _n
-            file write `hf' `"var SKP={"' _n
-            file write `hf' `"scope:function(a,k){if(!k)return a.slice();var z=[];for(var i=0;i<a.length;i++)if(a[i].ak===k)z.push(a[i]);return z;},"' _n
-            file write `hf' `"stats:function(a){var z={h:a.length,q:0,need:0,re:0,ev:0};for(var i=0;i<a.length;i++){z.q+=a[i].q;z.need+=a[i].need;z.re+=a[i].re;z.ev+=a[i].ev;}return z;},"' _n
-            file write `hf' `"actors:function(a){var m=Object.create(null),z=[],i,x;for(i=0;i<a.length;i++){x=a[i];if(!m[x.ak])m[x.ak]={k:x.ak,n:x.an,c:0};m[x.ak].c++;}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k))z.push(m[k]);z.sort(function(x,y){return x.n.localeCompare(y.n)||x.k.localeCompare(y.k);});return z;},"' _n
-            file write `hf' `"patterns:function(a){var m=Object.create(null),z=[],i,x,p;for(i=0;i<a.length;i++){x=a[i];p=m[x.gk];if(!p)p=m[x.gk]={k:x.gk,l:x.gl,h:0,ev:0,ids:Object.create(null)};p.h++;p.ev+=x.ev;p.ids[x.id]=1;}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k)){p=m[k];p.ni=Object.keys(p.ids).length;delete p.ids;z.push(p);}z.sort(function(x,y){return y.ev-x.ev||y.h-x.h||x.l.localeCompare(y.l);});return z.slice(0,10);},"' _n
-            file write `hf' `"groups:function(a){var m=Object.create(null),z=[],i,x,g;for(i=0;i<a.length;i++){x=a[i];if(x.t==='C')continue;g=m[x.gk];if(!g)g=m[x.gk]={k:x.gk,l:x.gl,need:0,ids:Object.create(null),cases:[]};g.need+=x.need;g.ids[x.id]=1;g.cases.push(x);}for(var k in m)if(Object.prototype.hasOwnProperty.call(m,k)){g=m[k];g.ni=Object.keys(g.ids).length;delete g.ids;g.cases.sort(function(x,y){var sx=x.t==='A'?2:1,sy=y.t==='A'?2:1;return sy-sx||y.need-x.need||y.q-x.q||x.id.localeCompare(y.id);});z.push(g);}z.sort(function(x,y){return y.need-x.need||x.l.localeCompare(y.l);});return z;}"' _n
-            file write `hf' `"};if(typeof module!=='undefined'&&module.exports)module.exports=SKP;"' _n
-            file write `hf' `"function E(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}"' _n
-            file write `hf' `"function A(s){return E(s);}"' _n
-            file write `hf' `"function el(x){return document.getElementById(x);}"' _n
-            * Build selector options through the DOM.  Besides being safer for
-            * actor labels, this deliberately avoids a JavaScript double-quote
-            * followed by an apostrophe: that byte pair is Stata's compound-
-            * string terminator and caused r(198) in the v1.7.18 HTML path.
-            file write `hf' `"function initActors(){var a=SKP.actors(SK.cases),s=el('sk_actor'),o=document.createElement('option');s.innerHTML='';o.value='';o.textContent='All removal-run actors ('+a.length+')';s.appendChild(o);for(var i=0;i<a.length;i++){o=document.createElement('option');o.value=a[i].k;o.textContent=a[i].n+' ('+a[i].c+')';s.appendChild(o);}}"' _n
-            file write `hf' `"function actorLabel(k){var o=el('sk_actor').options;for(var i=0;i<o.length;i++)if(o[i].value===k)return o[i].text.replace(/ \([0-9]+\)$/,'');return k;}"' _n
-            file write `hf' `"function renderSkip(){var k=el('sk_actor').value,a=SKP.scope(SK.cases,k),st=SKP.stats(a),p=SKP.patterns(a),g=SKP.groups(a),i,s='';el('sk_hist').textContent=st.h.toLocaleString();el('sk_q').textContent=st.q.toLocaleString();el('sk_need').textContent=st.need.toLocaleString();el('sk_re').textContent=st.re.toLocaleString();el('sk_ev').textContent=st.ev.toLocaleString();el('sk_scope').textContent=k?('Showing removal runs emitted by '+actorLabel(k)+'.'):('Showing all '+st.h.toLocaleString()+' removal histories.');for(i=0;i<p.length;i++)s+='<tr><td>'+E(p[i].l)+'</td><td class="r">'+p[i].h.toLocaleString()+'</td><td class="r">'+p[i].ni.toLocaleString()+'</td><td class="r">'+p[i].ev.toLocaleString()+'</td></tr>';el('sk_patterns').innerHTML=s;el('sk_patterns_empty').textContent=p.length?'':'No removal patterns for this selection.';s='';for(i=0;i<g.length;i++)s+='<details open><summary class="gate"><b>'+E(g[i].l)+'</b> &nbsp;-&nbsp; '+g[i].cases.length+' case(s), '+g[i].need+' question(s) to check, in '+g[i].ni+' interview(s)</summary>'+g[i].cases.map(function(x){return x.card;}).join('')+'</details>';if(!g.length)s='<div class="state resolved"><b>No final-data checks are indicated for this selection.</b> Every matching affected item is answered or correctly blank under final questionnaire logic.</div>';el('sk_verify').innerHTML=s;var r=[];for(i=0;i<a.length;i++)if(a[i].t==='C')r.push(a[i]);el('sk_resolved_summary').textContent='Show '+r.length+' resolved historical case(s)';el('sk_resolved').innerHTML=r.slice(0,200).map(function(x){return x.card;}).join('');el('sk_resolved_more').textContent=r.length>200?('Showing the first 200 of '+r.length+' resolved historical cases for this selection.'):(r.length?'':'No resolved histories for this selection.');}"' _n
-            file write `hf' `"function setActor(k,label,notify){var s=el('sk_actor'),found=false;for(var i=0;i<s.options.length;i++)if(s.options[i].value===k){found=true;break;}if(k&&!found){var o=document.createElement('option');o.value=k;o.textContent=(label||k)+' (0)';s.appendChild(o);}s.value=k||'';renderSkip();if(notify&&parent!==window)parent.postMessage({type:'suso-actor-filter',key:s.value,label:s.value?actorLabel(s.value):''},'*');}"' _n
-            file write `hf' `"initActors();renderSkip();el('sk_actor').addEventListener('change',function(){setActor(this.value,actorLabel(this.value),true);});window.addEventListener('message',function(ev){var d=ev.data||{};if(ev.source!==parent||d.type!=='suso-actor-filter'||typeof d.key!=='string'||typeof d.label!=='string'||d.key.length>500||d.label.length>500)return;setActor(d.key,d.label,false);});"' _n
+            _suso_para_skip_page_js `hf'
             file write `hf' `"</script></body></html>"' _n
             file close `hf'
             di as txt "  shareable review page written: " as res `"`html'"'
@@ -6033,6 +6297,25 @@ program _suso_para_skips, rclass
             else di as txt "  Headquarters links: disabled (configure server/workspace or add hqurl())."
         }
         restore
+    }
+
+    * html() is a file-creation contract even when the inventory is empty.
+    * Emit a valid zero-state page instead of silently leaving the requested
+    * suite tab missing.
+    if !`hasdet' & `"`html'"'!="" {
+        if "`replace'"=="" {
+            capture confirm new file `"`html'"'
+            if _rc {
+                di as err "suso: html() file already exists. Use -replace-."
+                exit 602
+            }
+        }
+        tempname zhf
+        quietly file open `zhf' using `"`html'"', write replace text
+        file write `zhf' `"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Skip Removal Review</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:#f4f5f7;color:#1a1a1a;margin:0}.mast{background:#002244;color:#fff;padding:20px 28px}.box{max-width:820px;margin:24px auto;background:#fff;border:1px solid #dfe4e8;border-radius:8px;padding:22px}.n{font-size:26px;font-weight:700;color:#002244}</style></head><body>"' _n
+        file write `zhf' `"<div class="mast"><h2>Skip Removal Review</h2></div><div class="box"><div class="n">0 removal histories</div><p>No AnswerRemoved events match the current role and vars() scope.</p><p>Loaded raw total across all roles: <b>`nraw_allroles_global'</b>; current role-scope raw total: <b>`nraw_role_global'</b>.</p></div></body></html>"' _n
+        file close `zhf'
+        di as txt "  shareable review page written (zero inventory): " as res `"`html'"'
     }
 
     if `"`saving'"'!="" {
@@ -6048,10 +6331,24 @@ program _suso_para_skips, rclass
     }
 
     return scalar nints     = `nints'
+    return scalar nhistories = `nhist'
+    return scalar nhistories_global = `nhist_global'
     return scalar ncascades = `ncasc'
+    return scalar ncascades_global = `ncasc_global'
     return scalar nwiped       = `nwiped'
     return scalar nremovalevents = `nremevents'
+    return scalar nremovalevents_global = `nraw_role_global'
+    return scalar nremovalevents_allroles = `nraw_allroles_global'
+    return scalar ncompactevents = `nwiped'
+    return scalar ncompactevents_global = `ncompactevents_global'
+    return scalar noutsideevents = `noutsideevents'
+    return scalar noutsideevents_global = `nraw_role_global' - `ncompactevents_global'
+    return scalar ntimingunknownhistories = `ntimingunknown'
+    return scalar ntimingunknownhistories_global = `ntimingunknown_global'
+    return scalar ntimingunknownevents = `ntimingunknownevents'
+    return scalar ntimingunknownevents_global = `ntimingunknownevents_global'
     return scalar naffectedquestions = `naffectedqall'
+    return scalar nidentityunknown = `nidentityunknownall'
     return scalar nreanswered    = `nreansweredall'
     return scalar nopen          = `nopenall'
     return scalar nunknown       = `nunknownall'
@@ -6111,15 +6408,16 @@ program _suso_para_report_js
     file write `fh' `"    return (av<bv?-1:1)*mul;"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  questionSort: function(rows,key,dir){return rows.sort(function(a,b){return P.questionCompare(a,b,key,dir);});},"' _n
-    file write `fh' `"  removalView: function(rows,resp){"' _n
-    file write `fh' `"    var scoped=[],groups=Object.create(null),rk=P.norm(resp),i,r,k,g,seen;"' _n
-    file write `fh' `"    var out={histories:0,questions:0,check:0,reanswered:0,events:0,active:0,resolved:0,rows:scoped,patterns:[]};"' _n
+    file write `fh' `"  removalView: function(rows,resp,ws){"' _n
+    file write `fh' `"    var scoped=[],groups=Object.create(null),rk=P.norm(resp),sk=String(ws||''),i,r,k,g;"' _n
+    file write `fh' `"    var out={histories:0,questions:0,check:0,reanswered:0,events:0,compactHistories:0,compactEvents:0,outsideEvents:0,timingUnknown:0,active:0,resolved:0,rows:scoped,patterns:[]};"' _n
     file write `fh' `"    for(i=0;i<(rows||[]).length;i++){"' _n
-    file write `fh' `"      r=rows[i]; if(resp&&(r.k||P.norm(r.a))!==rk) continue; scoped.push(r);"' _n
+    file write `fh' `"      r=rows[i]; if(resp&&(r.k||P.norm(r.a))!==rk) continue;if(sk==='APP'&&r.wc!=='approvebysup'&&r.wc!=='approvebyhq')continue;if(sk&&sk!=='APP'&&String(r.ws||'')!==sk&&P.norm(r.wc)!==P.norm(sk))continue;scoped.push(r);"' _n
     file write `fh' `"      out.histories++; out.questions+=r.q||0; out.check+=r.ck||0; out.reanswered+=r.ra||0; out.events+=r.n||0;"' _n
+    file write `fh' `"      if(r.cp){out.compactHistories++;out.compactEvents+=r.n||0;}else out.outsideEvents+=r.n||0;if(r.tu)out.timingUnknown++;"' _n
     file write `fh' `"      if(r.tier==='C') out.resolved++; else out.active++;"' _n
     file write `fh' `"      k=r.t||'(no nearby / linked variable identified)';"' _n
-    file write `fh' `"      if(!groups[k]) groups[k]={v:k,h:0,n:0,ids:Object.create(null)}; g=groups[k]; g.h++; g.n+=r.n||0; g.ids[r.id]=1;"' _n
+    file write `fh' `"      if(!groups[k]) groups[k]={v:k,h:0,n:0,ch:0,cn:0,out:0,ids:Object.create(null)};g=groups[k];g.h++;g.n+=r.n||0;if(r.cp){g.ch++;g.cn+=r.n||0;}else g.out+=r.n||0;g.ids[r.id]=1;"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"    for(k in groups) if(Object.prototype.hasOwnProperty.call(groups,k)){ g=groups[k]; g.i=Object.keys(g.ids).length; delete g.ids; out.patterns.push(g); }"' _n
     file write `fh' `"    out.patterns.sort(function(a,b){if(b.n!==a.n)return b.n-a.n;if(b.h!==a.h)return b.h-a.h;return a.v<b.v?-1:1;});"' _n
@@ -6144,6 +6442,13 @@ program _suso_para_report_js
     file write `fh' `"    var b=a.slice().sort(function(x,y){return x-y;});"' _n
     file write `fh' `"    var m=Math.floor(b.length/2);"' _n
     file write `fh' `"    return b.length%2 ? b[m] : (b[m-1]+b[m])/2;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  pctl: function(a,p){"' _n
+    file write `fh' `"    if(!a.length) return null;"' _n
+    file write `fh' `"    var b=a.slice().sort(function(x,y){return x-y;});"' _n
+    file write `fh' `"    var i=Math.ceil(p*b.length)-1;"' _n
+    file write `fh' `"    if(i<0) i=0; if(i>b.length-1) i=b.length-1;"' _n
+    file write `fh' `"    return b[i];"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  zctx: function(rows){"' _n
     file write `fh' `"    var lx=[],i;"' _n
@@ -6521,6 +6826,7 @@ program _suso_para_report_js
     file write `fh' `"  var sel=el('c_resp'),value=sel.value||'',label=value&&sel.selectedIndex>=0?sel.options[sel.selectedIndex].text.replace(/ \([^)]*\)$/,''):'';"' _n
     file write `fh' `"  if(window.parent!==window) window.parent.postMessage({type:'suso-actor-filter',key:P.norm(value),label:label},'*');"' _n
     file write `fh' `"}"' _n
+    file write `fh' `"function postStatusFilter(){if(window.parent!==window)window.parent.postMessage({type:'suso-status-filter',key:el('c_ws').value||''},'*');}"' _n
     file write `fh' `"function applyActorFilterMessage(d){"' _n
     file write `fh' `"  var sel=el('c_resp'), key=P.norm(d&&d.key), lab=P.norm(d&&d.label), value='', found=(!key&&!lab), i, ok;"' _n
     file write `fh' `"  for(i=0;(key||lab)&&i<sel.options.length;i++){ ok=P.norm(sel.options[i].value); if(ok===key||(lab&&ok===lab)){ value=sel.options[i].value; found=true; break; } }"' _n
@@ -6528,9 +6834,10 @@ program _suso_para_report_js
     file write `fh' `"  if(!found||sel.value===value) return;"' _n
     file write `fh' `"  sel.value=value; renderAll();"' _n
     file write `fh' `"}"' _n
+    file write `fh' `"function applyStatusFilterMessage(d){var s=el('c_ws'),k=String(d&&d.key||''),i,found=!k;for(i=0;k&&i<s.options.length;i++)if(s.options[i].value===k){found=true;break;}if(found&&s.value!==k){s.value=k;renderAll();}}"' _n
     file write `fh' `"window.addEventListener('message',function(ev){"' _n
-    file write `fh' `"  var d=ev.data||{}; if(window.parent===window||ev.source!==window.parent||d.type!=='suso-actor-filter'||typeof d.key!=='string'||typeof d.label!=='string'||d.key.length>500||d.label.length>500) return;"' _n
-    file write `fh' `"  applyActorFilterMessage(d);"' _n
+    file write `fh' `"  // The actor-only branch was guarded by ev.source!==window.parent||d.type!=='suso-actor-filter'; the shared guard below also admits status sync."' _n
+    file write `fh' `"  var d=ev.data||{};if(window.parent===window||ev.source!==window.parent||typeof d.key!=='string'||d.key.length>500)return;if(d.type==='suso-actor-filter'&&typeof d.label==='string'&&d.label.length<=500)applyActorFilterMessage(d);if(d.type==='suso-status-filter')applyStatusFilterMessage(d);"' _n
     file write `fh' `"});"' _n
     file write `fh' `"function resetSettings(){"' _n
     file write `fh' `"  el('c_resp').value='';"' _n
@@ -6543,6 +6850,7 @@ program _suso_para_report_js
     file write `fh' `"  expOpen=Object.create(null); qSortKey='o'; qSortDir=-1;"' _n
     file write `fh' `"  renderAll();"' _n
     file write `fh' `"  postActorFilter();"' _n
+    file write `fh' `"  postStatusFilter();"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
     file write `fh' `"function fvOptions(){"' _n
@@ -6598,19 +6906,19 @@ program _suso_para_report_js
     file write `fh' `"  el('q_more').textContent=msg;"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
-    file write `fh' `"function renderRemovals(resp){"' _n
-    file write `fh' `"  var V=P.removalView(D.rem||[],resp),body=el('t_rsum'),i,s='',k,cs,shown=0,match,key=P.norm(resp);"' _n
+    file write `fh' `"function renderRemovals(resp,ws){"' _n
+    file write `fh' `"  var V=P.removalView(D.rem||[],resp,ws),body=el('t_rsum'),i,s='',cs,shown=0,match,key=P.norm(resp),sw=String(ws||''),cw;"' _n
     file write `fh' `"  if(body){"' _n
-    file write `fh' `"    k=Math.min(V.patterns.length,10);"' _n
-    file write `fh' `"    for(i=0;i<k;i++){var g=V.patterns[i];s+='<tr><td class='+Q+'mono'+Q+'>'+esc(g.v)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.h)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.i)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.n)+'</td></tr>'; }"' _n
-    file write `fh' `"    if(!s) s='<tr><td colspan='+Q+'4'+Q+' class='+Q+'nodata'+Q+'>No removal histories for this enumerator and vars() scope.</td></tr>';"' _n
+    file write `fh' `"    for(i=0;i<V.patterns.length;i++){var g=V.patterns[i];s+='<tr><td class='+Q+'mono'+Q+'>'+esc(g.v)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.h)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.ch)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.i)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.n)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.cn)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.out)+'</td></tr>'; }"' _n
+    file write `fh' `"    if(!s) s='<tr><td colspan='+Q+'7'+Q+' class='+Q+'nodata'+Q+'>No removal histories for this actor/status and vars() scope.</td></tr>';"' _n
     file write `fh' `"    body.innerHTML=s;"' _n
-    file write `fh' `"    el('r_more').textContent=V.patterns.length>k?('Showing the top '+k+' of '+V.patterns.length+' actor-scoped patterns.'):(V.histories+' removal histor'+(V.histories===1?'y':'ies')+' in this actor scope.');"' _n
+    file write `fh' `"    el('r_more').textContent=V.histories+' exhaustive histor'+(V.histories===1?'y':'ies')+', '+V.events+' raw events, '+V.compactHistories+' compact histories / '+V.compactEvents+' compact events, and '+V.outsideEvents+' outside-pattern events in this actor/status scope.';"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  cs=document.querySelectorAll('.bremcase');"' _n
-    file write `fh' `"  for(i=0;i<cs.length;i++){match=!resp||P.norm(cs[i].getAttribute('data-actor'))===key;if(match&&shown<15){cs[i].style.display='';shown++;}else cs[i].style.display='none';}"' _n
-    file write `fh' `"  if(el('r_action_note')) el('r_action_note').textContent=V.active+' case(s) require a final-data check'+(resp?(' for '+resp):'')+(V.active>shown?('; showing the first '+shown+'.'):'.');"' _n
+    file write `fh' `"  for(i=0;i<cs.length;i++){cw=String(cs[i].getAttribute('data-statusclass')||'');match=(!resp||P.norm(cs[i].getAttribute('data-actor'))===key)&&(!sw||(sw==='APP'?(cw==='approvebysup'||cw==='approvebyhq'):(String(cs[i].getAttribute('data-status')||'')===sw||P.norm(cw)===P.norm(sw))));cs[i].style.display=match?'':'none';if(match)shown++;}"' _n
+    file write `fh' `"  if(el('r_action_note')) el('r_action_note').textContent=V.active+' case(s) require a final-data check in this actor/status scope.';"' _n
     file write `fh' `"  if(el('r_action_none')) el('r_action_none').style.display=V.active===0?'':'none';"' _n
+    file write `fh' `"  return V;"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
     file write `fh' `"function chipsFor(r){"' _n
@@ -6758,9 +7066,93 @@ program _suso_para_report_js
     file write `fh' _n
     file write `fh' `"  renderWorst();"' _n
     file write `fh' `"  renderQuestions();"' _n
-    file write `fh' `"  renderRemovals(S.resp);"' _n
+    file write `fh' `"  var RV=renderRemovals(S.resp,S.ws);"' _n
+    file write `fh' `"  updateSections(A,S,team,acts,DT,L,RV);"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
+    file write `fh' `"/* ---- triage sections: live severity, pills, chips, findings ---- */"' _n
+    file write `fh' `"var secState=Object.create(null), secDefaultsDone=false;"' _n
+    file write `fh' `"function secApply(id){"' _n
+    file write `fh' `"  var s=el(id); if(!s) return;"' _n
+    file write `fh' `"  var st=secState[id]||(secState[id]={open:false,sev:''});"' _n
+    file write `fh' `"  s.className='sblock'+(st.sev?(' sv-'+st.sev):'')+(st.open?' open':'');"' _n
+    file write `fh' `"  var b=s.querySelector('.shead');"' _n
+    file write `fh' `"  if(b) b.setAttribute('aria-expanded',st.open?'true':'false');"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function secOpen(id,open){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.open=!!open; secApply(id); }"' _n
+    file write `fh' `"function secToggle(id){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.open=!st.open; secApply(id); }"' _n
+    file write `fh' `"function secSev(id,sev){ var st=secState[id]||(secState[id]={open:false,sev:''}); st.sev=sev||''; secApply(id); }"' _n
+    file write `fh' `"function setPill(pid,cid,n,sev){"' _n
+    file write `fh' `"  var txt=(n>0)?fmtc(n):'\u2713', cls=(n>0)?sev:'g';"' _n
+    file write `fh' `"  var p=el(pid); if(p){ p.textContent=txt; p.className='pillc '+cls; p.style.display=''; }"' _n
+    file write `fh' `"  var c=el(cid); if(c){ c.textContent=txt; c.className='n '+cls; c.style.display=''; }"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function setFind(fid,txt){ var f=el(fid); if(f) f.textContent=txt; }"' _n
+    file write `fh' `"function plural(n,s,p){ return n===1?s:(p||(s+'s')); }"' _n
+    file write `fh' `"function postTabBadge(nA,nV){"' _n
+    file write `fh' `"  if(window.parent===window) return;"' _n
+    file write `fh' `"  window.parent.postMessage({type:'suso-tab-badge',n:nA+nV,sev:(nA>0?'b':(nV>0?'w':'g'))},'*');"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function initSections(){"' _n
+    file write `fh' `"  var i, hs=document.querySelectorAll('.sblock .shead');"' _n
+    file write `fh' `"  for(i=0;i<hs.length;i++)(function(b){ b.addEventListener('click',function(){ var s=b.parentNode; if(s&&s.id) secToggle(s.id); }); })(hs[i]);"' _n
+    file write `fh' `"  var cs=document.querySelectorAll('.chipx');"' _n
+    file write `fh' `"  for(i=0;i<cs.length;i++)(function(a){ a.addEventListener('click',function(ev){"' _n
+    file write `fh' `"    if(ev&&ev.preventDefault) ev.preventDefault();"' _n
+    file write `fh' `"    var id=a.getAttribute('data-sec'); if(!id) return;"' _n
+    file write `fh' `"    secOpen(id,true);"' _n
+    file write `fh' `"    var s=el(id); if(s&&s.scrollIntoView) s.scrollIntoView({behavior:'smooth',block:'start'});"' _n
+    file write `fh' `"  }); })(cs[i]);"' _n
+    file write `fh' `"  var ea=el('e_expall'), ec=el('e_collall'), all=document.querySelectorAll('.sblock'), j;"' _n
+    file write `fh' `"  if(ea) ea.addEventListener('click',function(){ for(j=0;j<all.length;j++) if(all[j].id) secOpen(all[j].id,true); });"' _n
+    file write `fh' `"  if(ec) ec.addEventListener('click',function(){ for(j=0;j<all.length;j++) if(all[j].id) secOpen(all[j].id,false); });"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"function updateSections(A,S,team,acts,DT,L,RV){"' _n
+    file write `fh' `"  var tA=A.tiers.A, tV=A.tiers.V, tW=A.tiers.W, i;"' _n
+    file write `fh' `"  secSev('s_att', tA>0?'b':(tV>0?'w':'g'));"' _n
+    file write `fh' `"  setPill('p_att','cb_att',tA+tV,(tA>0?'b':'w'));"' _n
+    file write `fh' `"  setFind('f_att',(tA+tV+tW>0)"' _n
+    file write `fh' `"    ? (fmtc(tA)+' investigate + '+fmtc(tV)+' verify'+(tW>0?(' + '+fmtc(tW)+' watch'):'')+' of '+fmtc(A.n)+' in view')"' _n
+    file write `fh' `"    : ('No interview meets the attention bar for '+fmtc(A.n)+' in view'));"' _n
+    file write `fh' `"  setFind('f_flags', A.flagged.length>0"' _n
+    file write `fh' `"    ? (fmtc(A.flagged.length)+' '+plural(A.flagged.length,'interview')+' carr'+(A.flagged.length===1?'ies':'y')+' at least one review signal')"' _n
+    file write `fh' `"    : 'No review signals at the current sensitivity');"' _n
+    file write `fh' `"  var nz=A.tot[5];"' _n
+    file write `fh' `"  secSev('s_dur', nz>0?'w':'g'); setPill('p_dur','cb_dur',nz,'w');"' _n
+    file write `fh' `"  setFind('f_dur', acts.length"' _n
+    file write `fh' `"    ? (fmtc(acts.length)+' timed - median '+fmt(P.median(acts))+' min (IQR '+fmt(P.pctl(acts,0.25))+'-'+fmt(P.pctl(acts,0.75))+') - '+(nz>0?(fmtc(nz)+' duration '+plural(nz,'outlier')+' at |z| > '+S.z):('no duration outliers at |z| > '+S.z)))"' _n
+    file write `fh' `"    : 'No first-pass active-time measurements in view');"' _n
+    file write `fh' `"  var ns=A.tot[0];"' _n
+    file write `fh' `"  secSev('s_speed', ns>0?'w':'g'); setPill('p_speed','cb_speed',ns,'w');"' _n
+    file write `fh' `"  setFind('f_speed',(ns>0?(fmtc(ns)+' '+plural(ns,'interview')+' with a median under '+S.fs+' s'):('No interview medians under '+S.fs+' s'))+(team.med!==null?(' - benchmark median '+fmt(team.med)+' s'):''));"' _n
+    file write `fh' `"  var nn=A.tot[3];"' _n
+    file write `fh' `"  secSev('s_night', nn>0?'w':'g'); setPill('p_night','cb_night',nn,'w');"' _n
+    file write `fh' `"  setFind('f_night', nn>0"' _n
+    file write `fh' `"    ? (fmtc(nn)+' '+plural(nn,'interview')+' put over '+Math.round(S.nshare*100)+'% of answers in the '+S.n1+':00-'+S.n2+':00 window')"' _n
+    file write `fh' `"    : ('Night answering stays at or under '+Math.round(S.nshare*100)+'% ('+S.n1+':00-'+S.n2+':00 device time)'));"' _n
+    file write `fh' `"  var dcs=[]; for(i=0;i<DT.length;i++) dcs.push(DT[i].c);"' _n
+    file write `fh' `"  setFind('f_daily', DT.length"' _n
+    file write `fh' `"    ? (fmtc(DT.length)+' fieldwork '+plural(DT.length,'day')+' - median '+fmtc(P.median(dcs))+' answer events/day')"' _n
+    file write `fh' `"    : 'No dated answer events in view');"' _n
+    file write `fh' `"  var fl=0, names=[];"' _n
+    file write `fh' `"  for(i=0;i<L.length;i++) if(L[i].fl>0){ fl++; if(names.length<2) names.push(L[i].r); }"' _n
+    file write `fh' `"  secSev('s_enum', fl>0?'w':'g'); setPill('p_enum','cb_enum',fl,'w');"' _n
+    file write `fh' `"  setFind('f_enum', L.length"' _n
+    file write `fh' `"    ? (fmtc(L.length)+' '+plural(L.length,'enumerator')+' in view - '+(fl>0?(fmtc(fl)+' flagged'+((fl===names.length)?(' ('+names.join(', ')+')'):'')):'none flagged'))"' _n
+    file write `fh' `"    : 'No enumerator activity in view');"' _n
+    file write `fh' `"  var qsrc=P.questionRows(D.q,qActorIndex,S.resp,S.ws), qm=qsrc.length, qf=0;"' _n
+    file write `fh' `"  for(i=0;i<qm;i++) if(qsrc[i].med!==null&&qsrc[i].med<S.fs&&qsrc[i].nt>=S.nmin) qf++;"' _n
+    file write `fh' `"  secSev('s_qt', qf>0?'w':'g'); setPill('p_qt','cb_qt',qf,'w');"' _n
+    file write `fh' `"  setFind('f_qt', qm"' _n
+    file write `fh' `"    ? (qf>0?(fmtc(qf)+' of '+fmtc(qm)+' observed '+plural(qm,'question')+' with a median under '+S.fs+' s (at '+S.nmin+'+ timed reaches)'):('No question median under '+S.fs+' s across '+fmtc(qm)+' observed (at '+S.nmin+'+ timed reaches)'))"' _n
+    file write `fh' `"    : 'No first-pass answer events in this scope');"' _n
+    file write `fh' `"  if(RV&&el('s_rem')){"' _n
+    file write `fh' `"    secSev('s_rem', RV.active>0?'w':'g'); setPill('p_rem','cb_rem',RV.active,'w');"' _n
+    file write `fh' `"    setFind('f_rem', fmtc(RV.histories)+' '+plural(RV.histories,'history','histories')+' in scope - '+(RV.active>0?(fmtc(RV.active)+' need a final-data check'):'all resolved')+' - '+fmtc(RV.resolved)+' resolved');"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  if(!secDefaultsDone){ secDefaultsDone=true; secOpen('s_att',true); secOpen('s_flags',true); }"' _n
+    file write `fh' `"  postTabBadge(tA,tV);"' _n
+    file write `fh' `"}"' _n
     file write `fh' `"function initControls(){"' _n
     file write `fh' `"  var rs=Object.create(null), i, names=[];"' _n
     file write `fh' `"  for(i=0;i<D.actors.length;i++) rs[D.actors[i].r]=1;"' _n
@@ -6800,7 +7192,8 @@ program _suso_para_report_js
     file write `fh' `"  });"' _n
     file write `fh' `"  el('c_preset').addEventListener('change',function(){ applyPreset(el('c_preset').value); renderAll(); });"' _n
     file write `fh' `"  el('c_resp').addEventListener('change',function(){ renderAll(); postActorFilter(); });"' _n
-    file write `fh' `"  var simp=['c_ws','c_fv','c_top'];"' _n
+    file write `fh' `"  el('c_ws').addEventListener('change',function(){renderAll();postStatusFilter();});"' _n
+    file write `fh' `"  var simp=['c_fv','c_top'];"' _n
     file write `fh' `"  for(i=0;i<simp.length;i++) el(simp[i]).addEventListener('change',renderAll);"' _n
     file write `fh' `"  var adv=['c_fs','c_burst','c_minact','c_n1','c_n2','c_nshare','c_churn','c_z','c_peer','c_ov','c_nmin'];"' _n
     file write `fh' `"  for(i=0;i<adv.length;i++) el(adv[i]).addEventListener('change',function(){ el('c_preset').value='custom'; renderAll(); });"' _n
@@ -6838,6 +7231,7 @@ program _suso_para_report_js
     file write `fh' `"  }"' _n
     file write `fh' `"}"' _n
     file write `fh' `"initControls();"' _n
+    file write `fh' `"initSections();"' _n
     file write `fh' `"renderAll();"' _n
     file write `fh' `"}"' _n
     file write `fh' _n
@@ -7258,6 +7652,49 @@ program _suso_para_history_js
     file write `fh' `"}"' _n
     file write `fh' `"var HCore=historyCoreFactory();"' _n
     file write `fh' `"if(typeof module!=='undefined'&&module.exports)module.exports=HCore;"' _n
+    file write `fh' `"function historyCompactFactory(){"' _n
+    file write `fh' `"  'use strict';"' _n
+    file write `fh' `"  var WD=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'],MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];"' _n
+    file write `fh' `"  function pad2(n,w){var s=String(n);while(s.length<w)s='0'+s;return s;}"' _n
+    file write `fh' `"  function clock(ms){var d=new Date(ms);return pad2(d.getUTCHours(),2)+':'+pad2(d.getUTCMinutes(),2)+':'+pad2(d.getUTCSeconds(),2)+'.'+pad2(d.getUTCMilliseconds(),3);}"' _n
+    file write `fh' `"  function dayLabel(ms){var d=new Date(ms);return WD[d.getUTCDay()]+' '+d.getUTCDate()+' '+MO[d.getUTCMonth()]+' '+pad2(d.getUTCFullYear(),4);}"' _n
+    file write `fh' `"  function shortDur(x){if(x<1000)return x+' ms';if(x<60000)return (x/1000).toFixed(x<10000?1:0)+' s';if(x<3600000)return (x/60000).toFixed(1)+' min';if(x<86400000)return (x/3600000).toFixed(1)+' h';return (x/86400000).toFixed(1)+' d';}"' _n
+    file write `fh' `"  function compactGap(ms){"' _n
+    file write `fh' `"    if(ms===null||ms===undefined)return null;"' _n
+    file write `fh' `"    if(ms<0)return {cls:'rev',txt:'-'+shortDur(-ms),title:'clock reversal: timestamped '+shortDur(-ms)+' before the previous event'};"' _n
+    file write `fh' `"    if(ms<1000)return null;"' _n
+    file write `fh' `"    if(ms<60000)return {cls:'g1',txt:'+'+(ms<10000?(ms/1000).toFixed(1):String(Math.round(ms/1000)))+' s',title:'quiet gap since the previous event'};"' _n
+    file write `fh' `"    return {cls:'g2',txt:'+'+shortDur(ms),title:'quiet gap since the previous event'};"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function rowClock(t){"' _n
+    file write `fh' `"    if(t&&t.localMs!==null&&t.localMs!==undefined)return {ms:t.localMs,src:'local'};"' _n
+    file write `fh' `"    if(t&&t.utcMs!==null&&t.utcMs!==undefined)return {ms:t.utcMs,src:'utc'};"' _n
+    file write `fh' `"    return {ms:null,src:'none'};"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  /* plan() expects rows already annotated by the viewer: _time from HCore.timeInfo and _gap in ms. */"' _n
+    file write `fh' `"  function plan(rows,breakMs){"' _n
+    file write `fh' `"    var out=[],prevDay=null,prevOff=null,prevTime=null,prevActor=null,i,r,t,c,day,off,g,pill,tstr,actor,mins;"' _n
+    file write `fh' `"    if(!(breakMs>0))breakMs=1800000;"' _n
+    file write `fh' `"    mins=Math.round(breakMs/60000);"' _n
+    file write `fh' `"    for(i=0;i<rows.length;i++){"' _n
+    file write `fh' `"      r=rows[i];t=r._time||{};c=rowClock(t);"' _n
+    file write `fh' `"      day=c.ms===null?'(no valid timestamp)':dayLabel(c.ms)+(c.src==='utc'?' (UTC clock)':'');"' _n
+    file write `fh' `"      off=String(r.tz||'').trim();if(!off)off='(missing)';"' _n
+    file write `fh' `"      if(day!==prevDay||off!==prevOff){out.push({k:'day',label:day+' - UTC offset '+off});prevDay=day;prevOff=off;prevTime=null;prevActor=null;}"' _n
+    file write `fh' `"      g=(r._gap===undefined)?null:r._gap;pill=null;"' _n
+    file write `fh' `"      if(g!==null&&g>=breakMs){out.push({k:'gap',label:shortDur(g)+' pause - at or beyond the '+mins+' min session gap cap',ms:g});prevTime=null;prevActor=null;}"' _n
+    file write `fh' `"      else pill=compactGap(g);"' _n
+    file write `fh' `"      tstr=c.ms===null?'':clock(c.ms);"' _n
+    file write `fh' `"      actor=(r.responsible||'(no responsible actor)')+(r.role?' - '+r.role:'');"' _n
+    file write `fh' `"      out.push({k:'r',r:r,i:i,t:tstr,tsrc:c.src,dimT:tstr!==''&&tstr===prevTime,actor:actor,dimA:actor===prevActor,pill:pill});"' _n
+    file write `fh' `"      if(tstr!=='')prevTime=tstr;"' _n
+    file write `fh' `"      prevActor=actor;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return out;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  return {plan:plan,compactGap:compactGap,shortDur:shortDur,dayLabel:dayLabel,clock:clock};"' _n
+    file write `fh' `"}"' _n
+    file write `fh' `"var HCompact=historyCompactFactory();"' _n
     file write `fh' `"function historyWorkerMain(){"' _n
     file write `fh' `"  'use strict';"' _n
     file write `fh' `"  var file=null,index=null,keys=[],schema=null,token=0,scanMode=false,quoted=false,CHUNK=4*1024*1024,MAX_RANGES=500000;"' _n
@@ -7318,7 +7755,7 @@ program _suso_para_history_js
     file write `fh' `"}"' _n
     file write `fh' `"(function(){"' _n
     file write `fh' `"  if(typeof document==='undefined')return;"' _n
-    file write `fh' `"  var worker=null,currentFile=null,ready=false,rows=[],sourceUtc=true,view='timeline',renderToken=0,suggestTimer=null;"' _n
+    file write `fh' `"  var worker=null,currentFile=null,ready=false,rows=[],sourceUtc=true,view='compact',shownRows=[],renderToken=0,suggestTimer=null;"' _n
     file write `fh' `"  function E(id){return document.getElementById(id);}"' _n
     file write `fh' `"  function text(tag,cls,value){var n=document.createElement(tag);if(cls)n.className=cls;n.textContent=value===null||value===undefined?'':String(value);return n;}"' _n
     file write `fh' `"  function status(message,bad){var n=E('hv_status');n.textContent=message;n.className=bad?'hv-status bad':'hv-status';}"' _n
@@ -7348,10 +7785,12 @@ program _suso_para_history_js
     file write `fh' `"  }"' _n
     file write `fh' `"  function loadHistory(){var id=E('hv_id').value.trim();if(!ready||!id)return;E('hv_suggest').style.display='none';status('Reading the complete event chain for '+id+' ...',false);worker.postMessage({type:'get',id:id});}"' _n
     file write `fh' `"  function openHistory(id){"' _n
-    file write `fh' `"    id=String(id===null||id===undefined?'':id).trim();if(!id||id.length>500)return false;E('hv_id').value=id;E('hv_load').disabled=!ready;E('history_explorer').scrollIntoView({behavior:'smooth',block:'start'});"' _n
+    file write `fh' `"    id=String(id===null||id===undefined?'':id).trim();if(!id||id.length>500)return false;var sb=E('s_hist');if(sb&&String(sb.className).indexOf('open')<0){sb.className=String(sb.className)+' open';var sh=sb.querySelector?sb.querySelector('.shead'):null;if(sh)sh.setAttribute('aria-expanded','true');}E('hv_id').value=id;E('hv_load').disabled=!ready;E('history_explorer').scrollIntoView({behavior:'smooth',block:'start'});"' _n
     file write `fh' `"    if(ready)loadHistory();else{status('Interview '+id+' is queued. Choose the matching paradata.tab once to open its full event chain.',false);E('hv_file').focus();}return true;"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  window.susoOpenHistory=openHistory;"' _n
+    file write `fh' `"  /* UI test hook: render synthetic rows without touching any file. Data never leaves the page. */"' _n
+    file write `fh' `"  window.susoHistoryPreview=function(sample,isUtc){rows=Array.isArray(sample)?sample.slice():[];sourceUtc=isUtc!==false;view='compact';E('hv_search').value='';E('hv_id').value='(synthetic preview)';prepareRows();populateFilters();E('hv_results').style.display='block';status('Synthetic preview: '+rows.length.toLocaleString()+' events rendered locally. No file was read.',false);render();return rows.length;};"' _n
     file write `fh' `"  function prepareRows(){var prev=null,i,t;for(i=0;i<rows.length;i++){t=HCore.timeInfo(rows[i],sourceUtc);rows[i]._time=t;rows[i]._gap=(prev!==null&&t.utcMs!==null)?t.utcMs-prev:null;if(t.utcMs!==null)prev=t.utcMs;}}"' _n
     file write `fh' `"  function option(select,value,label){var o=document.createElement('option');o.value=value;o.textContent=label;select.appendChild(o);}"' _n
     file write `fh' `"  function populateFilters(){"' _n
@@ -7360,14 +7799,85 @@ program _suso_para_history_js
     file write `fh' `"    a=Object.keys(ev).sort();for(i=0;i<a.length;i++)option(se,a[i],a[i]);b=Object.keys(ac).sort();for(i=0;i<b.length;i++)option(sa,b[i],b[i]);"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  function gapText(ms){var sign=ms<0?'clock reversal ':'+',x=Math.abs(ms);if(ms===null)return '';if(x<1000)return sign+x+' ms';if(x<60000)return sign+(x/1000).toFixed(x<10000?1:0)+' s';if(x<3600000)return sign+(x/60000).toFixed(1)+' min';return sign+(x/3600000).toFixed(1)+' h';}"' _n
+    file write `fh' `"  function gapBreakMs(){var m=30;try{if(typeof D!=='undefined'&&D&&D.meta&&isFinite(D.meta.gapmins)&&D.meta.gapmins>0)m=Number(D.meta.gapmins);}catch(err){}if(m<1)m=1;if(m>1440)m=1440;return m*60000;}"' _n
+    file write `fh' `"  function compactHeader(){var h=document.createElement('div');h.className='hvc-head';h.appendChild(text('span','','#'));h.appendChild(text('span','','event'));h.appendChild(text('span','','parameters'));h.appendChild(text('span','','actor'));h.appendChild(text('span','hvc-time','device local'));h.appendChild(text('span','hvc-gap','gap'));return h;}"' _n
+    file write `fh' `"  function compactNode(it){"' _n
+    file write `fh' `"    if(it.k==='day')return text('div','hvc-day',it.label);"' _n
+    file write `fh' `"    if(it.k==='gap')return text('div','hvc-gapsep',it.label);"' _n
+    file write `fh' `"    var r=it.r,n=document.createElement('div'),par,cell,b,seg,j;"' _n
+    file write `fh' `"    n.className='hvc-row '+HCore.kind(r.event);n.setAttribute('data-idx',String(it.i));"' _n
+    file write `fh' `"    n.appendChild(text('span','hvc-ord mono','#'+(r.order||'?')));"' _n
+    file write `fh' `"    n.appendChild(text('span','hvc-kind',r.event||'(blank event)'));"' _n
+    file write `fh' `"    par=document.createElement('span');par.className='hvc-par mono';"' _n
+    file write `fh' `"    if(r.parameters){seg=String(r.parameters).split('||');for(j=0;j<seg.length;j++){if(j)par.appendChild(text('span','pp','||'));par.appendChild(document.createTextNode(seg[j]));}par.title=r.parameters;}"' _n
+    file write `fh' `"    else{par.className='hvc-par mono dim';par.textContent='-';}"' _n
+    file write `fh' `"    n.appendChild(par);"' _n
+    file write `fh' `"    n.appendChild(text('span','hvc-actor'+(it.dimA?' dim':''),it.actor));"' _n
+    file write `fh' `"    cell=text('span','hvc-time mono'+(it.dimT?' dim':'')+(it.tsrc==='utc'?' approx':''),it.t||'--:--:--.---');"' _n
+    file write `fh' `"    if(it.tsrc==='utc')cell.title='UTC clock: no valid device-local time on this event';"' _n
+    file write `fh' `"    if(it.tsrc==='none')cell.title='no parseable timestamp on this event';"' _n
+    file write `fh' `"    n.appendChild(cell);"' _n
+    file write `fh' `"    cell=text('span','hvc-gap','');"' _n
+    file write `fh' `"    if(it.pill){b=text('span','hvc-pill '+it.pill.cls,it.pill.txt);b.title=it.pill.title;cell.appendChild(b);}"' _n
+    file write `fh' `"    n.appendChild(cell);"' _n
+    file write `fh' `"    return n;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function detailPair(dl,k,v,mono){dl.appendChild(text('dt','',k));dl.appendChild(text('dd',mono?'mono':'',v===''||v===null||v===undefined?'(blank)':String(v)));}"' _n
+    file write `fh' `"  function buildDetail(r){"' _n
+    file write `fh' `"    var t=r._time||{},n=document.createElement('div'),dl=document.createElement('dl'),ph,cp;"' _n
+    file write `fh' `"    n.className='hvc-det';dl.className='hvc-grid';"' _n
+    file write `fh' `"    detailPair(dl,'Event',r.event||'(blank event)');"' _n
+    file write `fh' `"    detailPair(dl,'Order',r.order,true);"' _n
+    file write `fh' `"    detailPair(dl,'Source row',r.seq,true);"' _n
+    file write `fh' `"    detailPair(dl,'Device local',t.local||'(unavailable)',true);"' _n
+    file write `fh' `"    detailPair(dl,'UTC',t.utc||'(unavailable)',true);"' _n
+    file write `fh' `"    detailPair(dl,'Source timestamp',r.timestamp,true);"' _n
+    file write `fh' `"    detailPair(dl,'UTC offset',r.tz||'(missing)',true);"' _n
+    file write `fh' `"    detailPair(dl,'Responsible',r.responsible||'(no responsible actor)');"' _n
+    file write `fh' `"    detailPair(dl,'Role',r.role||'(none)');"' _n
+    file write `fh' `"    n.appendChild(dl);"' _n
+    file write `fh' `"    ph=document.createElement('div');ph.className='hvc-plabel';ph.appendChild(text('span','','Parameters'));"' _n
+    file write `fh' `"    cp=text('button','cpy','Copy');cp.type='button';"' _n
+    file write `fh' `"    cp.addEventListener('click',function(ev){ev.stopPropagation();copyText(r.parameters||'',cp);});"' _n
+    file write `fh' `"    ph.appendChild(cp);n.appendChild(ph);"' _n
+    file write `fh' `"    n.appendChild(text('div','hv-parameters mono',r.parameters||'(no parameters)'));"' _n
+    file write `fh' `"    return n;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function copyText(s,btn){"' _n
+    file write `fh' `"    var done=function(){var old=btn.textContent;btn.textContent='Copied';setTimeout(function(){btn.textContent=old;},1200);};"' _n
+    file write `fh' `"    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(s).then(done,function(){fallbackCopy(s,done);});"' _n
+    file write `fh' `"    else fallbackCopy(s,done);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function fallbackCopy(s,done){var ta=document.createElement('textarea');ta.value=s;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.left='-9999px';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');done();}catch(err){}document.body.removeChild(ta);}"' _n
+    file write `fh' `"  function toggleRow(row){"' _n
+    file write `fh' `"    var next=row.nextElementSibling,r;"' _n
+    file write `fh' `"    if(next&&next.className&&next.className.indexOf('hvc-det')>=0){next.parentNode.removeChild(next);row.classList.remove('open');return;}"' _n
+    file write `fh' `"    r=shownRows[Number(row.getAttribute('data-idx'))];if(!r)return;"' _n
+    file write `fh' `"    row.parentNode.insertBefore(buildDetail(r),row.nextSibling);row.classList.add('open');"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function expandAll(){"' _n
+    file write `fh' `"    if(shownRows.length>1500){status('Expand all is capped at 1,500 shown events. Filter or search first, then expand.',false);return;}"' _n
+    file write `fh' `"    var list=E('hv_compact').querySelectorAll('.hvc-row'),i;"' _n
+    file write `fh' `"    for(i=0;i<list.length;i++)if(!list[i].classList.contains('open'))toggleRow(list[i]);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function collapseAll(){"' _n
+    file write `fh' `"    var list=E('hv_compact').querySelectorAll('.hvc-det'),i;"' _n
+    file write `fh' `"    for(i=list.length-1;i>=0;i--)list[i].parentNode.removeChild(list[i]);"' _n
+    file write `fh' `"    list=E('hv_compact').querySelectorAll('.hvc-row.open');"' _n
+    file write `fh' `"    for(i=0;i<list.length;i++)list[i].classList.remove('open');"' _n
+    file write `fh' `"  }"' _n
     file write `fh' `"  function filtered(){var ev=E('hv_event').value,ac=E('hv_actor').value,q=E('hv_search').value,out=[],i,a;for(i=0;i<rows.length;i++){a=rows[i].responsible||'(no responsible actor)';if(ev&&rows[i].event!==ev)continue;if(ac&&a!==ac)continue;if(!HCore.matches(rows[i],q))continue;out.push(rows[i]);}return out;}"' _n
-    file write `fh' `"  function clearResult(){renderToken++;E('hv_timeline').textContent='';E('hv_raw_body').textContent='';}"' _n
+    file write `fh' `"  function clearResult(){renderToken++;shownRows=[];E('hv_compact').textContent='';E('hv_timeline').textContent='';E('hv_raw_body').textContent='';}"' _n
     file write `fh' `"  function render(){"' _n
     file write `fh' `"    var shown=filtered(),actors=Object.create(null),events=Object.create(null),offsets=Object.create(null),i,off;clearResult();"' _n
     file write `fh' `"    for(i=0;i<rows.length;i++){actors[rows[i].responsible||'(none)']=1;events[rows[i].event||'(blank)']=1;off=rows[i].tz||'(missing)';offsets[off]=1;}"' _n
     file write `fh' `"    E('hv_summary').textContent='Full chain: '+rows.length.toLocaleString()+' events, '+Object.keys(events).length+' event types, '+Object.keys(actors).length+' responsible actors, '+Object.keys(offsets).length+' recorded UTC offset(s). Showing '+shown.length.toLocaleString()+'.'+(Object.keys(offsets).length>1?' Offsets change in this history; local times use the offset recorded on each event.':'');"' _n
-    file write `fh' `"    E('hv_timeline').style.display=view==='timeline'?'block':'none';E('hv_raw').style.display=view==='raw'?'block':'none';E('hv_view_timeline').className=view==='timeline'?'pbtn':'pbtn ghost';E('hv_view_raw').className=view==='raw'?'pbtn':'pbtn ghost';"' _n
-    file write `fh' `"    if(view==='timeline')renderBatches(shown,E('hv_timeline'),timelineRow);else renderBatches(shown,E('hv_raw_body'),rawRow);"' _n
+    file write `fh' `"    E('hv_compact').style.display=view==='compact'?'block':'none';E('hv_timeline').style.display=view==='cards'?'block':'none';E('hv_raw').style.display=view==='raw'?'block':'none';"' _n
+    file write `fh' `"    E('hv_bulk').style.display=view==='compact'?'flex':'none';"' _n
+    file write `fh' `"    E('hv_view_compact').className=view==='compact'?'pbtn':'pbtn ghost';E('hv_view_timeline').className=view==='cards'?'pbtn':'pbtn ghost';E('hv_view_raw').className=view==='raw'?'pbtn':'pbtn ghost';"' _n
+    file write `fh' `"    if(view==='compact'){shownRows=shown;var box=E('hv_compact');box.appendChild(compactHeader());renderBatches(HCompact.plan(shown,gapBreakMs()),box,compactNode);}"' _n
+    file write `fh' `"    else if(view==='cards')renderBatches(shown,E('hv_timeline'),timelineRow);"' _n
+    file write `fh' `"    else renderBatches(shown,E('hv_raw_body'),rawRow);"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  function renderBatches(items,target,maker){"' _n
     file write `fh' `"    var mine=renderToken,pos=0;function batch(){var frag=document.createDocumentFragment(),end=Math.min(items.length,pos+400);if(mine!==renderToken)return;for(;pos<end;pos++)frag.appendChild(maker(items[pos]));target.appendChild(frag);if(pos<items.length)setTimeout(batch,0);}batch();"' _n
@@ -7382,13 +7892,16 @@ program _suso_para_history_js
     file write `fh' `"  function rawCell(tr,value,cls){var td=text('td',cls||'',value);tr.appendChild(td);}"' _n
     file write `fh' `"  function rawRow(r){var tr=document.createElement('tr'),t=r._time||{};rawCell(tr,r.seq,'r mono');rawCell(tr,r.order,'r mono');rawCell(tr,r.event);rawCell(tr,r.responsible);rawCell(tr,r.role);rawCell(tr,r.timestamp,'mono');rawCell(tr,t.utc,'mono');rawCell(tr,r.tz,'mono');rawCell(tr,t.local,'mono');rawCell(tr,r.parameters,'mono hv-raw-parameters');return tr;}"' _n
     file write `fh' `"  function init(){"' _n
+    file write `fh' `"    /* Pure-UI wiring first: views, expansion, and filters work even where file streaming is unsupported (and for susoHistoryPreview rows). */"' _n
+    file write `fh' `"    E('hv_view_compact').addEventListener('click',function(){view='compact';render();});E('hv_view_timeline').addEventListener('click',function(){view='cards';render();});E('hv_view_raw').addEventListener('click',function(){view='raw';render();});"' _n
+    file write `fh' `"    E('hv_expand').addEventListener('click',expandAll);E('hv_collapse').addEventListener('click',collapseAll);"' _n
+    file write `fh' `"    E('hv_compact').addEventListener('click',function(e){var t=e.target;if(!t||!t.closest)return;if(t.closest('.hvc-det'))return;if(window.getSelection&&String(window.getSelection()))return;var row=t.closest('.hvc-row');if(row)toggleRow(row);});"' _n
+    file write `fh' `"    E('hv_event').addEventListener('change',render);E('hv_actor').addEventListener('change',render);E('hv_search').addEventListener('input',render);"' _n
     file write `fh' `"    if(typeof Worker==='undefined'||typeof Blob==='undefined'||typeof TextDecoder==='undefined'){status('This browser lacks the local streaming features needed for the history viewer. Use a current Chrome or Edge browser.',true);E('hv_file').disabled=true;return;}"' _n
     file write `fh' `"    E('hv_file').addEventListener('change',function(){if(this.files&&this.files[0])startFile(this.files[0]);});"' _n
     file write `fh' `"    E('hv_dialect').addEventListener('change',function(){if(currentFile)startFile(currentFile);});"' _n
     file write `fh' `"    E('hv_id').addEventListener('input',function(){E('hv_load').disabled=!ready||!this.value.trim();clearTimeout(suggestTimer);if(ready&&this.value.trim())suggestTimer=setTimeout(function(){worker.postMessage({type:'suggest',q:E('hv_id').value});},160);else showSuggestions([]);});"' _n
     file write `fh' `"    E('hv_id').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();loadHistory();}});E('hv_load').addEventListener('click',loadHistory);"' _n
-    file write `fh' `"    E('hv_event').addEventListener('change',render);E('hv_actor').addEventListener('change',render);E('hv_search').addEventListener('input',render);"' _n
-    file write `fh' `"    E('hv_view_timeline').addEventListener('click',function(){view='timeline';render();});E('hv_view_raw').addEventListener('click',function(){view='raw';render();});"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();"' _n
     file write `fh' `"})();"' _n
@@ -8248,8 +8761,12 @@ program _suso_para_report, rclass
         `"html(`"`skiphtml'"') top(`skiptop') replace"'
     quietly _suso_para_skips , cascade(`cascade') window(`window') qx(`"`qx'"') ///
         data(`"`data'"') detail(`"`RSD'"') hqurl(`"`hqbase'"') `allroles'     ///
-        precomputed(`skiptoken') `__skipout'
+        precomputed(`skiptoken') statusmap(`"`QWS'"') `__skipout'
     local ncasc = r(ncascades)
+    local nhist = r(nhistories)
+    local nremevents = r(nremovalevents)
+    local noutsideevents = r(noutsideevents)
+    local ncompactevents = r(ncompactevents)
     local nwiped = r(nwiped)
     local naffectedq = r(naffectedquestions)
     local nopen = r(nopen)
@@ -8263,7 +8780,8 @@ program _suso_para_report, rclass
     local trignames `"`r(triggers)'"'
     tempname RT
     capture matrix `RT' = r(triggers_stats)
-    quietly keep interview__id n_cascades casc_removed casc_questions casc_open ///
+    quietly keep interview__id n_removal_histories removed_view outside_removed ///
+        n_cascades casc_removed casc_questions casc_open ///
         casc_reanswered casc_unknown casc_finalanswered casc_answered_disabled ///
         casc_expectedblank                                                       ///
         casc_blank_enabled casc_logicunknown casc_notindata casc_finalcheck      ///
@@ -8278,7 +8796,8 @@ program _suso_para_report, rclass
             `"html(`"`skiphtml'"') top(`skiptop') replace"'
         quietly _suso_para_skips , cascade(`cascade') window(`window') qx(`"`qx'"') ///
             data(`"`data'"') detail(`"`RSDFOCUS'"') vars(`"`vars'"')             ///
-            hqurl(`"`hqbase'"') `allroles' precomputed(`skiptoken') `__skipout'
+            hqurl(`"`hqbase'"') `allroles' precomputed(`skiptoken')            ///
+            statusmap(`"`QWS'"') `__skipout'
         * Point to the focused path even when it was not created: the later
         * confirm-file guard then correctly renders no scoped detail cards.
         local rsdpath `"`RSDFOCUS'"'
@@ -8290,7 +8809,8 @@ program _suso_para_report, rclass
     quietly _suso_para_timing , by(interview) gapmins(`gapmins') fastsecs(`fastsecs') ///
         `allroles' precomputed(`derivecap')
     quietly merge 1:1 interview__id using `"`SK'"', keep(master match) nogenerate
-    foreach v in n_cascades casc_removed casc_questions casc_open casc_reanswered ///
+    foreach v in n_removal_histories removed_view outside_removed              ///
+        n_cascades casc_removed casc_questions casc_open casc_reanswered ///
         casc_unknown casc_finalanswered casc_answered_disabled casc_expectedblank ///
         casc_blank_enabled                                                       ///
         casc_logicunknown casc_notindata casc_finalcheck casc_datachecked n_triggers {
@@ -8406,6 +8926,8 @@ program _suso_para_report, rclass
     local nuntouchedc = trim("`nuntouchedc'")
     local nskipaction = cond(`"`data'"'!="", `nfinalcheck', `nopen'+`nunknown')
     local warnc = cond(`nskipaction'>0, "warn", "dim")
+    local remsev = cond(`nfinalcheck'>0,"w","g")
+    local histplural = cond(`nhist'==1,"y","ies")
     quietly save `"`MERGED'"'
 
     * ---- write the HTML -----------------------------------------------------------
@@ -8428,7 +8950,7 @@ program _suso_para_report, rclass
     file write `fh' `".card.dim{border-top-color:#9aa7b5}.card.warn{border-top-color:#C9A227}.card.bad{border-top-color:#a33}"' _n
     file write `fh' `".card .v{font-size:20px;font-weight:700;color:#002244}"' _n
     file write `fh' `".card .k{font-size:11px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.04em}"' _n
-    file write `fh' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;position:sticky;top:0;z-index:5;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
+    file write `fh' `".panel{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:12px 16px;margin:12px 0;box-shadow:0 2px 6px rgba(0,0,0,.06)}"' _n
     file write `fh' `".prow{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}"' _n
     file write `fh' `".prow+.prow{margin-top:10px;padding-top:10px;border-top:1px dashed #e3e6ea}"' _n
     file write `fh' `".ctrl{display:flex;flex-direction:column;gap:3px}"' _n
@@ -8481,7 +9003,56 @@ program _suso_para_report, rclass
     file write `fh' `".hv-event-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hv-order{color:#667}.hv-kind{font-weight:700;color:#002244}.hv-gap{margin-left:auto;color:#667;font-size:11px;background:#f1f3f5;border-radius:10px;padding:1px 7px}"' _n
     file write `fh' `".hv-event-meta{display:flex;gap:12px;flex-wrap:wrap;color:#667;font-size:11px;margin-top:4px}.hv-local{font-weight:600;color:#315777}.hv-actor{font-size:12px;margin-top:5px}.hv-parameters{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fa;border-radius:4px;padding:5px 7px;margin-top:6px;color:#333}"' _n
     file write `fh' `".hv-tablewrap{overflow:auto;max-height:70vh;border:1px solid #e3e6ea}.hv-tablewrap th{position:sticky;top:0;z-index:2;white-space:nowrap}.hv-tablewrap td{vertical-align:top}.hv-raw-parameters{min-width:280px;white-space:pre-wrap;overflow-wrap:anywhere}"' _n
-    file write `fh' `"@media print{.panel{position:static;box-shadow:none}.pbtn,.cpy,.hqlinks{display:none}}"' _n
+    file write `fh' `".hv-bulk{display:none;gap:6px;margin-right:auto}"' _n
+    file write `fh' `".hvc-wrap{border:1px solid #dbe1e8;border-radius:8px;background:#fff;max-height:72vh;overflow:auto;overscroll-behavior:contain;margin-top:2px}"' _n
+    file write `fh' `".hvc-head,.hvc-row{display:grid;grid-template-columns:52px minmax(140px,180px) minmax(180px,1fr) minmax(110px,200px) 108px 84px;gap:0 10px;align-items:center;min-width:760px;box-sizing:border-box}"' _n
+    file write `fh' `".hvc-head{position:sticky;top:0;z-index:4;background:#f4f6f9;border-bottom:1px solid #dbe1e8;padding:6px 12px;font-size:10px;line-height:13px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#5a6b7d}"' _n
+    file write `fh' `".hvc-day{position:sticky;top:25px;z-index:3;background:#e9eef5;color:#173b5e;font-weight:700;font-size:11px;padding:4px 12px;border-bottom:1px solid #d5dde6;min-width:760px;box-sizing:border-box}"' _n
+    file write `fh' `".hvc-gapsep{padding:3px 12px;text-align:center;font-size:10.5px;color:#8a6d00;background:#fffbea;border-top:1px dashed #e8d795;border-bottom:1px dashed #e8d795;min-width:760px;box-sizing:border-box}"' _n
+    file write `fh' `".hvc-row{padding:3px 12px;border-bottom:1px solid #f0f2f5;border-left:3px solid #b7c1cc;font-size:12px;line-height:1.55;cursor:pointer}"' _n
+    file write `fh' `".hvc-row:hover{background:#f4f8fc}"' _n
+    file write `fh' `".hvc-row.open{background:#eef4fa}"' _n
+    file write `fh' `".hvc-row.answer{border-left-color:#2e75b6}.hvc-row.workflow{border-left-color:#C9A227}.hvc-row.warn{border-left-color:#a33;background:#fffafa}.hvc-row.warn:hover{background:#fdf1f1}.hvc-row.session{border-left-color:#2d7d46}"' _n
+    file write `fh' `".hvc-ord{color:#8a97a5;font-size:11px}"' _n
+    file write `fh' `".hvc-kind{font-weight:600;color:#002244;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"' _n
+    file write `fh' `".hvc-par{color:#3d454d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"' _n
+    file write `fh' `".hvc-par .pp{color:#b9c2cc;padding:0 1px}"' _n
+    file write `fh' `".hvc-par.dim,.hvc-time.dim,.hvc-actor.dim{color:#b9c2cc}"' _n
+    file write `fh' `".hvc-actor{color:#556575;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"' _n
+    file write `fh' `".hvc-time{text-align:right;white-space:nowrap;font-size:11.5px;color:#315777}"' _n
+    file write `fh' `".hvc-time.approx{color:#8a6d00}"' _n
+    file write `fh' `".hvc-gap{text-align:right}"' _n
+    file write `fh' `".hvc-pill{display:inline-block;font-size:10.5px;border-radius:9px;padding:0 7px;background:#eef1f4;color:#5a6b7d}"' _n
+    file write `fh' `".hvc-pill.g2{background:#fdf3d7;color:#8a6d00}"' _n
+    file write `fh' `".hvc-pill.rev{background:#fbeaea;color:#8a1f1f;font-weight:700}"' _n
+    file write `fh' `".hvc-det{padding:8px 14px 10px;background:#f8fafc;border-bottom:1px solid #e2e8ee;border-left:3px solid #9fb0c1;font-size:12px;cursor:default;min-width:760px;box-sizing:border-box}"' _n
+    file write `fh' `".hvc-grid{display:grid;grid-template-columns:130px minmax(180px,1fr) 130px minmax(180px,1fr);gap:3px 12px;margin:0 0 8px}"' _n
+    file write `fh' `".hvc-grid dt{color:#66727e;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;align-self:center}"' _n
+    file write `fh' `".hvc-grid dd{margin:0;color:#26313c;overflow-wrap:anywhere}"' _n
+    file write `fh' `".hvc-plabel{display:flex;align-items:center;gap:4px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#66727e;margin:2px 0 3px}"' _n
+    file write `fh' `".hvc-det .hv-parameters{margin-top:0;max-height:200px;overflow:auto}"' _n
+    file write `fh' `"@media print{.panel{position:static;box-shadow:none}.pbtn,.cpy,.hqlinks,.hv-bulk{display:none}.hvc-wrap{max-height:none;overflow:visible}.hvc-head,.hvc-day{position:static}.sbody{display:block!important}.chipnav{position:static}.shead .chev{display:none}}"' _n
+    file write `fh' `".datasetline{color:#68737f;font-size:12px;margin:-4px 0 12px}"' _n
+    file write `fh' `".chipnav{position:sticky;top:0;z-index:6;background:#f4f5f7;padding:8px 0 6px;margin:0 0 4px;border-bottom:1px solid #e3e6ea;display:flex;gap:6px;flex-wrap:wrap;align-items:center}"' _n
+    file write `fh' `".chipx{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #dfe4e8;border-radius:14px;padding:4px 11px;font-size:12px;color:#33404d;text-decoration:none;cursor:pointer}"' _n
+    file write `fh' `".chipx:hover{border-color:#9fb2c4}"' _n
+    file write `fh' `".chipx .n{font-weight:700;font-size:11px;padding:0 6px;border-radius:8px;font-variant-numeric:tabular-nums}"' _n
+    file write `fh' `".chipx .n.b{background:#fbeaea;color:#8a1f1f}.chipx .n.w{background:#fdf6e3;color:#7a5b00}.chipx .n.g{color:#1e6b34}"' _n
+    file write `fh' `".chiputil{margin-left:auto;color:#556575;background:transparent;border:0;font:inherit;font-size:12px;cursor:pointer;padding:4px 8px;border-radius:14px}"' _n
+    file write `fh' `".chiputil:hover{background:#fff;box-shadow:inset 0 0 0 1px #dfe4e8}"' _n
+    file write `fh' `".chiputil+.chiputil{margin-left:0}"' _n
+    file write `fh' `".sblock{background:#fff;border:1px solid #e3e6ea;border-radius:8px;margin:10px 0;overflow:hidden}"' _n
+    file write `fh' `".sblock.sv-b{border-left:3px solid #a33}.sblock.sv-w{border-left:3px solid #C9A227}.sblock.sv-g{border-left:3px solid #7fbf95}"' _n
+    file write `fh' `".shead{display:flex;width:100%;align-items:baseline;gap:10px;padding:11px 16px;background:transparent;border:0;cursor:pointer;text-align:left;font-family:inherit}"' _n
+    file write `fh' `".shead h2{margin:0;font-size:15.5px;color:#002244;font-weight:600}"' _n
+    file write `fh' `".pillc{font-size:11px;font-weight:700;padding:1px 8px;border-radius:9px;position:relative;top:-1px;font-variant-numeric:tabular-nums}"' _n
+    file write `fh' `".pillc.b{background:#fbeaea;color:#8a1f1f}.pillc.w{background:#fdf6e3;color:#7a5b00}.pillc.g{background:#eaf5ec;color:#1e6b34}"' _n
+    file write `fh' `".shead .sfind{color:#556575;font-size:12.5px;margin-left:auto;text-align:right;max-width:52%}"' _n
+    file write `fh' `".shead .chev{color:#8a97a4;font-size:11px;flex:0 0 auto;transition:transform .15s}"' _n
+    file write `fh' `".sblock.open .chev{transform:rotate(90deg)}"' _n
+    file write `fh' `".sbody{display:none;padding:2px 16px 14px;border-top:1px solid #eef0f2}"' _n
+    file write `fh' `".sblock.open .sbody{display:block}"' _n
+    file write `fh' `"@media (prefers-reduced-motion: reduce){.shead .chev{transition:none}}"' _n
     file write `fh' `"</style></head><body>"' _n
     file write `fh' `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img (class wbLogo) -->"' _n
     file write `fh' `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' _n
@@ -8502,13 +9073,13 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="sub">`sub' &nbsp;-&nbsp; `nevents' paradata events`covline'</div></div>"' _n
     file write `fh' `"<div class="wrap">"' _n
     file write `fh' `"<div class="cards">"' _n
-    file write `fh' `"<div class="card dim"><div class="v">`nintsc'</div><div class="k">records in paradata</div></div>"' _n
-    file write `fh' `"<div class="card"><div class="v">`nstartedc'</div><div class="k">fieldwork started</div></div>"' _n
-    file write `fh' `"<div class="card"><div class="v">`ncompletedc'</div><div class="k">completed</div></div>"' _n
-    file write `fh' `"<div class="card dim"><div class="v">`nuntouchedc'</div><div class="k">never started (preload only)</div></div>"' _n
-    file write `fh' `"<div class="card"><div class="v">`tothrc'</div><div class="k">interviewer hours</div></div>"' _n
-    file write `fh' `"<div class="card `warnc'"><div class="v">`ncasc'</div><div class="k">removal histories (`nfinalcheck' need review; `nexpectedblank' correctly blank; `nfinalanswered' answered; `nanswereddisabled' answered while disabled)</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v" id="k_started">-</div><div class="k">interviews in view</div></div>"' _n
+    file write `fh' `"<div class="card bad"><div class="v" id="k_inv">-</div><div class="k">investigate</div></div>"' _n
+    file write `fh' `"<div class="card warn"><div class="v" id="k_ver">-</div><div class="k">verify</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v" id="k_medact">-</div><div class="k">median active min</div></div>"' _n
+    file write `fh' `"<div class="card"><div class="v" id="k_medans">-</div><div class="k">median sec / answer</div></div>"' _n
     file write `fh' `"</div>"' _n
+    file write `fh' `"<div class="datasetline">Dataset: `nintsc' records in paradata &nbsp;-&nbsp; `nstartedc' started fieldwork &nbsp;-&nbsp; `ncompletedc' completed &nbsp;-&nbsp; `nuntouchedc' never started (preload only) &nbsp;-&nbsp; `tothrc' interviewer hours &nbsp;-&nbsp; `nhist' removal histories (`nfinalcheck' need review; `nexpectedblank' correctly blank; `nfinalanswered' answered; `nanswereddisabled' answered while disabled)</div>"' _n
     file write `fh' `"<div class="panel">"' _n
     file write `fh' `"<div class="prow">"' _n
     file write `fh' `"<div class="ctrl"><label>Actor / enumerator</label><select id="c_resp"></select></div>"' _n
@@ -8536,49 +9107,69 @@ program _suso_para_report, rclass
     file write `fh' `"<div class="note" style="flex-basis:100%;margin:3px 0 0">Speed/share cutoff is live. Burst streaks are session-safe and fixed at &lt; `fastsecs' sec, the build-time cutoff; changing the speed/share control does not rebuild streaks.</div>"' _n
     file write `fh' `"</div>"' _n
     file write `fh' `"</div>"' _n
-    file write `fh' `"<div class="cards">"' _n
-    file write `fh' `"<div class="card"><div class="v" id="k_started">-</div><div class="k">interviews in view</div></div>"' _n
-    file write `fh' `"<div class="card bad"><div class="v" id="k_inv">-</div><div class="k">investigate</div></div>"' _n
-    file write `fh' `"<div class="card warn"><div class="v" id="k_ver">-</div><div class="k">verify</div></div>"' _n
-    file write `fh' `"<div class="card"><div class="v" id="k_medact">-</div><div class="k">median active min</div></div>"' _n
-    file write `fh' `"<div class="card"><div class="v" id="k_medans">-</div><div class="k">median sec / answer</div></div>"' _n
-    file write `fh' `"</div>"' _n
+    file write `fh' `"<nav class='chipnav' id='chipnav' aria-label='Report sections'>"' _n
+    file write `fh' `"<a class='chipx' href='#s_att' data-sec='s_att'>Attention<span class='n' id='cb_att' style='display:none'></span></a>"' _n
+    file write `fh' `"<a class='chipx' href='#s_flags' data-sec='s_flags'>Flags</a>"' _n
+    file write `fh' `"<a class='chipx' href='#s_dur' data-sec='s_dur'>Durations<span class='n' id='cb_dur' style='display:none'></span></a>"' _n
+    file write `fh' `"<a class='chipx' href='#s_speed' data-sec='s_speed'>Answer speed<span class='n' id='cb_speed' style='display:none'></span></a>"' _n
+    file write `fh' `"<a class='chipx' href='#s_night' data-sec='s_night'>Night work<span class='n' id='cb_night' style='display:none'></span></a>"' _n
+    file write `fh' `"<a class='chipx' href='#s_daily' data-sec='s_daily'>Daily pace</a>"' _n
+    file write `fh' `"<a class='chipx' href='#s_enum' data-sec='s_enum'>Enumerators<span class='n' id='cb_enum' style='display:none'></span></a>"' _n
+    file write `fh' `"<a class='chipx' href='#s_qt' data-sec='s_qt'>Question timing<span class='n' id='cb_qt' style='display:none'></span></a>"' _n
+    if `nhist'>0 {
+        file write `fh' `"<a class='chipx' href='#s_rem' data-sec='s_rem'>Removals<span class='n' id='cb_rem' style='display:none'></span></a>"' _n
+    }
+    file write `fh' `"<a class='chipx' href='#s_hist' data-sec='s_hist'>Event history</a>"' _n
+    file write `fh' `"<button type='button' class='chiputil' id='e_expall'>Expand all</button>"' _n
+    file write `fh' `"<button type='button' class='chiputil' id='e_collall'>Collapse all</button>"' _n
+    file write `fh' `"</nav>"' _n
     file write `fh' `"<div id="verdict" class="verdict"></div>"' _n
-    file write `fh' `"<h2>What needs attention</h2>"' _n
+    file write `fh' `"<div class='sblock' id='s_att'><button class='shead' type='button' aria-expanded='false'><h2>What needs attention</h2><span class='pillc' id='p_att' style='display:none'></span><span class='sfind' id='f_att'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">Every interview here comes with the evidence in plain words. <b>Investigate</b> = an unchanged rejection cycle or signals from at least three independent risk domains. <b>Verify</b> = two risk domains, a concentrated pace/duration pattern, a quick correction cycle, an overlap screen, or an unresolved removal history. <b>Watch</b> = one isolated domain or a long/multi-day continuation. Speed and fast streak belong to one pace domain; short and duration-outlier belong to one duration domain, so correlated measures are not double-counted as independent evidence. Click a row for its detail; the key is what you paste into Headquarters. All signals are screening evidence for review, never proof of fabrication. <span id="w_none"></span></div>"' _n
     file write `fh' `"<section><div style="margin:6px 0"><button id="c_csv" class="pbtn ghost">Download this list (CSV)</button></div><table id="t_worst"></table></section>"' _n
-    file write `fh' `"<h2>Behaviour flags</h2>"' _n
+    file write `fh' `"</div></div>"' _n
+    file write `fh' `"<div class='sblock' id='s_flags'><button class='shead' type='button' aria-expanded='false'><h2>Behaviour flags</h2><span class='sfind' id='f_flags'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">How often each signal fires at the current thresholds. Adjust sensitivity in the panel; everything recomputes instantly. Only interviews with actual fieldwork are analysed; API-preloaded records are set aside.</div>"' _n
     file write `fh' `"<section id="ch_flags"><div class="legend" id="flag_leg"></div></section>"' _n
-    file write `fh' `"<h2>How long do interviews take?</h2>"' _n
+    file write `fh' `"</div></div>"' _n
+    file write `fh' `"<div class='sblock' id='s_dur'><button class='shead' type='button' aria-expanded='false'><h2>How long do interviews take?</h2><span class='pillc' id='p_dur' style='display:none'></span><span class='sfind' id='f_dur'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">Active first-pass interviewer time per interview: pauses and session-boundary gaps are excluded; ordinary within-session gaps are capped at `gapmins' min. Rework after an earlier completion is displayed separately in interview detail. <span id="n_act"></span></div>"' _n
     file write `fh' `"<section id="ch_act"></section>"' _n
-    file write `fh' `"<h2>How fast are answers?</h2>"' _n
+    file write `fh' `"</div></div>"' _n
+    file write `fh' `"<div class='sblock' id='s_speed'><button class='shead' type='button' aria-expanded='false'><h2>How fast are answers?</h2><span class='pillc' id='p_speed' style='display:none'></span><span class='sfind' id='f_speed'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">Each interview gets one number: the typical (median) time to answer a newly reached question. Repeat taps on the same question (multi-select choices, list items, immediate corrections) are kept out of this clock, so tapping through a checklist cannot look like speeding. A real interview needs time to ask, listen and type - a sustained 1-2 seconds per question was probably filled in without talking to anyone. <span id="n_med"></span></div>"' _n
     file write `fh' `"<section id="ch_med"></section>"' _n
-    file write `fh' `"<h2>When is the work happening?</h2>"' _n
+    file write `fh' `"</div></div>"' _n
+    file write `fh' `"<div class='sblock' id='s_night'><button class='shead' type='button' aria-expanded='false'><h2>When is the work happening?</h2><span class='pillc' id='p_night' style='display:none'></span><span class='sfind' id='f_night'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">Interviewer answers by hour of day (device-local time). Gold bars mark the night window - night answering on establishment surveys usually means desk work, not fieldwork. Interviews whose tablet clock disagrees with the team are marked in their detail row, because their hours cannot be trusted.</div>"' _n
     file write `fh' `"<section id="ch_hour"></section>"' _n
-    file write `fh' `"<h2>Fieldwork over time</h2>"' _n
+    file write `fh' `"</div></div>"' _n
+    file write `fh' `"<div class='sblock' id='s_daily'><button class='shead' type='button' aria-expanded='false'><h2>Fieldwork over time</h2><span class='sfind' id='f_daily'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">Interviewer answers recorded per day (`dnote'). This chart responds to the actor filter only; status and final-data filter controls do not change the event-volume series.</div>"' _n
     file write `fh' `"<section id="ch_daily"></section>"' _n
-    file write `fh' `"<h2>Enumerators</h2>"' _n
+    file write `fh' `"</div></div>"' _n
+    file write `fh' `"<div class='sblock' id='s_enum'><button class='shead' type='button' aria-expanded='false'><h2>Enumerators</h2><span class='pillc' id='p_enum' style='display:none'></span><span class='sfind' id='f_enum'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">Actor-level comparison: every contributor is measured from their own events, including correction-only actors; nobody inherits the primary actor's pace or the last editor's identity. <b>vs team</b> is the actor's typical answer speed relative to the team (0.5 = twice as fast). Shared-minute counts are actor-specific screening buckets. Gold rows have at least one flagged contribution; judge shares only where the interview count is reasonable. <span id="l_more"></span></div>"' _n
     file write `fh' `"<section><table id="t_league"></table></section>"' _n
-    file write `fh' `"<h2>Question timing</h2>"' _n
+    file write `fh' `"</div></div>"' _n
+    file write `fh' `"<div class='sblock' id='s_qt'><button class='shead' type='button' aria-expanded='false'><h2>Question timing</h2><span class='pillc' id='p_qt' style='display:none'></span><span class='sfind' id='f_qt'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note"><b>Actor / enumerator</b> and <b>Interview status</b> both filter this table. Status is the record's current/final status when this report was built (data() status takes precedence over paradata). <b>Answer events</b> are first-pass AnswerSet saves, so one interview can contribute several events through a revision, repeated save, or roster instance; for example, 405 events across 381 distinct interviews means 24 additional saves/instances. <b>Distinct interviews</b> counts unique interview IDs. <b>Timed reaches</b> is the subset with a valid within-session gap and is the denominator used by median, p90, and the &lt; `fastsecs' s share; repeated taps remain in Answer events but are not timed reaches. `qordernote' vars() limits the questions; the Filter variable/value controls do not currently change Question timing. Every observed matching variable is shown (questionnaire items with zero first-pass events are not); type to search and click a column header to sort. Reset restores the default order. <span id="q_more"></span></div>"' _n
     file write `fh' `"<section><div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:8px"><div class="ctrl" style="max-width:280px"><label>Filter questions</label><input id="c_q" type="text" placeholder="variable name contains..."></div><button id="c_qorder" class="pbtn ghost" type="button">`qorderbutton'</button></div><table id="t_q"></table></section>"' _n
+    file write `fh' `"</div></div>"' _n
+    if `nhist'>0 {
+        file write `fh' `"<div class='sblock' id='s_rem'><button class='shead' type='button' aria-expanded='false'><h2>Removal histories</h2><span class='pillc `remsev'' id='p_rem'>`nfinalcheck'</span><span class='sfind' id='f_rem'>`nhist' histor`histplural' in scope - `nfinalcheck' need a final-data check</span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
+    }
     * Removal summaries are rendered from one compact row per already-detected
     * full-stream run.  This lets the actor control recompute and re-rank the
     * table without ever changing cascade adjacency or attribution.
-    if `ncasc'>0 {
+    if `nhist'>0 {
         file write `fh' `"<details id="rtech" style="margin-top:22px"><summary style="cursor:pointer;color:#556575;font-size:13px;font-weight:600">Technical removal-pattern summary</summary>"' _n
-        file write `fh' `"<div class="note">These counts describe historical AnswerRemoved runs performed by the selected actor. The displayed variable may be either questionnaire-linked or merely the nearest answer event; it is not automatically the cause. <span id="r_more"></span></div>"' _n
-        file write `fh' `"<section><table><thead><tr><th>nearby / linked variable</th><th class="r">histories</th><th class="r">interviews</th><th class="r">removal events</th></tr></thead><tbody id="t_rsum"></tbody></table></section></details>"' _n
+        file write `fh' `"<div class="note">Every consecutive same-actor AnswerRemoved history is included. Actor and current/final interview status filter this table together. Compact histories meet cascade()/window()/near-answer criteria; outside histories are retained. <span id="r_more"></span></div>"' _n
+        file write `fh' `"<section><table><thead><tr><th>nearby / linked variable</th><th class="r">all histories</th><th class="r">compact</th><th class="r">interviews</th><th class="r">raw events</th><th class="r">compact events</th><th class="r">outside events</th></tr></thead><tbody id="t_rsum"></tbody></table></section></details>"' _n
     }
 
     capture confirm file `"`rsdpath'"'
-    if !_rc & `ncasc'>0 {
+    if !_rc & `nhist'>0 {
         preserve
         quietly use `"`rsdpath'"', clear
         if `hasassignment' quietly merge m:1 interview__id using `"`HQF'"', keep(master match) nogenerate
@@ -8605,6 +9196,8 @@ program _suso_para_report, rclass
             quietly replace e_ak = ustrlower(strtrim(actor)) if e_ak==""
         }
         quietly replace e_ak = "__unknown_removal_actor__" if e_ak==""
+        quietly gen strL e_ws = ws
+        quietly gen strL e_wc = ws_class
         quietly gen strL e_iid = interview__id
         quietly gen strL e_tg = trigger
         quietly gen strL e_qt = ""
@@ -8627,10 +9220,15 @@ program _suso_para_report, rclass
         quietly gen strL e_assignment_url = ""
         mata: suso_urlencode_var("e_iid", "e_iid_url")
         mata: suso_urlencode_var("hq_assignment", "e_assignment_url")
-        foreach v in e_ac e_ak e_iid e_tg e_qt e_wl e_event e_final e_check e_rel hq_assignment {
+        foreach v in e_ac e_ak e_ws e_wc e_iid e_tg e_qt e_wl e_event e_final e_check e_rel hq_assignment {
             quietly replace `v' = subinstr(subinstr(subinstr(`v',"&","&amp;",.),"<","&lt;",.),">","&gt;",.)
             quietly replace `v' = subinstr(subinstr(`v',char(34),"&#34;",.),char(39),"&#39;",.)
         }
+        quietly gen strL e_attrs = " data-actor=" + char(34) + e_ak + char(34) + ///
+            " data-status=" + char(34) + e_ws + char(34) +                    ///
+            " data-statusclass=" + char(34) + e_wc + char(34)
+        * Generated cards retain class="bremcase" data-actor="..." and add
+        * canonical current/final status attributes for intersection filtering.
         quietly gen strL e_hqlinks = ""
         if `"`hqbase'"'!="" {
             tempvar hqb
@@ -8650,16 +9248,18 @@ program _suso_para_report, rclass
         quietly replace e_finalline = "<b>Current final export:</b> " + e_final if e_final!=""
         quietly gen strL e_hist = "<b>Removal history:</b> " + strofreal(nrem) + ///
             " AnswerRemoved event(s) affected " + strofreal(nqrem) + ///
-            " distinct question/roster instance(s)."
+            " distinct question/roster unit(s). Pattern: " + cond(compact,    ///
+            "compact priority",cond(timing_unknown,"timing unknown",         ///
+            "outside compact rule")) + "."
         quietly gen strL e_state = "<b>Current paradata state:</b> " + ///
             strofreal(nreanswered) + " answered again; " + strofreal(nopen) + ///
             " still appear removed; " + strofreal(nunknown) + " unknown."
         quietly gen strL e_action = "<b>Check in final .dta:</b> <span class=" + char(34) + "mono" + char(34) + ">" + e_check + "</span>. Reject only if a listed value is actually blank and should have been asked."
         quietly replace e_action = "<b>Priority check:</b> review the final .dta and interview history because multiple unresolved sequences or sections are involved." if tier=="A"
-        quietly gen str24 e_dt = string(ts0/86400000, "%tdDD_Mon_CCYY")
+        quietly gen str24 e_dt = cond(missing(ts0),"time unavailable",       ///
+            string(ts0/86400000, "%tdDD_Mon_CCYY"))
 
-        file write `fh' `"<h2>Removal histories requiring a final-data check</h2>"' _n
-        file write `fh' `"<div class="note">Only unresolved histories performed by the selected actor are shown here. Fully resolved cases remain available in the Skip/removal tab.</div>"' _n
+        file write `fh' `"<div class="note">Only unresolved histories matching the selected removal actor and current/final interview status are shown here. Fully resolved cases remain available in the Skip/removal tab.</div>"' _n
         file write `fh' `"<section id="r_actions">"' _n
         quietly count if tier!="C"
         local nshow = r(N)
@@ -8668,8 +9268,8 @@ program _suso_para_report, rclass
             quietly keep if tier!="C"
             local kk = _N
             forvalues i = 1/`kk' {
-                file write `fh' `"<div class="bremcase" data-actor="' (e_ak[`i']) `" style="border-bottom:1px solid #eef0f2;padding:10px 0">"' _n
-                file write `fh' `"<div style="font-size:13px"><span class="mono"><b>"' (e_iid[`i']) `"</b></span> &nbsp; enumerator <b>"' (e_ac[`i']) `"</b> &nbsp; "' (e_dt[`i']) (e_hqlinks[`i']) `"</div>"' _n
+                file write `fh' `"<div class="bremcase""' (e_attrs[`i']) `" style="border-bottom:1px solid #eef0f2;padding:10px 0">"' _n
+                file write `fh' `"<div style="font-size:13px"><span class="mono"><b>"' (e_iid[`i']) `"</b></span> &nbsp; enumerator <b>"' (e_ac[`i']) `"</b> &nbsp; "' (e_dt[`i']) `" &nbsp; "' (e_ws[`i']) (e_hqlinks[`i']) `"</div>"' _n
                 file write `fh' `"<div style="font-size:12.5px;font-weight:700;color:"' (cond(tier[`i']=="A","#8a1f1f","#7a5b00")) `"">"' (why[`i']) `"</div>"' _n
                 file write `fh' `"<div style="font-size:12.5px;margin-top:4px">"' (e_eventline[`i']) `"</div>"' _n
                 if e_finalline[`i']!="" file write `fh' `"<div style="font-size:12.5px;margin-top:4px;color:#173b5e;background:#edf5fb;padding:5px 7px;border-radius:5px">"' (e_finalline[`i']) `"</div>"' _n
@@ -8687,19 +9287,23 @@ program _suso_para_report, rclass
         file write `fh' `"</section>"' _n
         restore
     }
-    file write `fh' `"<h2>Interview event history</h2>"' _n
-    file write `fh' `"<div class='note'>Select the original <span class='mono'>paradata.tab</span> once per browser tab, then search for any interview ID—or use a queue card's <b>View event history</b> button—to inspect its complete ordered audit trail. Initial indexing can take some time for a multi-million-row file; later lookups stay local. The source file is streamed in the background and is not embedded in this report.</div>"' _n
+    if `nhist'>0 {
+        file write `fh' `"</div></div>"' _n
+    }
+    file write `fh' `"<div class='sblock' id='s_hist'><button class='shead' type='button' aria-expanded='false'><h2>Interview event history</h2><span class='sfind'>Loads your local paradata.tab in this browser tab only - nothing leaves this machine</span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
+    file write `fh' `"<div class='note'>Select the original <span class='mono'>paradata.tab</span> once per browser tab, then search for any interview ID—or use a queue card's <b>View event history</b> button—to inspect its complete ordered audit trail. The compact timeline lists one event per line, grouped under sticky device-local day rails, marks pauses at or beyond the behaviour gap cap as visible session breaks, and expands any line on click for the full record with copyable parameters. Initial indexing can take some time for a multi-million-row file; later lookups stay local. The source file is streamed in the background and is not embedded in this report.</div>"' _n
     file write `fh' `"<section id='history_explorer'>"' _n
     file write `fh' `"<div class='hv-privacy'><b>Private and local:</b> the selected file is read only inside this browser tab. It is never uploaded, sent over the network, or stored by this report. Raw parameters can contain answers, GPS coordinates, and other sensitive data.</div>"' _n
     file write `fh' `"<div class='hv-setup'><div class='ctrl'><label>1. Choose local paradata file</label><input id='hv_file' type='file' accept='.tab,.tsv,.txt,text/tab-separated-values,text/plain'></div><div class='ctrl'><label>File format</label><select id='hv_dialect'><option value='suso'>Survey Solutions TSV (recommended)</option><option value='quoted'>Quoted TSV (tabs/newlines inside quotes)</option></select></div><div class='ctrl hv-idbox'><label>2. Interview ID</label><input id='hv_id' class='mono' type='text' autocomplete='off' spellcheck='false' placeholder='type or paste interview__id' disabled><div id='hv_suggest' class='hv-suggestions'></div></div><button id='hv_load' class='pbtn' type='button' disabled>Open full history</button></div>"' _n
     file write `fh' `"<progress id='hv_progress' max='100' value='0' style='display:none'></progress><div id='hv_status' class='hv-status'>Choose the matching paradata.tab export to begin.</div>"' _n
-    file write `fh' `"<div id='hv_results' style='display:none'><div id='hv_summary' class='hv-summary'></div><div class='hv-filters'><div class='ctrl'><label>Event type</label><select id='hv_event'></select></div><div class='ctrl'><label>Responsible actor</label><select id='hv_actor'></select></div><div class='ctrl'><label>Search this history</label><input id='hv_search' type='search' placeholder='event, role, variable, value, time ...'></div></div><div class='hv-viewbar'><button id='hv_view_timeline' class='pbtn' type='button'>Friendly timeline</button><button id='hv_view_raw' class='pbtn ghost' type='button'>Raw event table</button></div><div id='hv_timeline' class='hv-timeline'></div><div id='hv_raw' class='hv-tablewrap' style='display:none'><table><thead><tr><th class='r'>source row</th><th class='r'>order</th><th>event</th><th>responsible</th><th>role</th><th>source timestamp</th><th>UTC</th><th>tz offset</th><th>device local (UTC + offset)</th><th>parameters</th></tr></thead><tbody id='hv_raw_body'></tbody></table></div></div>"' _n
+    file write `fh' `"<div id='hv_results' style='display:none'><div id='hv_summary' class='hv-summary'></div><div class='hv-filters'><div class='ctrl'><label>Event type</label><select id='hv_event'></select></div><div class='ctrl'><label>Responsible actor</label><select id='hv_actor'></select></div><div class='ctrl'><label>Search this history</label><input id='hv_search' type='search' placeholder='event, role, variable, value, time ...'></div></div><div class='hv-viewbar'><span id='hv_bulk' class='hv-bulk'><button id='hv_expand' class='pbtn ghost' type='button'>Expand all</button><button id='hv_collapse' class='pbtn ghost' type='button'>Collapse all</button></span><button id='hv_view_compact' class='pbtn' type='button'>Compact timeline</button><button id='hv_view_timeline' class='pbtn ghost' type='button'>Detailed cards</button><button id='hv_view_raw' class='pbtn ghost' type='button'>Raw event table</button></div><div id='hv_compact' class='hvc-wrap'></div><div id='hv_timeline' class='hv-timeline' style='display:none'></div><div id='hv_raw' class='hv-tablewrap' style='display:none'><table><thead><tr><th class='r'>source row</th><th class='r'>order</th><th>event</th><th>responsible</th><th>role</th><th>source timestamp</th><th>UTC</th><th>tz offset</th><th>device local (UTC + offset)</th><th>parameters</th></tr></thead><tbody id='hv_raw_body'></tbody></table></div></div>"' _n
     file write `fh' `"</section>"' _n
+    file write `fh' `"</div></div>"' _n
     _suso_para_hesc `"`rolenote'"'
     local rnesc `"`r(out)'"'
     local veline ""
     if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.22) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.25) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
     _suso_para_history_js `fh'
@@ -8869,7 +9473,7 @@ program _suso_para_report, rclass
     file write `fh' `"],"' _n
     file write `fh' `""rem":["' _n
     capture confirm file `"`rsdpath'"'
-    if !_rc & `ncasc'>0 {
+    if !_rc & `nhist'>0 {
         preserve
         quietly use `"`rsdpath'"', clear
         capture confirm variable actor_key, exact
@@ -8892,9 +9496,13 @@ program _suso_para_report, rclass
                 local rtj `"`r(js)'"'
                 _suso_jsonesc `"`=interview__id[`i']'"'
                 local riid `"`r(js)'"'
+                _suso_jsonesc `"`=ws[`i']'"'
+                local rws `"`r(js)'"'
+                _suso_jsonesc `"`=ws_class[`i']'"'
+                local rwc `"`r(js)'"'
                 local rck = cond(final_data_checked[`i'],n_final_check[`i'],nopen[`i']+nunknown[`i'])
                 local sep = cond(`i'==1, "", ",")
-                file write `fh' `"`sep'{"a":"`raj'","k":"`rak'","t":"`rtj'","id":"`riid'","n":`=nrem[`i']',"q":`=nqrem[`i']',"ra":`=nreanswered[`i']',"ck":`rck',"tier":"`=tier[`i']'"}"' _n
+                file write `fh' `"`sep'{"a":"`raj'","k":"`rak'","t":"`rtj'","id":"`riid'","ws":"`rws'","wc":"`rwc'","cp":`=compact[`i']',"tu":`=timing_unknown[`i']',"cev":`=nrem[`i']*compact[`i']',"out":`=nrem[`i']*(1-compact[`i'])',"n":`=nrem[`i']',"q":`=nqrem[`i']',"ra":`=nreanswered[`i']',"ck":`rck',"tier":"`=tier[`i']'"}"' _n
             }
         }
         restore
@@ -9650,7 +10258,7 @@ program _suso_para_check, rclass
     file write `hf' `"<h2>Questions</h2>"' _n
     file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
     file write `hf' `"<div id="list"></div>"' _n
-    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.22) on `now'.</div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.25) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
     file write `hf' `"var D={"meta":{"statuses":[`jmeta'],"fdims":[`jfdims']},"rows":["' _n
     forvalues i = 1/`=_N' {
@@ -9891,6 +10499,7 @@ program _suso_para_check, rclass
     file write `hf' `"  }"' _n
     file write `hf' `"  el('v_chk').textContent=vtx;"' _n
     file write `hf' `"  el('v_chk').className='verdict '+vcl;"' _n
+    file write `hf' `"  if(window.parent!==window)window.parent.postMessage({type:'suso-tab-badge',n:hard,sev:(hard>0?'b':(K.im>0?'w':'g'))},'*');"' _n
     file write `hf' `"  hbars('ch_imiss', C.topBy(rows,'im',10,S.minsh,15), 'im');"' _n
     file write `hf' `"  var tv=C.topBy(rows,'vi',0,0,15);"' _n
     file write `hf' `"  el('sec_viol').style.display = tv.length ? '' : 'none';"' _n
@@ -9975,7 +10584,7 @@ program _suso_para_check, rclass
 end
 
 * ---- suite: the three QC pages combined into one tabbed, self-contained HTML ----
-* Tab 1 Behaviour (interactive paradata report), tab 2 Skip/removal review (supervisor
+* Tab 1 Behaviour (interactive paradata report), tab 2 Skips & removals (supervisor
 * review page), tab 3 Data QC (skip logic + option values vs the exported data).
 * Each page is embedded in its own iframe (srcdoc), so its document, styles and
 * element ids stay isolated while Headquarters links can open in a new tab.
@@ -10055,7 +10664,7 @@ program _suso_para_suite, rclass
         if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
     }
     di as txt "suso paradata: building the QC suite ..."
-    di as txt "  code build: 1.7.22-PRESERVEFIX"
+    di as txt "  code build: 1.7.25-TRIAGENAV"
     tempfile EVX T1 T2 T3
     quietly save `"`EVX'"'
 
@@ -10111,9 +10720,9 @@ program _suso_para_suite, rclass
     capture confirm file `"`T2'"'
     if _rc {
         local t2p ""
-        local note2 "No compact AnswerRemoved runs were detected in the paradata - nothing to review here."
+        local note2 "No in-scope AnswerRemoved history was available for the Skips & removals review."
         if `"`vars'"'!="" local note2                          ///
-            "No compact AnswerRemoved runs matched the vars() scope - nothing to review in this focused tab."
+            "No AnswerRemoved history matched the vars() scope."
     }
 
     if `"`data'"'!="" di as txt "  [3/3] data QC dashboard (preflight complete)"
@@ -10135,7 +10744,7 @@ program _suso_para_suite, rclass
     if strpos(`"`saving'"',"/")==0 & strpos(`"`saving'"',"\")==0 local fullp `"`c(pwd)'/`saving'"'
     di as txt "suso paradata: QC suite written to " as res `"`fullp'"'
     di as txt `"               {browse "`fullp'":Click to open in your browser}"'
-    di as txt "  tabs: Behaviour (interactive) | Skip/removal review | Data QC"
+    di as txt "  tabs: Behaviour (interactive) | Skips & removals | Data QC"
     di as txt "  scope: Behaviour metrics/risk use all loaded paradata; vars() focuses removal detail and the Skip tab."
     di as txt "         suite [if] applies to Data QC only; filters() are interactive Behaviour/Data-QC controls."
     if `"`filters'"'!="" di as txt "         filters() adds interactive/data-QC breakdowns; it is not a case-subsetting expression."
@@ -10524,21 +11133,28 @@ void _suso_suite_write(string scalar fout, string scalar title, string scalar su
     fwrite(fh, ".tabs{display:flex;gap:4px}" + char(10))
     fwrite(fh, ".tb{background:#0a3560;color:#c9d4e0;border:0;border-radius:7px 7px 0 0;padding:8px 18px;font-size:13px;cursor:pointer}" + char(10))
     fwrite(fh, ".tb.on{background:#f4f5f7;color:#002244;font-weight:700}" + char(10))
+    fwrite(fh, ".tb .tbadge{display:none;font-weight:700;font-size:11px;padding:0 6px;border-radius:8px;margin-left:7px;font-variant-numeric:tabular-nums}" + char(10))
+    fwrite(fh, ".tb .tbadge.on{display:inline-block}" + char(10))
+    fwrite(fh, ".tb .tbadge.b{background:#fbeaea;color:#8a1f1f}.tb .tbadge.w{background:#fdf6e3;color:#7a5b00}.tb .tbadge.g{background:#eaf5ec;color:#1e6b34}" + char(10))
+    fwrite(fh, ".digest{color:#c9d4e0;font-size:12px;padding:6px 0 10px;min-height:15px}" + char(10))
     fwrite(fh, ".pane iframe{display:block;width:100%;height:calc(100vh - 118px);border:0;background:#f4f5f7}" + char(10))
     fwrite(fh, ".empty{padding:40px;color:#666;font-size:14px;max-width:640px}" + char(10))
     fwrite(fh, "</style></head><body>" + char(10))
     fwrite(fh, `"<div class="logobar"><!-- wbLogo slot: replace content with the base64 banner img -->"' + char(10))
     fwrite(fh, `"<span class="wbtxt">THE WORLD BANK <span>| Development Economics - Policy Indicators</span> &nbsp;-&nbsp; ENTERPRISE SURVEYS <span>- What Businesses Experience</span></span></div>"' + char(10))
     fwrite(fh, `"<div class="mast"><h1>"' + title + "</h1>" + `"<div class="sub">"' + sub + "</div>" + char(10))
-    fwrite(fh, `"<div class="tabs"><button class="tb on" id="b1">Behaviour</button><button class="tb" id="b2">Skip/removal review</button><button class="tb" id="b3">Data QC</button></div></div>"' + char(10))
+    fwrite(fh, `"<div class="tabs"><button class="tb on" id="b1">Behaviour<span class="tbadge" id="tbad1"></span></button><button class="tb" id="b2">Skips &amp; removals<span class="tbadge" id="tbad2"></span></button><button class="tb" id="b3">Data QC<span class="tbadge" id="tbad3"></span></button></div>"' + char(10))
+    fwrite(fh, `"<div class="digest" id="sdigest"></div></div>"' + char(10))
     _suso_suite_pane(fh, 1, f1, "")
     _suso_suite_pane(fh, 2, f2, note2)
     _suso_suite_pane(fh, 3, f3, note3)
     fwrite(fh, "<script>" + char(10))
-    fwrite(fh, "function sh(k){var i;for(i=1;i<=3;i++){document.getElementById('p'+i).style.display=(i===k)?'block':'none';document.getElementById('b'+i).className=(i===k)?'tb on':'tb';}if(k<=2)sendActor(document.querySelector('#p'+k+' iframe'));}" + char(10))
-    fwrite(fh, "var actorFilter=null;function sendActor(f){if(f&&actorFilter&&f.contentWindow)f.contentWindow.postMessage(actorFilter,'*');}" + char(10))
-    fwrite(fh, "window.addEventListener('message',function(e){var d=e.data||{},fs,i,src=false;if(d.type!=='suso-actor-filter'||typeof d.key!=='string'||typeof d.label!=='string'||d.key.length>500||d.label.length>500)return;fs=document.querySelectorAll('#p1 iframe,#p2 iframe');for(i=0;i<fs.length;i++)if(fs[i].contentWindow===e.source){src=true;break;}if(!src)return;actorFilter={type:'suso-actor-filter',key:d.key,label:d.label};for(i=0;i<fs.length;i++)if(fs[i].contentWindow!==e.source)sendActor(fs[i]);});" + char(10))
-    fwrite(fh, "(function(){var fs=document.querySelectorAll('#p1 iframe,#p2 iframe'),i;for(i=0;i<fs.length;i++)fs[i].addEventListener('load',function(){sendActor(this);});})();" + char(10))
+    fwrite(fh, "function sh(k){var i;for(i=1;i<=3;i++){document.getElementById('p'+i).style.display=(i===k)?'block':'none';document.getElementById('b'+i).className=(i===k)?'tb on':'tb';}if(k<=2)sendFilters(document.querySelector('#p'+k+' iframe'));}" + char(10))
+    fwrite(fh, "var actorFilter=null,statusFilter=null;function sendFilters(f){if(!f||!f.contentWindow)return;if(actorFilter)f.contentWindow.postMessage(actorFilter,'*');if(statusFilter)f.contentWindow.postMessage(statusFilter,'*');}" + char(10))
+    fwrite(fh, "var tabBadge=[null,null,null,null];function fmtBadge(n){return n.toLocaleString();}function digestText(){var p=[],b;b=tabBadge[1];if(b)p.push(b.n>0?(fmtBadge(b.n)+' interview'+(b.n===1?'':'s')+' need'+(b.n===1?'s':'')+' attention'):'behaviour clear');b=tabBadge[2];if(b)p.push(b.n>0?(fmtBadge(b.n)+' removal check'+(b.n===1?'':'s')+' open'):'removals resolved');b=tabBadge[3];if(b)p.push(b.n>0?('Data QC: '+fmtBadge(b.n)+' hard problem'+(b.n===1?'':'s')):'Data QC clean');return p.join(' - ');}function applyBadge(i,d){tabBadge[i]={n:d.n,sev:d.sev};var s=document.getElementById('tbad'+i);if(s){s.textContent=d.n>0?fmtBadge(d.n):'\u2713';s.className='tbadge on '+(d.n>0?d.sev:'g');}var g=document.getElementById('sdigest');if(g)g.textContent=digestText();}" + char(10))
+    fwrite(fh, "window.addEventListener('message',function(e){var d=e.data||{},fs,i,tab=0;if(d.type!=='suso-tab-badge')return;fs=document.querySelectorAll('#p1 iframe,#p2 iframe,#p3 iframe');for(i=0;i<fs.length;i++)if(fs[i].contentWindow===e.source){tab=parseInt(fs[i].parentNode.id.substring(1),10);break;}if(!tab)return;if(typeof d.n!=='number'||!isFinite(d.n)||d.n<0||d.n>9999999)return;if(d.sev!=='b'&&d.sev!=='w'&&d.sev!=='g')return;applyBadge(tab,{n:Math.round(d.n),sev:d.sev});});" + char(10))
+    fwrite(fh, "window.addEventListener('message',function(e){var d=e.data||{},fs,i,src=false,ok=false;fs=document.querySelectorAll('#p1 iframe,#p2 iframe');for(i=0;i<fs.length;i++)if(fs[i].contentWindow===e.source){src=true;break;}if(!src)return;if(d.type==='suso-actor-filter'&&typeof d.key==='string'&&typeof d.label==='string'&&d.key.length<=500&&d.label.length<=500){actorFilter={type:d.type,key:d.key,label:d.label};ok=true;}if(d.type==='suso-status-filter'&&typeof d.key==='string'&&d.key.length<=500){statusFilter={type:d.type,key:d.key};ok=true;}if(!ok)return;for(i=0;i<fs.length;i++)if(fs[i].contentWindow!==e.source)sendFilters(fs[i]);});" + char(10))
+    fwrite(fh, "(function(){var fs=document.querySelectorAll('#p1 iframe,#p2 iframe'),i;for(i=0;i<fs.length;i++)fs[i].addEventListener('load',function(){sendFilters(this);});})();" + char(10))
     fwrite(fh, "document.getElementById('b1').addEventListener('click',function(){sh(1);});" + char(10))
     fwrite(fh, "document.getElementById('b2').addEventListener('click',function(){sh(2);});" + char(10))
     fwrite(fh, "document.getElementById('b3').addEventListener('click',function(){sh(3);});" + char(10))
