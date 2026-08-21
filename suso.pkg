@@ -6,7 +6,7 @@ d includes paradata timing, behaviour flags, exhaustive AnswerRemoved inventory,
 d hierarchy-aware final-data enablement adjudication, a tabbed QC suite, a
 d compact interview event history timeline, and direct Headquarters
 d interview/assignment links in the paradata HTML.
-d Build: 2026-08-21-TRIAGENAV (v1.7.25; Java backend 1.7.11-AUDITFIX).
+d Build: 2026-08-21-SUITETRIAGE (v1.7.26; Java backend 1.7.11-AUDITFIX).
 d
 d Requires: Stata 14.2 or newer and Java 11 or newer.
 d Distribution-Date: 20260820
