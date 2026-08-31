@@ -5,8 +5,7 @@
 `suso` is a safety-first Stata command that wraps the World Bank **Survey Solutions**
 REST API. A small Java backend (`suso.jar`) performs the authenticated HTTPS calls
 (every verb, including `PATCH`/`DELETE`), list endpoints load **directly into a Stata
-dataset**, and destructive operations are guarded at two independent layers. It is built
-for the WBES / B-READY / ISES fieldwork workflow and has **zero third-party dependencies**.
+dataset**, and destructive operations are guarded at two independent layers.
 
 ---
 
