@@ -11,6 +11,21 @@ like any SSC-style package via `net install`, and ships three files:
 
 ## Option A — install from a local folder
 
+For this local review build, you can test in a fresh Stata session without
+replacing the installed package. From the extracted package root:
+
+```stata
+adopath ++ "./install"
+suso config , jar("C:/full/path/to/extracted/package/install/suso.jar")
+which suso
+suso version
+suso doctor
+```
+
+Use a fresh session so an earlier Java backend is not still cached. See
+`../examples/README.md` for the synthetic example and `../TEST_RESULTS.md` for
+what has and has not been verified. This build has not been pushed to GitHub.
+
 Put `stata.toc`, `suso.pkg`, `suso.ado`, `suso.sthlp`, `suso.jar` in one folder,
 then in Stata:
 

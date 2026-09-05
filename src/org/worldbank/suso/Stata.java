@@ -5,6 +5,8 @@ import com.stata.sfi.Macro;
 import com.stata.sfi.SFIToolkit;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
@@ -40,6 +42,99 @@ import java.util.regex.Pattern;
  */
 public final class Stata {
 
+    /** Backend identifier checked by suso.ado before parsing questionnaire metadata. */
+    private static final String BACKEND_BUILD = "1.7.32-SECTIONS";
+
+    // Restored from the shipped backend: Stata's working directory can differ from the JVM's.
+    private static Path resolvePath(String file, String cwd) {
+        String cleaned = cleanPath(file);
+        if (cleaned.isEmpty()) throw new IllegalArgumentException("file path is blank");
+        Path path = Path.of(cleaned);
+        if (!path.isAbsolute()) {
+            String cleanedCwd = cleanPath(cwd);
+            Path base = cleanedCwd.isEmpty() ? Path.of("").toAbsolutePath() : Path.of(cleanedCwd);
+            if (!base.isAbsolute()) base = base.toAbsolutePath();
+            path = base.resolve(path);
+        }
+        return path.normalize().toAbsolutePath();
+    }
+
+    private static String cleanPath(String path) {
+        if (path == null) return "";
+        String value = path.trim();
+        if (value.length() >= 2 && ((value.startsWith("\"") && value.endsWith("\""))
+                || (value.startsWith("'") && value.endsWith("'")))) {
+            value = value.substring(1, value.length() - 1).trim();
+        }
+        return value.replace('\\', '/');
+    }
+
+    /** Parse a Survey Solutions HTML questionnaire into the CSV consumed by suso.ado. */
+    public static int qxmeta(String[] args) {
+        try {
+            setG("SUSO_JARBUILD", BACKEND_BUILD);
+            String file = g("SUSO_QX_FILE"), output = g("SUSO_QX_OUT"), cwd = g("SUSO_QX_CWD");
+            if (file.trim().isEmpty()) {
+                setG("SUSO_QX_RC", "1"); setG("SUSO_QX_MSG", "questionnaire path is blank"); return 0;
+            }
+            if (output.trim().isEmpty()) {
+                setG("SUSO_QX_RC", "1"); setG("SUSO_QX_MSG", "output path is blank"); return 0;
+            }
+            Path inputPath = resolvePath(file, cwd), outputPath = resolvePath(output, cwd);
+            setG("SUSO_QX_RESOLVED", inputPath.toString());
+            if (!Files.isRegularFile(inputPath)) {
+                setG("SUSO_QX_RC", "1");
+                setG("SUSO_QX_MSG", "questionnaire file not found after resolving against Stata's working directory: " + inputPath);
+                return 0;
+            }
+            Path parent = outputPath.getParent();
+            if (parent != null) Files.createDirectories(parent);
+            Qx.writeCsv(inputPath, outputPath);
+            setG("SUSO_QX_RC", "0"); setG("SUSO_QX_MSG", "");
+        } catch (Throwable t) {
+            setG("SUSO_QX_RC", "1");
+            setG("SUSO_QX_MSG", t.getClass().getSimpleName() + ": " + safe(t.getMessage()));
+        }
+        return 0;
+    }
+
+    /** Exercise the exact SFI method descriptors used by the data loader inside Stata. */
+    public static int sfiabi(String[] args) {
+        try {
+            int rc = Macro.setGlobal("SUSO_SFI_ABI", "macro-ok");
+            if (rc != 0) return rc;
+            rc = Data.addVarDouble("__suso_sfi_num");
+            if (rc != 0) return rc;
+            rc = Data.addVarStr("__suso_sfi_str", 20);
+            if (rc != 0) return rc;
+            rc = Data.addVarStrL("__suso_sfi_strl");
+            if (rc != 0) return rc;
+            int num = Data.getVarIndex("__suso_sfi_num"), str = Data.getVarIndex("__suso_sfi_str");
+            int strl = Data.getVarIndex("__suso_sfi_strl");
+            if (num <= 0 || str <= 0 || strl <= 0) return 111;
+            rc = Data.setVarLabel(num, "SFI numeric probe");
+            if (rc != 0) return rc;
+            rc = Data.setObsTotal(1L);
+            if (rc != 0) return rc;
+            rc = Data.storeNum(num, 1L, 17.0);
+            if (rc != 0) return rc;
+            rc = Data.storeStr(str, 1L, "sfi-ok");
+            if (rc != 0) return rc;
+            rc = Data.storeStr(strl, 1L, "sfi-strl-ok");
+            if (rc != 0) return rc;
+            rc = Macro.setGlobal("SUSO_SFI_ABI", "ok");
+            if (rc != 0) return rc;
+            SFIToolkit.displayln("{txt}suso: Stata-Java SFI ABI probe passed.");
+            return 0;
+        } catch (Throwable t) {
+            try { Macro.setGlobal("SUSO_SFI_ABI", "failed: " + t.getClass().getSimpleName()); }
+            catch (Throwable ignored) { /* Preserve the original linkage failure. */ }
+            SFIToolkit.displayln("{err}suso: SFI ABI probe failed: " + t);
+            return 5100;
+        }
+    }
+
+
     private static final Pattern ISO_DT =
             Pattern.compile("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*$");
     private static final long INT_SAFE = 1L << 53;
@@ -55,6 +150,7 @@ public final class Stata {
         SFIToolkit.displayln("{txt}  Java vendor  : {res}" + vendor);
         SFIToolkit.displayln("{txt}  Java home    : {res}" + home);
         Macro.setGlobal("SUSO_JAVAVER", v);
+        Macro.setGlobal("SUSO_JARBUILD", BACKEND_BUILD);
         Macro.setGlobal("SUSO_JAVAOK", isJava11Plus() ? "1" : "0");
         if (!isJava11Plus()) {
             SFIToolkit.displayln("{err}  WARNING: this package needs Java 11 or newer. The PATCH-based");
@@ -139,6 +235,8 @@ public final class Stata {
             String dir  = g("SUSO_ZIP_DIR");
             String pwd  = g("SUSO_ZIP_PWD");
             setG("SUSO_UNZIP_N", "0"); setG("SUSO_UNZIP_DIR", "");
+            setG("SUSO_UNZIP_MANIFEST", ""); setG("SUSO_UNZIP_BYTES", "0");
+            setG("SUSO_UNZIP_BACKUP", "");
             if (file.isEmpty()) { setG("SUSO_RC", "198"); setG("SUSO_MSG", "no zip file specified"); return 0; }
             if (dir.isEmpty())  dir = new java.io.File(file).getParent();
             Zip.Result res = Zip.extract(file, dir, pwd);
@@ -152,7 +250,11 @@ public final class Stata {
             }
             setG("SUSO_UNZIP_N", Integer.toString(res.files));
             setG("SUSO_UNZIP_DIR", res.dir);
+            setG("SUSO_UNZIP_MANIFEST", res.manifest);
+            setG("SUSO_UNZIP_BYTES", Long.toString(res.bytes));
+            setG("SUSO_UNZIP_BACKUP", res.backupDir);
             StringBuilder m = new StringBuilder();
+            if (res.notice != null && !res.notice.isEmpty()) m.append(res.notice).append(" ");
             if (res.badPassword) m.append("warning: wrong/empty password on some entries; ");
             if (res.skipped > 0) m.append(res.skipped).append(" entr").append(res.skipped == 1 ? "y" : "ies")
                                   .append(" skipped (unsupported encryption/method); ");
@@ -348,7 +450,8 @@ public final class Stata {
         // --- reset outputs ---
         for (String k : new String[]{"SUSO_RC", "SUSO_HTTP", "SUSO_MSG", "SUSO_BODY",
                 "SUSO_NOBS", "SUSO_NVARS", "SUSO_TOTALCOUNT", "SUSO_LIMIT", "SUSO_OFFSET",
-                "SUSO_SAVED", "SUSO_BYTES", "SUSO_DATECOLS", "SUSO_FKEYS"}) setG(k, "");
+                "SUSO_SAVED", "SUSO_BYTES", "SUSO_DATECOLS", "SUSO_FKEYS",
+                "SUSO_SHA256", "SUSO_DOWNLOAD_SECONDS", "SUSO_ATTEMPTS", "SUSO_BACKUP"}) setG(k, "");
 
         if (base == null || base.isEmpty()) {
             fail(910, "No server configured. Run:  suso config , server(<url>) workspace(<name>)");
@@ -410,6 +513,10 @@ public final class Stata {
             if (saveFile != null && !saveFile.isEmpty()) {
                 setG("SUSO_SAVED", res.savedPath == null ? "" : res.savedPath);
                 setG("SUSO_BYTES", Long.toString(res.bytes));
+                setG("SUSO_SHA256", res.sha256);
+                setG("SUSO_DOWNLOAD_SECONDS", Double.toString(res.elapsedSeconds));
+                setG("SUSO_ATTEMPTS", Integer.toString(res.attempts));
+                setG("SUSO_BACKUP", res.backupPath);
                 setG("SUSO_MSG", "Saved " + res.bytes + " bytes to " + res.savedPath);
                 setG("SUSO_RC", "0");
                 return;
@@ -517,15 +624,15 @@ public final class Stata {
             String vn = varName.get(key);
             if (c.isString()) {
                 int len = Math.max(1, c.maxLen);
-                if (len > 2045) Data.addVarStrL(vn);
-                else Data.addVarStr(vn, len);
+                if (len > 2045) SfiCheck.ok(Data.addVarStrL(vn));
+                else SfiCheck.ok(Data.addVarStr(vn, len));
             } else {
-                Data.addVarDouble(vn);
+                SfiCheck.ok(Data.addVarDouble(vn));
             }
             int vi = Data.getVarIndex(vn);
             if (vi <= 0) throw new RuntimeException("Could not create variable '" + vn + "'");
             idx.put(key, vi);
-            Data.setVarLabel(vi, key);
+            SfiCheck.ok(Data.setVarLabel(vi, key));
             if (c.isDate()) {
                 if (dateCols.length() > 0) dateCols.append(" ");
                 dateCols.append(vn);
@@ -535,7 +642,7 @@ public final class Stata {
         // 4) set observations and store values.
         //    New Stata cells default to missing (numeric) / "" (string), so null cells are
         //    simply left untouched -- this also avoids a dependency on Data.getMissingValue().
-        Data.setObsTotal(n);
+        SfiCheck.ok(Data.setObsTotal(n));
         for (int row = 0; row < n; row++) {
             long obs = row + 1;
             Object o = arr.get(row);
@@ -561,13 +668,13 @@ public final class Stata {
             else if (val instanceof Map || val instanceof List) s = Json.write(val);
             else s = String.valueOf(val);
             if (!c.strL && c.maxLen > 0 && s.length() > c.maxLen) s = s.substring(0, c.maxLen);
-            Data.storeStr(vi, obs, s);
+            SfiCheck.ok(Data.storeStr(vi, obs, s));
         } else {
             double d;
             if (val instanceof Boolean) d = ((Boolean) val) ? 1.0 : 0.0;
             else if (val instanceof Number) d = ((Number) val).doubleValue();
             else return; // unexpected for a numeric column; leave missing
-            Data.storeNum(vi, obs, d);
+            SfiCheck.ok(Data.storeNum(vi, obs, d));
         }
     }
 
@@ -584,7 +691,7 @@ public final class Stata {
             if (v instanceof String) {
                 anyString = true; anyStringValue = true;
                 String s = (String) v;
-                if (s.length() > maxLen) maxLen = s.length();
+                if (s.getBytes(StandardCharsets.UTF_8).length > maxLen) maxLen = s.getBytes(StandardCharsets.UTF_8).length;
                 if (!ISO_DT.matcher(s).matches()) allDateLike = false;
             } else if (v instanceof Boolean) {
                 anyBool = true; allDateLike = false;
@@ -593,16 +700,16 @@ public final class Stata {
                 anyNum = true; allDateLike = false;
                 long l = (Long) v;
                 if (Math.abs(l) > INT_SAFE) anyBigInt = true;
-                int len = Long.toString(l).length();
+                int len = Long.toString(l).getBytes(StandardCharsets.UTF_8).length;
                 if (len > maxLen) maxLen = len;
             } else if (v instanceof Double) {
                 anyNum = true; anyFrac = true; allDateLike = false;
-                int len = Double.toString((Double) v).length();
+                int len = Double.toString((Double) v).getBytes(StandardCharsets.UTF_8).length;
                 if (len > maxLen) maxLen = len;
             } else {
                 anyComplex = true; allDateLike = false;
                 String s = Json.write(v);
-                if (s.length() > maxLen) maxLen = s.length();
+                if (s.getBytes(StandardCharsets.UTF_8).length > maxLen) maxLen = s.getBytes(StandardCharsets.UTF_8).length;
             }
             strL = maxLen > 2045;
         }

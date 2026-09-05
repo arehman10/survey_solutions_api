@@ -1,51 +1,33 @@
 #!/usr/bin/env bash
-# ---------------------------------------------------------------------------
-# build.sh — compile suso.jar from source against your Stata's SFI library.
-#
-#   A prebuilt dist/suso.jar already ships with this package and should work
-#   on any Stata with a Java 11+ runtime. Rebuild from source ONLY if the
-#   prebuilt jar errors at runtime (e.g. a NoSuchMethodError), which would
-#   indicate a different SFI on your Stata.
-#
-# Usage:
-#   ./build.sh [/path/to/sfi-api.jar]
-#   SFI_JAR=/path/to/sfi-api.jar ./build.sh
-#
-# To find sfi-api.jar, in Stata run:   display c(sysdir_stata)
-# and look under that folder (commonly  utilities/jar/sfi-api.jar  or  utilities/).
-# ---------------------------------------------------------------------------
+# Build the complete Java 11 backend against the real SFI API supplied with Stata.
+# Usage: ./build.sh /path/to/sfi-api.jar (or set SFI_JAR).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="$HERE/src"
-OUT="$HERE/build/classes"
-DIST="$HERE/dist"
-
-if ! command -v javac >/dev/null 2>&1; then
-  echo "ERROR: javac not found. Install a JDK 11+ (Temurin/OpenJDK) and re-run." >&2
-  exit 1
-fi
-echo "Using $(javac -version 2>&1)"
-
 SFI="${1:-${SFI_JAR:-}}"
-if [ -z "${SFI}" ]; then
-  echo "Searching for sfi-api.jar in common Stata locations ..."
+if [ -z "$SFI" ]; then
   for d in /Applications/Stata* /Applications/stata* /usr/local/stata* /opt/stata* "$HOME"/Stata* "$HOME"/stata*; do
     [ -d "$d" ] || continue
-    f="$(find "$d" -name 'sfi-api.jar' 2>/dev/null | head -1 || true)"
+    f="$(find "$d" -name 'sfi-api.jar' -print -quit 2>/dev/null || true)"
     if [ -n "$f" ]; then SFI="$f"; break; fi
   done
 fi
-if [ -z "${SFI}" ] || [ ! -f "${SFI}" ]; then
-  echo "ERROR: could not locate sfi-api.jar." >&2
-  echo "  In Stata:  display c(sysdir_stata)   then find sfi-api.jar under that folder." >&2
-  echo "  Re-run  :  ./build.sh /full/path/to/sfi-api.jar" >&2
+if [ -z "$SFI" ] || [ ! -f "$SFI" ]; then
+  echo "ERROR: supply your Stata sfi-api.jar. In Stata: display c(sysdir_stata)" >&2
   exit 1
 fi
-echo "Using SFI: $SFI"
-
-rm -rf "$OUT"; mkdir -p "$OUT" "$DIST"
-javac --release 11 -Xlint:all -cp "$SFI" -d "$OUT" "$SRC"/org/worldbank/suso/*.java
-( cd "$OUT" && jar cf "$DIST/suso.jar" org/worldbank/suso )
-echo "Built: $DIST/suso.jar"
-echo "Now copy suso.jar, suso.ado and suso.sthlp to your Stata PLUS or PERSONAL folder"
-echo "(see 'display c(sysdir_plus)' / 'display c(sysdir_personal)' in Stata)."
+JAVA="${SUSO_JAVA:-java}"
+if command -v javac >/dev/null 2>&1; then
+  COMPILER=(javac)
+else
+  # Some installations expose JDK modules but omit the javac launcher.
+  COMPILER=("$JAVA" -m jdk.compiler/com.sun.tools.javac.Main)
+fi
+OUT="$HERE/build/classes"
+TOOL="$HERE/build/tools"
+DIST="$HERE/dist"
+rm -rf "$OUT" "$TOOL"
+mkdir -p "$OUT" "$TOOL" "$DIST"
+"${COMPILER[@]}" --release 11 -Xlint:all -cp "$SFI" -d "$OUT" "$HERE"/src/org/worldbank/suso/*.java
+"${COMPILER[@]}" --release 11 -d "$TOOL" "$HERE/tools/BuildJar.java"
+"$JAVA" -cp "$TOOL" BuildJar "$OUT" "$DIST/suso.jar"
+echo "Built $DIST/suso.jar (SuSo classes only; SFI remains supplied by Stata)."

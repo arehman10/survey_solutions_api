@@ -2,6 +2,10 @@
 
 **The World Bank · DEC · Enterprise Surveys**
 
+**Local review build v1.7.36 — not published.** Start with the local review
+instructions below and `examples/example.do`. The GitHub installation command
+still downloads the published version, not these candidate changes.
+
 `suso` is a safety-first Stata command that wraps the World Bank **Survey Solutions**
 REST API. A small Java backend (`suso.jar`) performs the authenticated HTTPS calls
 (every verb, including `PATCH`/`DELETE`), list endpoints load **directly into a Stata
@@ -15,7 +19,7 @@ dataset**, and destructive operations are guarded at two independent layers.
 suso.ado      Stata frontend (commands, options, safety, pagination)
 suso.sthlp    Stata help file       (help suso)
 suso.jar      Java backend          (HTTP + JSON, no dependencies)
-src/          Java source           (Json.java, Http.java, Stata.java)
+src/          Complete Java source  (including HTTP, ZIP and file publication)
 build.sh      Rebuild the jar       (macOS / Linux)
 build.bat     Rebuild the jar       (Windows)
 ```
@@ -80,6 +84,114 @@ List commands replace the current dataset and return `r(nobs)`, `r(nvars)` and (
 server reports it) `r(totalcount)`. ISO-8601 date columns are auto-converted to Stata
 `%tc`. Single-object commands flatten JSON fields into `r()` (e.g. `r(jobid)`,
 `r(exportstatus)`, `r(canbedeleted)`). All commands return `r(http)`.
+
+## Local review build: v1.7.36
+
+Question timing now displays percentages with an explicit heading: a share
+of 0.76 appears as **76.0%**. The Event history instructions use full-width
+bullets, and the local file indexer avoids repeated ID decoding and reads one
+bounded chunk ahead. The file stays in your browser; nothing is uploaded.
+Selecting a local-drive copy can reduce network-drive delays.
+
+Event history also shows **section timing for the selected interview**. Time
+from events without a named actor remains included in **Active min**. Numeric
+headings and values are centered; section names align to the left. Actor, event-type and text filters apply after intervals are measured
+on the complete history, so hidden events cannot stretch a gap. Choose all
+activity, before first completion, or later work. This raw-history estimate
+includes all roles; it can differ from the survey-wide fieldwork timing page.
+
+Enter an interview ID or `assignment: 12345`. Assignment lookup uses the
+interviews included in this report and asks you to choose one when several
+share an assignment. It never combines their event timelines.
+Open `examples/preview/history-timing-example.html` for an interactive synthetic
+example. The included Java backend remains `1.7.32-SECTIONS`.
+
+The Behaviour report now has a **Section timing** page. Supply `qx()` for
+questionnaire section titles and `data()` with `filters()` for data-based
+filter controls. Existing report and suite commands work unchanged. The page
+shows total active hours, median/P90 minutes per interview, counts of observed
+and timed interviews, and each section's share of scoped time. Choose first
+pass, later corrections, or all activity. Actor, status and variable/value
+filters apply together; an actor selection uses only that contributor's time.
+Search/sort sections and download the displayed table as CSV. Unmapped activity
+stays visible, and sections with no timing have no invented zero-minute median.
+Open `examples/preview/section-timing-example.html` for a working synthetic
+example. `examples/preview/paradata-example.html` shows the full suite.
+
+Section timing uses the existing active intervals, assigned on the full event
+stream before filters. The interval ending at an answer, removal or comment
+belongs to that question's top-level section. Other events retain the previous
+section only within the same actor/session. An unknown question resets that
+context to Unmapped. Contributor times are summed within each interview before
+quantiles are calculated; P90 uses the nearest rank among positive durations.
+Section titles shared in the questionnaire metadata are grouped together.
+`vars()` limits question/removal detail, so this page keeps the whole questionnaire.
+The full section payload remains available above `litecap()`.
+
+The previous download and folder corrections are retained:
+
+Export preparation now shows its state and elapsed time instead of an
+unreliable overall percentage. Survey Solutions reuses its progress field
+across preparation stages, so it can reach 100 and reset while still running.
+`suso export status, id(...) verbose` shows the raw server percentage for
+diagnostics; `r(progress)` remains unchanged. Ready for download means server
+preparation has completed, not that the file is already saved locally.
+
+This build also addresses the reported Windows extraction-journal failure.
+Journal updates use new numbered snapshots, and atomic renames briefly retry
+access-denied errors. Persistent permission problems still stop safely.
+Install both the ADO and JAR and restart Stata; `suso doctor, strict` checks
+that the v1.7.32-SECTIONS backend is loaded.
+For the failed extraction of an already downloaded `ises_${folder_name}.zip`,
+run `examples/retry_existing_zip.do` after your usual configuration. It extracts
+locally into `${data_server}` and checks the data/questionnaire paths; it does
+not request a new export or replace the current dataset.
+
+This build retains the paradata calculation corrections and compact review
+workspace, and adds reusable HTTP connections and verified download/extraction
+publication. Read `DOWNLOAD_SAFETY.md` before the local run: previous archives
+are retained when replaced, extraction honors the requested folder and backs
+up files it replaces inside that folder, and downloads require verified HTTPS.
+It has not been pushed or published. Version 1.7.30 corrects the v1.7.29
+directory relocation that broke relative questionnaire/data paths.
+
+If your v1.7.29 download already succeeded, `examples/recover_existing_pull.do`
+reuses the existing data ZIP and extracted paradata from the supplied log.
+`suso export extract, file(...) unzipto(...)` extracts locally without creating
+another export or replacing the dataset in memory.
+See `TEST_RESULTS.md` for the checks actually run and the remaining Stata/SFI
+acceptance checks.
+
+To try it without replacing your installed package, open a fresh Stata session
+and put this extracted package first on that session's adopath:
+
+```stata
+cd "C:/path/to/extracted/package"
+adopath ++ "C:/path/to/extracted/package/install"
+suso config , jar("C:/path/to/extracted/package/install/suso.jar")
+which suso
+suso version
+suso doctor
+```
+
+Use the included synthetic example before running your survey. The `examples`
+folder contains a ready-to-open report and a do-file to regenerate a small
+example in Stata. Its data are invented and are not survey findings. A fresh
+Stata session is important when changing the Java backend, because Java classes
+from an earlier version may remain loaded in an existing session.
+
+For your own files, use the same paradata commands as before:
+
+```stata
+suso paradata load , file("C:/survey/paradata.tab")
+suso paradata suite , qx("C:/survey/questionnaire.html") ///
+    data("C:/survey/main.dta") filters(lf_responsive) ///
+    saving("C:/survey/qc_suite_review.html") replace
+```
+
+If your survey uses special numeric missing codes, specify the same intended
+`misscodes()` list for the whole suite; it now applies consistently to Data QC
+and removal final-state checks. Explicit lists replace the default list.
 
 ## Paradata analysis (timing + behaviour QC)
 
@@ -174,18 +286,21 @@ suso raw /api/v1/interviews/<uuid> , method(DELETE) allowdestructive
 
 ## Rebuilding the jar from source
 
-A prebuilt `dist/suso.jar` ships with the package and works on any Stata with a Java 11+
-runtime. Rebuild **only** if the prebuilt jar errors at runtime (e.g. a
-`NoSuchMethodError`, which would indicate a different SFI on your Stata). You need a JDK
-11+ and your Stata's `sfi-api.jar` (find your Stata folder with `display c(sysdir_stata)`):
+A prebuilt `suso.jar` ships in the root and `install` folders. The complete
+backend source is in `src`. A rebuild needs a JDK 11+ and your Stata's
+`sfi-api.jar` (find your Stata folder with `display c(sysdir_stata)`):
 
 ```bash
 ./build.sh /path/to/sfi-api.jar           # macOS / Linux
 build.bat  "C:\Program Files\Stata18\...\sfi-api.jar"   # Windows
 ```
 
-The jar is compiled to Java 11 bytecode with no external dependencies and contains only
-`org/worldbank/suso/*` (it relies on Stata's own `com.stata.sfi` at runtime).
+The build writes `dist/suso.jar`, compiled to Java 11 bytecode with no external
+runtime dependencies. It contains only `org/worldbank/suso/*` and relies on
+Stata's own `com.stata.sfi` at runtime. Compile-only test substitutes are never
+included in the distribution JAR. The base64 recovery script validates
+`suso.jar.sha256` before replacing a JAR; recovery reconstructs the same release
+binary and is not a source rebuild.
 
 ## Notes
 

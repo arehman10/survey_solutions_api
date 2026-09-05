@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.7.26 SUITETRIAGE  21aug2026}{...}
+{* *! version 1.7.36 CENTERED  05sep2026}{...}
 {vieweralsosee "[D] import" "help import"}{...}
 {vieweralsosee "" "--"}{...}
 {viewerjumpto "Syntax" "suso##syntax"}{...}
@@ -146,10 +146,10 @@ For {cmd:suso config}:
 {synopt :{opt proxyport(#)}}proxy port{p_end}
 {synopt :{opt proxyuser(u)}}proxy user{p_end}
 {synopt :{opt proxypass(p)}}proxy password{p_end}
-{synopt :{opt insecure}}skip TLS certificate verification (use with care){p_end}
+{synopt :{opt insecure}}skip TLS certificate-chain verification for non-download requests only; file downloads require verified TLS{p_end}
 {synopt :{opt noinsecure}}re-enable TLS verification{p_end}
 {synopt :{opt connt:imeout(ms)}}connection timeout in milliseconds (default 30000){p_end}
-{synopt :{opt readt:imeout(ms)}}read timeout in milliseconds (default 300000){p_end}
+{synopt :{opt readt:imeout(ms)}}deadline for receiving the complete response, including its body, in milliseconds per request/redirect hop (default 300000); timed-out downloads do not replace an existing destination file{p_end}
 {synopt :{opt max:rows(#)}}safety cap on rows fetched by one paginated API {cmd:list, all} call (default 100000); it does not limit exports or paradata{p_end}
 {synopt :{opt audit:file(path)}}destination for selected destructive-action records; read-only/paradata commands do not create it{p_end}
 {synopt :{opt show}}display the current configuration (password masked){p_end}
@@ -247,6 +247,7 @@ the first thing to add when a call behaves unexpectedly.
 {synopt :{cmd:start} {opt type()}}start an export ({opt istatus()} {opt guid()} {opt qver()} {opt from()} {opt to()} {opt meta}|{opt nometa} {opt paradatareduced}){p_end}
 {synopt :{cmd:status} {opt id()}}poll an export job's status{p_end}
 {synopt :{cmd:download} {opt id()} {opt saving()}}download a completed export archive; add {opt unzip} (or {opt unzipw(pw)} for password-protected archives, {opt unzipto(dir)} for the target folder) to extract it{p_end}
+{synopt :{cmd:extract} {opt file()} [{opt unzipto()} {opt unzipw()}]}extract an existing export ZIP locally, without server requests or changing the active dataset{p_end}
 {synopt :{cmd:get}}one-shot {cmd:start} {it:->} poll {it:->} {cmd:download} ({opt saving()} {opt unzip} {opt unzipw()} {opt unzipto()} {opt from()} {opt to()} {opt pollsecs()} {opt jobtimeout()}){p_end}
 {synopt :{cmd:cancel} {opt id()}}cancel/delete an export job {it:(destructive)}{p_end}
 {synoptline}
@@ -291,7 +292,10 @@ list ({cmd:questionnaires_list.dta}) plus one JSON document per version; one exp
 per questionnaire-version per {opt types()} entry (start {it:->} poll {it:->} download, with
 empty jobs skipped and per-job failures tolerated); and {cmd:assignments.dta} +
 {cmd:supervisors.dta}. Returns {cmd:r(ok)}, {cmd:r(skipped)}, {cmd:r(failed)}. Your current
-data is preserved/restored. Example: {cmd:suso backup , dir("C:/archive/mysurvey") types(STATA Paradata)}.{p_end}
+data is preserved/restored. Each run uses a fresh child directory inside the
+requested {opt dir()}. The requested root is returned in {cmd:r(root)} and
+the run's child directory in {cmd:r(dir)}. No sibling outside the root is used.
+Example: {cmd:suso backup , dir("C:/archive/mysurvey") types(STATA Paradata)}.{p_end}
 
 {pstd}{bf:user}, {bf:supervisor}, {bf:interviewer}{p_end}
 {synoptset 30 tabbed}{...}
@@ -352,6 +356,54 @@ Exporting data is three steps: {cmd:start}, poll {cmd:status} until it reports
 
 {pstd}
 Add {opt unzip} to extract the archive after download (into a folder named after the zip, or {opt unzipto(}{it:dir}{cmd:)}). Survey Solutions can password-protect exports; for those, use {opt unzipw(}{it:password}{cmd:)}. Extraction is done by the bundled Java backend and supports the traditional ZipCrypto scheme SuSo uses, so no external unzip tool is required. {cmd:r(unzipped)} and {cmd:r(unzipdir)} report the result.
+
+{pstd}
+Downloads reuse connections, hash bytes while receiving them and
+publish only complete, verified transfers. With {opt replace}, an independent
+copy of the prior file is retained at {cmd:r(backup)}. Downloading requires
+verified HTTPS; insecure TLS and HTTPS-to-HTTP redirects are rejected.
+An archive is extracted into staging inside the requested folder and every
+entry must pass size/CRC checks before verified files are installed.
+Version 1.7.30 honors {opt unzipto()} even when that directory exists.
+Unrelated files stay in place; replaced files are backed up under
+{cmd:.suso-backups} inside the same directory, returned in {cmd:r(unzip_backup)}.
+Handled installation errors trigger rollback. An unresolved rollback or
+interrupted transaction retains recovery material and blocks a later extraction
+instead of silently continuing. This is per-file publication with rollback,
+not a folder-wide atomic swap. {cmd:r(unzipdir)} is the requested destination.
+{cmd:r(manifest)} records this archive's extracted files and hashes; unrelated
+files in the destination are outside that manifest's scope. The source ZIP is retained.
+
+{pstd}
+Version 1.7.31 uses new numbered journal snapshots to avoid repeatedly
+replacing the same recovery file on Windows/network drives. Atomic renames
+retry access-denied errors at most five times, with 1.55 seconds of total
+backoff; persistent permission failures still stop. Rollback leaves an already
+unchanged original file in place. No delete-then-copy fallback is used.
+
+{pstd}
+To reuse a completed download without contacting the server:
+{cmd:suso export extract, file("data.zip") unzipto("your-existing-folder")}.
+{opt unzipw()} or the configured {opt exportpw()} supplies an archive password
+when needed. The command does not import data.
+
+{pstd}
+Early preparation checks wait 1, 2 and 5 seconds before using {opt pollsecs()},
+capped by the configured interval and remaining budget. Preparation time
+includes API calls; an in-flight call remains bounded separately by
+{opt readtimeout()}. GET responses 429/502/503/504 can retry twice within the
+same per-hop timeout. Write requests and timeout/security/disk failures are
+not automatically retried. Errors retain the existing export JobId for a
+manual retry without creating another export.
+
+{pstd}
+Preparation displays {it:Queued on server}, {it:Preparing on server}, or
+{it:Ready for download}; automatic polling also shows elapsed seconds.
+The server's raw percentage can reset between preparation stages and is not
+overall completion or file-transfer progress. Add {opt verbose} to see that
+diagnostic percentage. {cmd:r(progress)} remains the unchanged API value and
+{cmd:r(preparation_state)} contains the displayed state after {cmd:export status}.
+The automatic download waits for {cmd:Completed}, regardless of the percentage.
 
 {pstd}
 {cmd:start} returns the job id in {cmd:r(jobid)}. A questionnaire {bf:version}
@@ -495,11 +547,12 @@ optional raw event-history explorer reads a matching {cmd:paradata.tab} locally;
 source events are not embedded or uploaded, and a recipient needs their own
 authorized copy of that file. The report is
 built for a TTL or field supervisor: a verdict line and a {bf:review queue} triage
-every started interview into {bf:Investigate} (hard evidence {hline 1} same-minute
-answering in two interviews, or a rejected interview re-completed with nothing
-changed {hline 1} or 3+ independent signals), {bf:Verify} (2 signals, or 1 signal
-plus a skip cascade, or a near-instant resubmission with 1{c 45}2 edits) and
-{bf:Watch} (a single signal). Every queue row expands into plain-language evidence
+every started interview into {bf:Investigate} (an unchanged rejection cycle or
+at least three independent risk domains), {bf:Verify} (two domains, a concentrated
+pace/duration pattern, an overlap screen, a quick correction cycle, or an
+unresolved final-data check), and {bf:Watch} (an isolated signal or relevant
+continuation history). These are screening priorities, not findings of misconduct.
+Every queue row opens an evidence panel
 with the team benchmark alongside ({it:"Typical answer took 1.2 s across 90 timed
 answers (team typical 6.5 s)"}), the interview key ready to paste into Headquarters,
 and per-interview hour-of-day and answer-speed mini charts; the whole queue exports
@@ -546,6 +599,90 @@ streak, {cmd:rbm}/{cmd:rbe} resubmit bounce, {cmd:pce} post-completion edits,
 merge-ready on {cmd:interview__id}. For very large surveys ({opt litecap(15000)}+
 started interviews) the per-interview hour/gap detail is omitted and the
 night-window and fast-seconds controls fall back to build-time values.
+
+{pstd}
+Question timing percentages are labelled {bf:Timed reaches < cutoff s (%)};
+0.76 is displayed as 76.0%. The underlying calculation and numeric sorting
+are unchanged. Missing timing remains unavailable.
+
+{pstd}
+Event history reads the selected local {cmd:paradata.tab} inside the browser;
+there is no upload. Its indexer reuses repeated IDs, scans literal TSV line
+endings with native byte searches, and reads one bounded chunk ahead. Status
+shows elapsed indexing time. Quoted TSV remains an explicit format choice.
+A copy on a local drive can reduce network-drive read delays. Keep the report
+tab open to reuse its index; reloading requires selecting and indexing again.
+
+{pstd}
+The history view now includes section timing for the selected interview, using
+all roles. Events without an actor name remain included in {bf:Active min}.
+Actor, event-type and text filters apply after gaps are calculated on the
+complete ordered history. Choose all activity, before first completion or
+later work. Initial preload answers, session/actor boundaries, long gaps and
+invalid timestamps do not create work intervals. Unknown questions remain
+unmapped. This raw-history estimate can differ from the survey-wide
+fieldwork-role summary. Supply {opt qx()} for section mapping.
+
+{pstd}
+The history ID box also accepts {cmd:assignment: 12345}. It finds interviews
+included in this report through the {opt data()} assignment mapping. If several
+interviews share an assignment, choose one; their timelines are never pooled.
+
+{pstd}
+The {bf:Section timing} page (v1.7.32) shows time by top-level questionnaire
+section from {opt qx()}. It includes observed and timed interview counts,
+median and P90 minutes per interview, total hours, and share of scoped time.
+Choose first-pass work, later corrections, or all activity. Actor, current/final
+status, and {opt filters()} variable/value controls intersect; selecting an actor
+uses only that contributor's time. All contributors are summed within each
+interview before computing section medians and nearest-rank P90. Only positive
+durations contribute to quantiles. Unvisited sections show no quantiles.
+Section search and sorting do not change the overall scope denominator.
+CSV export includes the displayed rows, period and filter values.
+
+{pstd}
+Section allocation uses the existing full-stream active intervals. The interval
+ending at an answer, removal, or comment belongs to that question's section;
+other events inherit the last section only within the same actor and session.
+Automatic validity events do not move that context. Unknown question events
+reset it to {bf:Unmapped activity}, which remains in all totals. Without {opt qx()},
+all activity is shown as unmapped. Identical section titles in the metadata are
+grouped together. This page keeps the whole questionnaire regardless of {opt vars()}
+and retains full filter detail above {opt litecap()}. Timing estimates exclude
+the same pauses, session boundaries, and invalid intervals as the existing report.
+
+{pstd}
+In v1.7.28 the review workspace keeps the interview list beside its selected
+case, with pagination, search, and direct navigation to questions, enumerators,
+removal history, and the local event viewer. The suite keeps one header while
+retaining standalone versions of each report. Counts distinguish interviews
+from removal histories and affected question-history units. Resolved means
+resolved under the current automated final-data rules; it does not record a
+human review decision.
+
+{pstd}
+The default interview queue includes qualifying evidence from every contributing
+actor. Each actor is scored separately, and the interview inherits the strongest
+actor priority; signals belonging to different actors are not pooled to create a
+stronger allegation. The evidence panel preserves the responsible actor's name.
+Enumerator fast/night shares use the same live thresholds as interview evidence.
+Supported {opt fastsecs()} values are 0.5 to 10 seconds in half-second steps,
+matching the exact histogram boundaries available to the offline report.
+
+{pstd}
+{opt misscodes(numlist)} is accepted by {cmd:report}, {cmd:skips}, {cmd:check},
+and {cmd:suite}. The same numeric missing-value policy is applied to final-state
+removal checks and Data QC. An explicit list replaces the default numeric list;
+string values such as {cmd:"-9"} remain text. The canonical {cmd:##N/A##}
+string sentinel is treated as missing. Single-select validation uses the full
+option list, including questions with more than 60 options.
+
+{pstd}
+Population scopes remain explicit. Actor and status selection synchronize between
+Behaviour and Skips. Data QC has its own status or supplied-variable breakdown;
+these are alternatives, not joint intersections. Daily activity and question
+timing identify their supported scope beside their results. The interface does
+not imply that unavailable cross-tab intersections have been computed.
 
 {pstd}
 {cmd:report}, the {cmd:skips, html()} page, and both corresponding tabs in
@@ -596,6 +733,25 @@ fabrication. {cmd:timing}/{cmd:flags} replace the event data in memory (like oth
 {cmd:suso} data commands), so {cmd:save} the loaded events first if you plan to
 iterate on {opt gapmins()}/{opt fastsecs()}; {cmd:flags} can be re-run on its own
 output with different flag thresholds without reloading.
+
+{pstd}
+{opt fastsecs()} accepts {bf:0.5 to 10 seconds, in steps of 0.5}. These exact
+cutoffs match the half-second answer-gap buckets embedded in interactive reports.
+Unsupported values are rejected; they are never rounded up to another bucket.
+The live speed/share control uses the same range. In large-survey lite mode, the
+speed cutoff and night window stay fixed at their build-time values because the
+per-actor gap/hour vectors are not embedded. Fast streaks always retain their
+build-time cutoff even when the live speed/share setting changes.
+
+{pstd}
+The default interactive review queue scores each contributor separately and
+includes an interview when any contributor has a review signal. Its tier is the
+strongest individual contributor tier or interview-level workflow tier. Signals
+from different contributors are never pooled to create a stronger tier. Numeric
+summary columns show the primary actor; evidence and CSV identify every flagged
+contributor. Selecting an actor scores that actor's behavior. Shared final-state
+issues remain visible as interview context; they are not assigned to an unrelated
+correction actor. Re-completion evidence retains the named re-completion actor.
 
 {marker maps}{...}
 {title:Maps (GraphQL)}
@@ -649,6 +805,14 @@ the target before adding {opt confirm} in a do-file.
 {synopt:{cmd:r(totalcount)}}server-reported total for a paginated list{p_end}
 {synopt:{cmd:r(saved)}}path written by a download/{opt saving()} command{p_end}
 {synopt:{cmd:r(bytes)}}bytes written by a download{p_end}
+{synopt:{cmd:r(sha256)}}SHA-256 fingerprint of a successful download{p_end}
+{synopt:{cmd:r(backup)}}preserved previous file when replacing a download; empty for a new path{p_end}
+{synopt:{cmd:r(elapsed_seconds)}, {cmd:r(attempts)}}transfer operation time and HTTP attempt count for a download{p_end}
+{synopt:{cmd:r(prepare_seconds)}, {cmd:r(download_seconds)}, {cmd:r(unzip_seconds)}}export stage times; preparation/extraction use whole-second Stata clocks{p_end}
+{synopt:{cmd:r(unzipdir)}, {cmd:r(manifest)}, {cmd:r(unzip_bytes)}}actual completed extraction directory, file/hash manifest and expanded byte count{p_end}
+{synopt:{cmd:r(unzip_backup)}}directory containing prior files replaced during this extraction, if any{p_end}
+{synopt:{cmd:r(dir)}}actual fresh output directory for a backup run{p_end}
+{synopt:{cmd:r(root)}}requested parent directory containing backup runs{p_end}
 {synopt:{cmd:r(jobid)}}export job id (after {cmd:export start}){p_end}
 {synopt:{cmd:r(nevents)}, {cmd:r(nints)}}events and interviews loaded ({cmd:paradata get}/{cmd:load}){p_end}
 {synopt:{cmd:r(nflagged)}, {cmd:r(n_}{it:flag}{cmd:)}}flagged interviews, and count per flag ({cmd:paradata flags}){p_end}
@@ -762,4 +926,3 @@ Survey Solutions product.
 Online: {browse "https://docs.mysurvey.solutions/headquarters/api/api-r-package/":Survey Solutions API documentation}{p_end}
 {pstd}
 Help:  {helpb survEye}, {helpb javacall}, {helpb import}, {helpb shell}{p_end}
-
