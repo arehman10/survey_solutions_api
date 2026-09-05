@@ -2,10 +2,6 @@
 
 **The World Bank · DEC · Enterprise Surveys**
 
-**Local review build v1.7.36 — not published.** Start with the local review
-instructions below and `examples/example.do`. The GitHub installation command
-still downloads the published version, not these candidate changes.
-
 `suso` is a safety-first Stata command that wraps the World Bank **Survey Solutions**
 REST API. A small Java backend (`suso.jar`) performs the authenticated HTTPS calls
 (every verb, including `PATCH`/`DELETE`), list endpoints load **directly into a Stata
