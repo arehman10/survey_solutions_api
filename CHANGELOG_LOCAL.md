@@ -1,4 +1,23 @@
-# SuSo v1.7.36 — centered timing columns
+# SuSo v1.7.37 — filter-aware interview search
+
+Build: `2026-09-08-FILTERSEARCH`; unchanged backend: `1.7.32-SECTIONS`.
+Nothing is pushed or published.
+
+- Reproduced a matching lf_responsive=1 record disappearing because the duration
+  benchmark recalculated and its Watch signal cleared. The old search operated
+  only on flagged records; data membership was correct in the reproduction.
+- Search now includes all matching interviews within the current data/actor/status
+  filters, with explicit No signal labels. Default browsing remains a review
+  queue. Added No active signals to the priority selector.
+- Evidence shows the filter values saved at report generation. Empty-result
+  messages distinguish priority mismatch from exclusion by the main filters.
+- CSV export uses the same search/priority result across all pages. Duration
+  evidence names the current comparison group. Calculations and KPI counts,
+  Stata filter joins/serialization, Java and download behavior are unchanged.
+- Added a synthetic mixed-population example and regressions. The user's actual
+  report payload was not available, so the specific cause remains unconfirmed.
+
+## Prior v1.7.36 alignment update
 
 Build: `2026-09-05-CENTERED`; unchanged backend: `1.7.32-SECTIONS`.
 

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.7.36 CENTERED  05sep2026}{...}
+{* *! version 1.7.37 FILTERSEARCH  08sep2026}{...}
 {vieweralsosee "[D] import" "help import"}{...}
 {vieweralsosee "" "--"}{...}
 {viewerjumpto "Syntax" "suso##syntax"}{...}
@@ -612,6 +612,18 @@ endings with native byte searches, and reads one bounded chunk ahead. Status
 shows elapsed indexing time. Quoted TSV remains an explicit format choice.
 A copy on a local drive can reduce network-drive read delays. Keep the report
 tab open to reuse its index; reloading requires selecting and indexing again.
+
+{pstd}
+Interview search includes matching records with no active review signals.
+Changing a data filter can change the duration comparison group and clear an
+outlier signal even while the interview remains in the filtered data. Search
+results label these records {bf:No signal}; the {bf:No active signals} priority
+option lists them without a search. The evidence panel shows filter values
+saved in the report. A missing value means unavailable; it is never treated as
+zero. Values reflect the supplied data() snapshot when the HTML was generated.
+CSV export follows the displayed search, priority and data filters across all
+pages. With no search and All priorities, the default list contains only review
+signals. Signal counts and calculation methods are unchanged.
 
 {pstd}
 The history view now includes section timing for the selected interview, using

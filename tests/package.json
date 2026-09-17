@@ -1,0 +1,1 @@
+{"name":"suso-offline-tests","private":true,"version":"1.0.0","description":"Development-only DOM test dependency; reports have no npm dependency","devDependencies":{"jsdom":"26.1.0"}}

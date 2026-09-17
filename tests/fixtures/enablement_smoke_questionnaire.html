@@ -1,0 +1,41 @@
+<!doctype html><html><body>
+<section class="section">
+  <div class="section_header">
+    <h2 id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">LISTING</h2>
+    <div class="common-info"><div class="condition"><span>E</span>blocklevel==1</div></div>
+  </div>
+
+  <div class="question-container" id="11111111111111111111111111111111">
+    <div class="question"><div class="question-title">Sc.3a. Registered?</div><div class="common-info"><div class="condition"><span>E</span>(sc0_orig==1) || (sc0_provisional==1)</div></div></div>
+    <div class="answer"><div class="question-meta"><div class="type">single-select</div><div class="variable_name">sc3a</div></div>
+      <div class="answer-editor"><div class="option"><div class="option-value"><span >01</span></div><div class="option-text"><label>Yes</label></div></div><div class="option"><div class="option-value"><span >02</span></div><div class="option-text"><label>No</label></div></div></div>
+    </div>
+  </div>
+
+  <div class="question-container" id="22222222222222222222222222222222">
+    <div class="question"><div class="question-title">Sc.2. Workers</div><div class="common-info"><div class="condition"><span>E</span>(sc0_orig==1 || sc0_provisional==1) &amp;&amp; confirm_informal==true</div></div></div>
+    <div class="answer"><div class="question-meta"><div class="type">numeric: integer</div><div class="variable_name">sc2</div></div></div>
+  </div>
+
+  <div class="group"><div class="group_container">
+    <div class="breacrumbs">LISTING</div><div class="sub_section">OWNER</div>
+    <div class="common-info"><div class="condition"><span>E</span>lf_responsive==1</div></div>
+  </div></div>
+
+  <div class="question-container" id="33333333333333333333333333333333">
+    <div class="question"><div class="question-title">B.0. Do you own this business?</div><div class="common-info"></div></div>
+    <div class="answer"><div class="question-meta"><div class="type">single-select</div><div class="variable_name">b0</div></div><div class="answer-editor"><div class="option"><div class="option-value"><span >01</span></div><div class="option-text"><label>Yes</label></div></div><div class="option"><div class="option-value"><span >02</span></div><div class="option-text"><label>No</label></div></div></div></div>
+  </div>
+
+  <div class="question-container" id="44444444444444444444444444444444">
+    <div class="question"><div class="question-title">B.0.3. Is there only one owner?</div><div class="common-info"></div></div>
+    <div class="answer"><div class="question-meta"><div class="type">single-select</div><div class="variable_name">b03</div></div><div class="answer-editor"><div class="option"><div class="option-value"><span >01</span></div><div class="option-text"><label>Yes</label></div></div><div class="option"><div class="option-value"><span >02</span></div><div class="option-text"><label>No</label></div></div></div></div>
+  </div>
+
+  <div class="question-container" id="55555555555555555555555555555555">
+    <div class="question"><div class="question-title">B.9. What is your age?</div><div class="common-info"><div class="condition"><span>E</span>b0==1</div></div></div>
+    <div class="answer"><div class="question-meta"><div class="type">numeric: integer</div><div class="variable_name">b9_you</div></div></div>
+  </div>
+  <div class="group_footer"></div>
+</section>
+</body></html>

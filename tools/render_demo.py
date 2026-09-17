@@ -283,6 +283,28 @@ def fixture():
     return data, cases, dq, questions
 
 
+def filter_fixture():
+    """Synthetic mixed-population duration example; no actual survey records."""
+    import copy
+    seed, _, _, _ = fixture()
+    data = copy.deepcopy(seed)
+    base = seed['rows'][3]
+    actor = next(a for a in seed['actors'] if a['id'] == base['id'])
+    data.update(rows=[], actors=[], q=[], aq=[], rem=[], daily=[], st=[], sa=[])
+    data['meta']['fdims'] = [dict(v='lf_responsive', vals=[dict(c='0',l='0'), dict(c='1',l='1')])]
+    for i in range(60):
+        duration = 13.4 if i == 42 else (1 + (i % 7)*.05 if i < 42 else 10 + (i-42)*.7)
+        r = copy.deepcopy(base)
+        r.update(id=f'00000000-0000-0000-0000-{i+1:012d}', k=f'00-00-00-{i+1:02d}', a=str(100+i+1),
+                 r='Example interviewer', le='Example interviewer', fi='Example interviewer',
+                 ws='ApprovedByHeadquarters', wsp='ApprovedByHeadquarters', wsd='ApprovedByHeadquarters', wsc='approvebyhq',
+                 f={'lf_responsive': '0' if i < 42 else '1'}, af=duration, act=duration, paf=duration, pact=duration)
+        a = copy.deepcopy(actor)
+        a.update(id=r['id'], r=r['r'], af=duration, act=duration)
+        data['rows'].append(r); data['actors'].append(a)
+    return data
+
+
 def card_inputs(c):
     resolved=c['t']=='C'; stamp=(dt.datetime(2026,9,4,10,20)-dt.datetime(1960,1,1)).total_seconds()*1000
     return dict(tier=c['t'],h_key=c['key'],h_iid=c['id'],h_ac=c['an'],h_ws=c['ws'],h_links='',h_eventstatus='Changed answer',h_event='has_employees: 1 → 0',h_qt='Does the business have permanent employees?',h_finalevent='has_employees = '+('0' if resolved else '1'),h_tg='has_employees',nlinked_direct=1,nlinked_indirect=0,reltype=1,linkmode=1,nrem=1,nqrem=1,compact=0,timing_unknown=0,final_data_checked=1,n_final_check=c['need'],nopen=0 if resolved else 1,nunknown=0,n_final_answered=0,n_expected_blank=int(resolved),n_answered_disabled=0,n_blank_enabled=c['need'],n_logic_unknown=0,n_notindata=0,n_identityunknown=0,h_check='employees',h_sc='Employment',h_en='',h_wl='employees',wlc='employees',wl_final_answered='',wl_answered_disabled='',wl_expected_blank='employees' if resolved else '',trigger_ord=25,ts0=stamp,nreanswered=0,e_ak=c['ak'],e_ws=c['ws'],e_wc=c['wc'],e_iid=c['id'],e_ac=c['an'],e_event='has_employees: 1 → 0',e_final='has_employees = '+('0' if resolved else '1'),e_check='employees',e_hqlinks='',why='Final data: employees is blank although enabled',e_rel='Direct questionnaire relationship: has_employees',e_tg='has_employees',e_qt='Does the business have permanent employees?',e_wl='employees')
@@ -340,6 +362,14 @@ def render(source, output):
     (output/'section-timing-example.html').write_text(focused,encoding='utf-8')
     history_script="<script>showReviewView('s_hist');window.susoHistoryPreview("+j(history_fixture())+",true,"+j(data['rows'][0]['id'])+");</script>"
     (output/'history-timing-example.html').write_text(pages[1].replace('</body>',history_script+'</body>'),encoding='utf-8')
+    # The default example opens a matching record after its Watch signal clears.
+    filter_data = filter_fixture()
+    filter_page = pages[1].replace('var D='+j(data)+';', 'var D='+j(filter_data)+';')
+    assert filter_page != pages[1]
+    filter_page = re.sub(r'(<section id="r_actions">).*?(</section>)', r'\1\2', filter_page, flags=re.S)
+    filter_script = "<script>showReviewView('s_att');el('c_resp').value='Example interviewer';el('c_fd').value='lf_responsive';fvOptions();el('c_fv').value='1';el('review_search').value='00-00-00-43';renderAll();selectReviewCase("+j(filter_data['rows'][42]['id'])+",false);</script>"
+    filter_page = filter_page.replace('</body>', filter_script+'</body>')
+    (output/'filter-search-example.html').write_text(filter_page,encoding='utf-8')
     manifest=dict(source_sha256=hashlib.sha256(src.encode()).hexdigest(),source_file='suso.ado',fixture_type='SYNTHETIC ILLUSTRATION; SOURCE-TEMPLATE PREVIEW, NOT STATA EXECUTION',rows=18,actors=3,notes=['HTML, CSS, JavaScript and removal-card expressions are read from the specified ADO source using program/marker boundaries.','Dashboard payload numbers are illustrative. No survey data were loaded and no Stata statistical calculations ran.','examples/example.do regenerates a report from the separately provided synthetic raw fixtures in licensed Stata; its numbers may differ from this template preview.','No external server is configured; Headquarters links appear in real reports when configured.','Load examples/synthetic/paradata.tab into the event-history control to try local raw-file reading.'],files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in output.glob('*.html')})
     (output/'fixture_manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({p.name:p.stat().st_size for p in output.glob('*.html')},indent=2))

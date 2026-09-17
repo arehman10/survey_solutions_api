@@ -1,3 +1,4 @@
+*! suso v1.7.37 build 2026-09-08-FILTERSEARCH  (local review: keep matching interviews searchable when signals clear)
 *! suso v1.7.36 build 2026-09-05-CENTERED  (local review: centered numeric interview timing columns)
 *! suso v1.7.35 build 2026-09-05-HISTORYLAYOUT  (local review: aligned interview section timing table)
 *! suso v1.7.34 build 2026-09-05-HISTORY  (local review: faster local indexing and interview section timing)
@@ -270,7 +271,7 @@ end
 
 program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.36 (build 2026-09-05-CENTERED)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.37 (build 2026-09-08-FILTERSEARCH)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -280,8 +281,8 @@ program _suso_about, rclass
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
-    return local version "1.7.36"
-    return local build "2026-09-05-CENTERED"
+    return local version "1.7.37"
+    return local build "2026-09-08-FILTERSEARCH"
     return local expected_backend "1.7.32-SECTIONS"
 end
 
@@ -298,7 +299,7 @@ program _suso_doctor, rclass
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
-    di as txt "  ado code build : " as res "1.7.36-CENTERED"
+    di as txt "  ado code build : " as res "1.7.37-FILTERSEARCH"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -324,7 +325,7 @@ program _suso_doctor, rclass
             if "$SUSO_JARBUILD"!="1.7.32-SECTIONS" {
                 local ok 0
                 di as err "  WARNING       : suso.jar does not match the backend required by this package."
-                di as err "                  Reinstall both files from the same v1.7.36 package, then restart Stata."
+                di as err "                  Reinstall both files from the same v1.7.37 package, then restart Stata."
             }
         }
         else {
@@ -335,7 +336,7 @@ program _suso_doctor, rclass
     }
     _suso_showconfig
     return scalar ok = `ok'
-    return local ado_build "1.7.36-CENTERED"
+    return local ado_build "1.7.37-FILTERSEARCH"
     return local backend_build "`backend'"
     return local java_version "`javaver'"
     capture macro drop SUSO_JAVAVER SUSO_JAVAOK SUSO_JARBUILD
@@ -6287,7 +6288,7 @@ program _suso_para_skips, rclass
             quietly file open `mf' using `"`messages'"', write replace text
             local mh 1
             file write `mf' "PARADATA SKIP/REMOVAL REVIEW" _n
-            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.36)" _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.37)" _n
             file write `mf' "Definition: every consecutive same-actor AnswerRemoved history is inventoried; cascade(`cascade')/window(`window') marks the compact-priority subset." _n
             file write `mf' "`nhist' histories and `nremevents' raw role-scoped event(s); `ncasc' compact histories / `nwiped' compact events; `noutsideevents' outside-pattern events; `naffectedqall' question-history units." _n
             file write `mf' "Loaded all-role raw total: `nraw_allroles_global'; current role-scope raw total: `nraw_role_global'." _n
@@ -6642,7 +6643,7 @@ program _suso_para_skips, rclass
             file write `hf' `"<div class='sblock' id='s_res'><button class='shead' type='button' aria-expanded='false'><h2>Resolved history - no action</h2><span class='pillc' id='p_res' style='display:none'></span><span class='sfind' id='f_res'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
             file write `hf' `"<details><summary id="sk_resolved_summary" style="cursor:pointer;font-size:13px;color:#555;padding:6px 0"></summary><div id="sk_resolved"></div></details><div id="sk_resolved_more" class="meta"></div>"' _n
             file write `hf' `"</div></div>"' _n
-            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.36). Exhaustive histories are audit inventory; compact classification is a prioritization signal, not proof of misconduct. Actor ownership is the actor who emitted the AnswerRemoved run. Current/final status uses data() when supplied, otherwise paradata workflow history.</div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.37). Exhaustive histories are audit inventory; compact classification is a prioritization signal, not proof of misconduct. Actor ownership is the actor who emitted the AnswerRemoved run. Current/final status uses data() when supplied, otherwise paradata workflow history.</div>"' _n
             file write `hf' `"</div><script>"' _n
             file write `hf' `"var SK={meta:{allRole:`nraw_allroles_global',role:`nraw_role_global',globalHistories:`nhist_global',globalCompact:`ncasc_global',globalCompactEvents:`ncompactevents_global'},cases:["' _n
             quietly use `"`DET2'"', clear
@@ -6968,7 +6969,7 @@ program _suso_para_report_js
     file write `fh' `"      out.push({t:'flag', scope:'actor', s:w3, cav:(row.to===1)});"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"    if(f[4]) out.push({t:'flag', scope:'actor', s:'Interviewer '+metricActor+' removed '+P.f1(100*row.ch,0)+' answers per 100 set.'});"' _n
-    file write `fh' `"    if(f[5]) out.push({t:'flag', s:'First-pass active time '+P.f1(row.af,1)+' min is far outside the survey-wide pattern.'});"' _n
+    file write `fh' `"    if(f[5]) out.push({t:'flag', s:'First-pass active time '+P.f1(row.af,1)+' min is far outside the current comparison group (selected status and data filters).'});"' _n
     file write `fh' `"    if(row.vr && row.vp!==1 && row.itq===1 && row.im!==1 && row.imm!==1 && row.nc>0 && row.af!==null && row.af<S.minact) out.push({t:'info', s:'The interview-level short-duration context belongs to primary interviewer '+row.r+'; it is not attributed to selected correction actor '+row.vr+'.'});"' _n
     file write `fh' `"    if(P.unresolvedRemoval(row)) out.push({t:P.ownsWorkflow(row)?'flag':'info', s:'Final-data review after a historical removal run: '+row.fda+' answered; '+row.fad+' answered while disabled; '+row.feb+' blank as expected because disabled; '+row.fbe+' blank while enabled; '+row.flu+' logic unknown; '+row.fnd+' not in supplied data.'});"' _n
     file write `fh' `"    else if(row.cas>0) out.push({t:'info', s:'Historical removal run resolved: '+row.fda+' answered and '+row.feb+' correctly blank because disabled. No action from this history alone.'});"' _n
@@ -7058,7 +7059,17 @@ program _suso_para_report_js
     file write `fh' `"      if(b.wip!==a.wip) return b.wip-a.wip;"' _n
     file write `fh' `"      var am=a.med===null?1e9:a.med,bm=b.med===null?1e9:b.med; return am-bm;"' _n
     file write `fh' `"    });"' _n
-    file write `fh' `"    return {tot:tot,flagged:flagged,tiers:tiers,n:rows.length,ctx:ctx};"' _n
+    file write `fh' `"    return {tot:tot,flagged:flagged,rows:rows,tiers:tiers,n:rows.length,ctx:ctx};"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  reviewSearchMatch: function(r,query){"' _n
+    file write `fh' `"    var names=(r._actors||[]).map(function(a){return a.r;});"' _n
+    file write `fh' `"    return !query||[r.id,r.k,r.r,r.vr,r.ws,(r._reviewActors||[]).join(' '),names.join(' ')].join(' ').toLowerCase().indexOf(query)>=0;"' _n
+    file write `fh' `"  },"' _n
+    file write `fh' `"  reviewMatches: function(A,query,tier){"' _n
+    file write `fh' `"    query=P.norm(query);tier=tier||'';"' _n
+    file write `fh' `"    var source=A.flagged||[];"' _n
+    file write `fh' `"    if(query||tier==='N')source=source.concat((A.rows||[]).filter(function(r){return !r._t;}));"' _n
+    file write `fh' `"    return source.filter(function(r){return (!tier||(tier==='N'?!r._t:r._t===tier))&&P.reviewSearchMatch(r,query);});"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  niceBin: function(p99){"' _n
     file write `fh' `"    var c=[1,2,5,10,15,30,60,120,240,480], i, b=1;"' _n
@@ -7142,7 +7153,7 @@ program _suso_para_report_js
     file write `fh' `"    meta=meta||{};"' _n
     file write `fh' `"    var head=['tier','risk_domains','flags','interview_key','interview_id','assignment_id','metric_actor','primary_interviewer','last_editor','first_interviewer','metric_actor_answer_share','metric_actor_answers','metric_actor_first_pass_answers','metric_actor_active_first_pass_min','metric_actor_active_total_min','metric_actor_question_instances','metric_actor_sessions','field_actor_count','primary_answer_share','status','status_source','status_paradata','status_final_data','status_mismatch','first_pass_first_day','first_pass_last_day','first_pass_work_days','interview_sessions_total','interview_sessions_first_pass','interview_sessions_rework','interview_active_first_pass_min','interview_active_total_min','interview_elapsed_span_min','interview_first_pass_span_min','longest_pause_min','longest_precompletion_pause_min','continued_multiple_days','postcompletion_return','metric_actor_timing_ok','metric_actor_local_time_ok','metric_actor_mode','interview_timing_ok','interview_mode','metric_actor_timed_answers','interview_timed_answers_total','interview_questions_answered','primary_question_instances','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_actor','overlap_min_actor','overlap_min_all_actors','overlap_trace','rejections','resubmit_min','resubmit_questions','resubmit_edit_events','resubmit_field_edit_events','resubmit_actor','resubmit_question_list','cascades','questions_affected','post_completion_field_answer_sets','post_completion_all_answer_edits','post_completion_nonfield_edits','post_completion_outside_cycle','post_completion_field_outside_cycle','post_completion_nonfield_outside_cycle','post_completion_trace','open_errors','review_reasons','context_notes','interview_url','assignment_url','review_actors','actor_flag_evidence'];"' _n
     file write `fh' `"    var lines=[head.join(',')], i, r, j, pat,ev,why,notes,vals,base,iu,au;"' _n
-    file write `fh' `"    var tname={A:'INVESTIGATE',V:'VERIFY',W:'WATCH'};"' _n
+    file write `fh' `"    var tname={A:'INVESTIGATE',V:'VERIFY',W:'WATCH','':'NO_ACTIVE_SIGNALS'};"' _n
     file write `fh' `"    for(i=0;i<flagged.length;i++){"' _n
     file write `fh' `"      r=flagged[i]; pat='';"' _n
     file write `fh' `"      for(j=0;j<8;j++) if(r._f[j]) pat+=P.letters[j];"' _n
@@ -7422,13 +7433,18 @@ program _suso_para_report_js
     file write `fh' `"function reviewRowButton(id){var bs=el('t_worst').querySelectorAll('[data-case-id]');for(var i=0;i<bs.length;i++)if(bs[i].getAttribute('data-case-id')===id)return bs[i];return null;}"' _n
     file write `fh' `"function closeReviewDetail(){var id=reviewLastFocus||selectedCaseId;selectedCaseId='';renderWorst();var b=reviewRowButton(id)||el('t_worst').querySelector('[data-case-id]')||el('review_search');if(b)b.focus();}"' _n
     file write `fh' `"function selectReviewCase(id,focus){selectedCaseId=id;reviewLastFocus=id;renderWorst();if(focus&&el('case_title'))el('case_title').focus();}"' _n
+    file write `fh' `"function reviewDataValues(r){"' _n
+    file write `fh' `"  var dims=(D.meta&&D.meta.fdims)||[],parts=[];"' _n
+    file write `fh' `"  for(var i=0;i<dims.length;i++){var key=dims[i].v,v=r.f&&r.f[key];parts.push('<span class='+Q+'mono'+Q+'>'+esc(key)+' = '+esc(v===undefined||v===null||v===''?'not available':String(v))+'</span>');}"' _n
+    file write `fh' `"  return parts.length?'<p class='+Q+'scope-line report-data-values'+Q+'><b>Values saved in this report:</b> '+parts.join(' / ')+'</p>':'';"' _n
+    file write `fh' `"}"' _n
     file write `fh' `"function renderCaseDetail(r){"' _n
     file write `fh' `"  var box=el('review_detail');if(!box)return;"' _n
     file write `fh' `"  if(!r){box.innerHTML='<h3>Interview evidence</h3><p class='+Q+'note'+Q+'>Select an interview to inspect its signals, final-data checks and event history.</p>';box.className='review-detail empty-detail';return;}"' _n
     file write `fh' `"  box.className='review-detail';"' _n
-    file write `fh' `"  var lab={A:'Investigate',V:'Verify',W:'Watch'},s='<div class='+Q+'case-head'+Q+'><div><span class='+Q+'tier '+attr(r._t)+''+Q+'>'+esc(lab[r._t]||'Review')+'</span><h3 id='+Q+'case_title'+Q+' tabindex='+Q+'-1'+Q+'>'+esc(r.k||r.id)+'</h3></div><button id='+Q+'case_close'+Q+' class='+Q+'pbtn ghost'+Q+' type='+Q+'button'+Q+' aria-label='+Q+'Close interview evidence'+Q+'>Close</button></div>';"' _n
+    file write `fh' `"  var lab={A:'Investigate',V:'Verify',W:'Watch','':'No active signals'},s='<div class='+Q+'case-head'+Q+'><div><span class='+Q+'tier '+attr(r._t||'N')+''+Q+'>'+esc(lab[r._t]||'Review')+'</span><h3 id='+Q+'case_title'+Q+' tabindex='+Q+'-1'+Q+'>'+esc(r.k||r.id)+'</h3></div><button id='+Q+'case_close'+Q+' class='+Q+'pbtn ghost'+Q+' type='+Q+'button'+Q+' aria-label='+Q+'Close interview evidence'+Q+'>Close</button></div>';"' _n
     file write `fh' `"  s+='<p class='+Q+'case-meta'+Q+'>'+esc((r.vr?'Selected actor: ':'Review actor(s): ')+reviewActorText(r))+' · '+esc(r.ws||'Status unavailable')+'</p><div class='+Q+'case-actions'+Q+'>'+hqLinks(r)+'<button type='+Q+'button'+Q+' class='+Q+'pbtn ghost hv-open'+Q+' data-history-id='+Q+''+attr(r.id)+''+Q+'>Event history</button></div>';"' _n
-    file write `fh' `"  s+='<h4>Why this interview is listed</h4>'+detailHtml(r,lastS,lastTeam);"' _n
+    file write `fh' `"  s+=reviewDataValues(r);if(!r._t)s+='<p class='+Q+'note'+Q+'>This interview matches the filters and has no active review signals. Duration comparisons are recalculated for the selected status and data filters.</p>';s+='<h4>'+(r._t?'Why this interview is listed':'Interview checks')+'</h4>'+detailHtml(r,lastS,lastTeam);"' _n
     file write `fh' `"  var cases=document.querySelectorAll('#r_actions .bremcase'),found=[];"' _n
     file write `fh' `"  for(var i=0;i<cases.length;i++)if(cases[i].getAttribute('data-interview')===r.id&&(!lastS.resp||P.norm(cases[i].getAttribute('data-actor'))===P.norm(lastS.resp)))found.push(cases[i].innerHTML);"' _n
     file write `fh' `"  if(found.length)s+='<details class='+Q+'case-context'+Q+'><summary>Affected questions &amp; final values ('+found.length+' removal histories)</summary>'+found.join('')+'</details>';"' _n
@@ -7437,19 +7453,19 @@ program _suso_para_report_js
     file write `fh' `"}"' _n
     file write `fh' `"function renderWorst(){"' _n
     file write `fh' `"  var A=lastA,S=lastS;if(!A)return;"' _n
-    file write `fh' `"  var query=(el('review_search').value||'').toLowerCase(),tier=el('review_tier').value;"' _n
-    file write `fh' `"  var F=A.flagged.filter(function(r){return (!tier||r._t===tier)&&(!query||[r.id,r.k,r.r,r.vr,r.ws,(r._reviewActors||[]).join(' ')].join(' ').toLowerCase().indexOf(query)>=0);});"' _n
+    file write `fh' `"  var query=P.norm(el('review_search').value),tier=el('review_tier').value;"' _n
+    file write `fh' `"  var F=P.reviewMatches(A,query,tier);"' _n
     file write `fh' `"  var size=Math.max(1,Math.floor(S.top)),pages=Math.max(1,Math.ceil(F.length/size));reviewPage=Math.min(reviewPage,pages-1);var start=reviewPage*size,end=Math.min(F.length,start+size),i;"' _n
     file write `fh' `"  reviewVisible=F.slice(start,end);"' _n
     file write `fh' `"  var selected=null;for(i=0;i<F.length;i++)if(F[i].id===selectedCaseId)selected=F[i];if(!selected)selectedCaseId='';if(!reviewInitialized){reviewInitialized=true;selected=F[0]||null;selectedCaseId=selected?selected.id:'';}"' _n
-    file write `fh' `"  var s='<thead><tr><th scope='+Q+'col'+Q+'>Priority</th><th scope='+Q+'col'+Q+'>Interview</th><th scope='+Q+'col'+Q+'>Enumerator</th><th scope='+Q+'col'+Q+'>Reason for review</th><th scope='+Q+'col'+Q+' class='+Q+'r'+Q+' title='+Q+'Active evidence statements; correlated statements may belong to the same risk domain'+Q+'>Open checks</th></tr></thead><tbody>',tlab={A:'Investigate',V:'Verify',W:'Watch'};"' _n
+    file write `fh' `"  var s='<thead><tr><th scope='+Q+'col'+Q+'>Priority</th><th scope='+Q+'col'+Q+'>Interview</th><th scope='+Q+'col'+Q+'>Enumerator</th><th scope='+Q+'col'+Q+'>Reason for review</th><th scope='+Q+'col'+Q+' class='+Q+'r'+Q+' title='+Q+'Active evidence statements; correlated statements may belong to the same risk domain'+Q+'>Open checks</th></tr></thead><tbody>',tlab={A:'Investigate',V:'Verify',W:'Watch','':'No signal'};"' _n
     file write `fh' `"  for(i=start;i<end;i++){"' _n
-    file write `fh' `"    var r=F[i],ev=reviewReasons(r),reason=ev.length?ev[0].s:'Context to review; no active behaviour check',shortReason=reason.length>115?reason.substring(0,112)+'…':reason;"' _n
-    file write `fh' `"    s+='<tr class='+Q+'wrow'+(r.id===selectedCaseId?' selected':'')+''+Q+' data-i='+Q+''+i+''+Q+'><td><span class='+Q+'tier '+attr(r._t)+''+Q+'>'+esc(tlab[r._t]||'Review')+'</span></td><td><button type='+Q+'button'+Q+' class='+Q+'case-select mono'+Q+' data-case-id='+Q+''+attr(r.id)+''+Q+' aria-controls='+Q+'review_detail'+Q+' aria-expanded='+Q+''+(r.id===selectedCaseId?'true':'false')+''+Q+'>'+esc(r.k||r.id.substring(0,8))+'</button><span class='+Q+'row-status'+Q+'>'+esc(r.ws||'')+'</span></td><td>'+esc(reviewActorText(r))+'</td><td class='+Q+'row-reason'+Q+' title='+Q+''+attr(reason)+''+Q+'>'+esc(shortReason)+'</td><td class='+Q+'r'+Q+'>'+ev.length+'</td></tr>';"' _n
+    file write `fh' `"    var r=F[i],ev=reviewReasons(r),reason=ev.length?ev[0].s:'Matches the filters; no active review signals at the current thresholds.',shortReason=reason.length>115?reason.substring(0,112)+'…':reason;"' _n
+    file write `fh' `"    s+='<tr class='+Q+'wrow'+(r.id===selectedCaseId?' selected':'')+''+Q+' data-i='+Q+''+i+''+Q+'><td><span class='+Q+'tier '+attr(r._t||'N')+''+Q+'>'+esc(tlab[r._t]||'Review')+'</span></td><td><button type='+Q+'button'+Q+' class='+Q+'case-select mono'+Q+' data-case-id='+Q+''+attr(r.id)+''+Q+' aria-controls='+Q+'review_detail'+Q+' aria-expanded='+Q+''+(r.id===selectedCaseId?'true':'false')+''+Q+'>'+esc(r.k||r.id.substring(0,8))+'</button><span class='+Q+'row-status'+Q+'>'+esc(r.ws||'')+'</span></td><td>'+esc(reviewActorText(r))+'</td><td class='+Q+'row-reason'+Q+' title='+Q+''+attr(reason)+''+Q+'>'+esc(shortReason)+'</td><td class='+Q+'r'+Q+'>'+ev.length+'</td></tr>';"' _n
     file write `fh' `"  }"' _n
-    file write `fh' `"  if(!F.length)s+='<tr><td colspan='+Q+'5'+Q+' class='+Q+'nodata'+Q+'>'+(A.flagged.length?'No interviews match this search and priority.':'No interviews meet the review criteria in this scope.')+'</td></tr>';"' _n
+    file write `fh' `"  if(!F.length){var inScope=query?(A.rows||[]).some(function(r){return P.reviewSearchMatch(r,query);}):false,inReport=query?D.rows.some(function(r){return P.reviewSearchMatch(r,query);}):false,msg=inScope?'A matching interview is in the filtered data, but does not match the selected priority. Choose All priorities.':(inReport?'A matching interview is saved in this report, but is outside the current actor, status or data-value filters. Clear those filters to inspect its saved values.':(query?'No interview matches this search in the report.':(tier==='N'?'No interviews without active signals match the current filters.':'No interviews meet this priority in the current filters.')));s+='<tr><td colspan='+Q+'5'+Q+' class='+Q+'nodata'+Q+'>'+msg+'</td></tr>'; }"' _n
     file write `fh' `"  el('t_worst').innerHTML=s+'</tbody>';"' _n
-    file write `fh' `"  el('w_none').textContent='';el('review_count').textContent=(F.length?((start+1)+'–'+end):'0')+' of '+F.length+' interviews'+(F.length!==A.flagged.length?' matching search / priority':' in review');"' _n
+    file write `fh' `"  el('w_none').textContent=(query||tier==='N')?'Search includes matching interviews with no active signals.':'';el('review_count').textContent=(F.length?((start+1)+'–'+end):'0')+' of '+F.length+' interviews'+(query||tier?' matching search / priority':' in review');"' _n
     file write `fh' `"  el('review_prev').disabled=reviewPage===0;el('review_next').disabled=reviewPage>=pages-1;"' _n
     file write `fh' `"  renderCaseDetail(selected);"' _n
     file write `fh' `"}"' _n
@@ -7686,7 +7702,7 @@ program _suso_para_report_js
     file write `fh' `"  el('c_reset').addEventListener('click',resetSettings);"' _n
     file write `fh' `"  el('c_csv').addEventListener('click',function(){"' _n
     file write `fh' `"    if(!lastA) return;"' _n
-    file write `fh' `"    var body=P.csv(lastA.flagged,lastS,lastTeam,D.meta);"' _n
+    file write `fh' `"    var body=P.csv(P.reviewMatches(lastA,el('review_search').value,el('review_tier').value),lastS,lastTeam,D.meta);"' _n
     file write `fh' `"    var a=document.createElement('a');"' _n
     file write `fh' `"    a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(body);"' _n
     file write `fh' `"    a.download='suso_review_list.csv';"' _n
@@ -9721,6 +9737,7 @@ program _suso_para_report, rclass
     file write `fh' `".tier.A{background:#fbeaea;color:#8a1f1f;border:1px solid #e8bcbc}"' _n
     file write `fh' `".tier.V{background:#fdf6e3;color:#7a5b00;border:1px solid #ecd9a0}"' _n
     file write `fh' `".tier.W{background:#eef3f8;color:#2a4a6b;border:1px solid #c9d4e0}"' _n
+    file write `fh' `".tier.N{background:#f1f3f5;color:#4e5d6b;border:1px solid #d4dce3}"' _n
     file write `fh' `".chip{display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;border-radius:9px;font-size:10.5px;background:#eef3f8;color:#2a4a6b;border:1px solid #c9d4e0;cursor:default}"' _n
     file write `fh' `".chip.hard{background:#fbeaea;color:#8a1f1f;border-color:#e8bcbc;font-weight:700}"' _n
     file write `fh' `".chip.info{background:#f2f2f2;color:#666;border-color:#ddd}"' _n
@@ -9873,7 +9890,7 @@ program _suso_para_report, rclass
     file write `fh' `"<div id="review_scope" class="scope-line" role="status"></div><div id="verdict" class="verdict"></div>"' _n
     file write `fh' `"<div class='sblock' id='s_att'><button class='shead' type='button' aria-expanded='false'><h2>What needs attention</h2><span class='pillc' id='p_att' style='display:none'></span><span class='sfind' id='f_att'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<details class="review-help"><summary>How priorities are assigned</summary><div class="note">Every interview here comes with the evidence in plain words. <b>Investigate</b> = an unchanged rejection cycle or signals from at least three independent risk domains. <b>Verify</b> = two risk domains, a concentrated pace/duration pattern, a quick correction cycle, an overlap screen, or an unresolved removal history. <b>Watch</b> = one isolated domain or a long/multi-day continuation. Speed and fast streak belong to one pace domain; short and duration-outlier belong to one duration domain, so correlated measures are not double-counted as independent evidence. Click a row for its detail; the key is what you paste into Headquarters. All signals are screening evidence for review, never proof of fabrication. <span id="w_none"></span></div></details>"' _n
-    file write `fh' `"<section><div class="review-toolbar"><div class="ctrl"><label for="review_search">Find interview or enumerator</label><input id="review_search" type="search" placeholder="Key, ID, actor or status"></div><div class="ctrl"><label for="review_tier">Priority</label><select id="review_tier"><option value="">All priorities</option><option value="A">Investigate</option><option value="V">Verify</option><option value="W">Watch</option></select></div><button id="c_csv" class="pbtn ghost" type="button" title="All review interviews in the current actor, status and variable/value scope; includes every page and priority">Download review list (CSV)</button></div><div class="review-grid"><div class="review-list"><div class="table-x"><table id="t_worst" aria-label="Interviews for review"></table></div><div class="review-pagination"><span id="review_count" role="status"></span><button id="review_prev" type="button" class="pbtn ghost">Previous</button><button id="review_next" type="button" class="pbtn ghost">Next</button></div></div><aside id="review_detail" class="review-detail" aria-label="Selected interview evidence"></aside></div></section>"' _n
+    file write `fh' `"<section><div class="review-toolbar"><div class="ctrl"><label for="review_search">Find interview or enumerator</label><input id="review_search" type="search" placeholder="Key, ID, actor or status"></div><div class="ctrl"><label for="review_tier">Priority</label><select id="review_tier"><option value="">All priorities</option><option value="A">Investigate</option><option value="V">Verify</option><option value="W">Watch</option><option value="N">No active signals</option></select></div><button id="c_csv" class="pbtn ghost" type="button" title="Interviews matching the current filters, search and priority; includes every page">Download review list (CSV)</button></div><div class="review-grid"><div class="review-list"><div class="table-x"><table id="t_worst" aria-label="Interviews for review"></table></div><div class="review-pagination"><span id="review_count" role="status"></span><button id="review_prev" type="button" class="pbtn ghost">Previous</button><button id="review_next" type="button" class="pbtn ghost">Next</button></div></div><aside id="review_detail" class="review-detail" aria-label="Selected interview evidence"></aside></div></section>"' _n
     file write `fh' `"</div></div>"' _n
     file write `fh' `"<div class='sblock' id='s_flags'><button class='shead' type='button' aria-expanded='false'><h2>Behaviour flags</h2><span class='sfind' id='f_flags'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
     file write `fh' `"<div class="note">How often each signal fires at the current thresholds. Adjust sensitivity in the panel; everything recomputes instantly. Only interviews with actual fieldwork are analysed; API-preloaded records are set aside.</div>"' _n
@@ -10073,7 +10090,7 @@ program _suso_para_report, rclass
     local rnesc `"`r(out)'"'
     local veline ""
     if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.36) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.37) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
     _suso_para_history_js `fh'
@@ -11104,7 +11121,7 @@ program _suso_para_check, rclass
     file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
     file write `hf' `"<div id="list"></div>"' _n
     file write `hf' `"</div></div>"' _n
-    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.36) on `now'.</div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.37) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
     file write `hf' `"var D={"meta":{"statuses":[`jmeta'],"fdims":[`jfdims']},"rows":["' _n
     forvalues i = 1/`=_N' {
@@ -11569,7 +11586,7 @@ program _suso_para_suite, rclass
         if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
     }
     di as txt "suso paradata: building the QC suite ..."
-    di as txt "  code build: 1.7.36-CENTERED"
+    di as txt "  code build: 1.7.37-FILTERSEARCH"
     tempfile EVX T1 T2 T3
     quietly save `"`EVX'"'
 
