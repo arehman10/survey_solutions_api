@@ -43,7 +43,7 @@ import java.util.regex.Pattern;
 public final class Stata {
 
     /** Backend identifier checked by suso.ado before parsing questionnaire metadata. */
-    private static final String BACKEND_BUILD = "1.7.32-SECTIONS";
+    private static final String BACKEND_BUILD = "1.7.38-WINDOWSQA";
 
     // Restored from the shipped backend: Stata's working directory can differ from the JVM's.
     private static Path resolvePath(String file, String cwd) {
@@ -344,23 +344,34 @@ public final class Stata {
             String rbody = res.body == null ? "" : res.body;
             setG("SUSO_BODY", snippet(rbody, 100000));
 
-            Object root = null;
-            try { root = Json.parse(rbody); } catch (Throwable ignore) {}
-            if (root instanceof Map) {
-                Object errs = ((Map<?, ?>) root).get("errors");
-                if (errs instanceof List && !((List<?>) errs).isEmpty()) {
-                    fail(sc >= 400 ? sc : 1, "GraphQL error: " + firstGqlError((List<?>) errs));
-                    return 0;
-                }
+            Map<?, ?> root;
+            try { root = parseGraphqlResponse(rbody); }
+            catch (IllegalArgumentException malformed) {
+                // Proxies and authentication layers may return HTML/plain text.
+                // Preserve HTTP guidance while keeping strict success parsing.
+                fail(sc >= 400 ? sc : 459,
+                        sc >= 400 ? friendly(sc, rbody) : malformed.getMessage());
+                return 0;
+            }
+            Object errs = root.get("errors");
+            if (errs instanceof List && !((List<?>) errs).isEmpty()) {
+                fail(sc >= 400 ? sc : 1, "GraphQL error: " + firstGqlError((List<?>) errs));
+                return 0;
             }
             if (sc < 200 || sc >= 300) { fail(sc, friendly(sc, rbody)); return 0; }
 
-            Object data = (root instanceof Map) ? ((Map<?, ?>) root).get("data") : null;
+            Object data = root.get("data");
+            if (!(data instanceof Map)) {
+                fail(459, "Invalid GraphQL response: expected a data object.");
+                return 0;
+            }
             if ("1".equals(g("SUSO_GQL_TODATA"))) {
                 String nodePath = g("SUSO_GQL_NODEPATH");
-                Object cur = data;
-                if (cur instanceof Map && !nodePath.isEmpty()) {
-                    for (String seg : nodePath.split("\\.")) if (cur instanceof Map) cur = ((Map<?, ?>) cur).get(seg);
+                List<Object> arr;
+                try { arr = graphqlRows(data, nodePath); }
+                catch (IllegalArgumentException malformed) {
+                    fail(459, malformed.getMessage());
+                    return 0;
                 }
                 // totalCount as a sibling of the nodes array
                 if (data instanceof Map && nodePath.contains(".")) {
@@ -369,9 +380,6 @@ public final class Stata {
                         if (pc instanceof Map) pc = ((Map<?, ?>) pc).get(seg);
                     if (pc instanceof Map) putInt("SUSO_TOTALCOUNT", ((Map<?, ?>) pc).get("totalCount"));
                 }
-                List<Object> arr = new ArrayList<>();
-                if (cur instanceof List) { @SuppressWarnings("unchecked") List<Object> c = (List<Object>) cur; arr = c; }
-                else if (cur != null) arr.add(cur);
                 buildDataset(arr);
                 setG("SUSO_RC", "0"); setG("SUSO_MSG", "OK");
                 return 0;
@@ -382,6 +390,40 @@ public final class Stata {
             fail(1, "gql failed: " + t.getClass().getSimpleName() + ": " + safe(t.getMessage()));
         }
         return 0;
+    }
+
+    /** Validate the response before any dataset-changing SFI calls. */
+    static Map<?, ?> parseGraphqlResponse(String body) {
+        Object root;
+        try { root = Json.parse(body); }
+        catch (RuntimeException malformed) {
+            throw new IllegalArgumentException("Invalid GraphQL response: malformed JSON.", malformed);
+        }
+        if (!(root instanceof Map))
+            throw new IllegalArgumentException("Invalid GraphQL response: expected a JSON object.");
+        Map<?, ?> response = (Map<?, ?>) root;
+        if (response.containsKey("errors") && !(response.get("errors") instanceof List))
+            throw new IllegalArgumentException("Invalid GraphQL response: errors must be an array.");
+        return response;
+    }
+
+    @SuppressWarnings("unchecked")
+    static List<Object> graphqlRows(Object data, String nodePath) {
+        Object current = data;
+        if (!nodePath.isEmpty()) {
+            for (String segment : nodePath.split("\\.", -1)) {
+                if (!(current instanceof Map) || !((Map<?, ?>) current).containsKey(segment))
+                    throw new IllegalArgumentException("Invalid GraphQL response: missing data." + nodePath + ".");
+                current = ((Map<?, ?>) current).get(segment);
+            }
+        }
+        if (!(current instanceof List))
+            throw new IllegalArgumentException("Invalid GraphQL response: data." + nodePath + " must be an array.");
+        for (Object row : (List<?>) current) {
+            if (!(row instanceof Map))
+                throw new IllegalArgumentException("Invalid GraphQL response: data." + nodePath + " contains a non-object row.");
+        }
+        return (List<Object>) current;
     }
 
     @SuppressWarnings("unchecked")

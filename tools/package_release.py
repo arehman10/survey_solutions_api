@@ -85,7 +85,7 @@ def package(repo: Path, output: Path) -> Path:
     write_zip(repo / "ssc_submission.zip", ssc)
 
     entries: dict[str, bytes] = {}
-    roots = [*names, "README.md", "LICENSE", "CHANGELOG_LOCAL.md", "TEST_RESULTS.md", "DOWNLOAD_SAFETY.md",
+    roots = [*names, "README.md", "LICENSE", "CHANGELOG_LOCAL.md", "TEST_RESULTS.md", "PRODUCTION_QA.md", "DOWNLOAD_SAFETY.md", "REPORT_UPDATE_QA.md", "HANDOVER_NEXT_CHAT.md",
              "build.sh", "build.bat", "rebuild_jar.ps1", "suso.jar.sha256",
              "suso_jar_base64.txt", "suso_examples.do", "ssc_submission.zip"]
     for name in roots:
@@ -94,7 +94,7 @@ def package(repo: Path, output: Path) -> Path:
             entries[name] = p.read_bytes()
     allowed_exts = {".py", ".js", ".mjs", ".java", ".md", ".json", ".html",
                     ".do", ".tab", ".csv", ".txt", ".sthlp", ".ado", ".pkg", ".toc", ".jar", ".zip", ".sh", ".bat", ".ps1"}
-    for dirname in ("src", "install", "tools", "tests", "examples"):
+    for dirname in ("src", "install", "tools", "tests", "examples", "wiki"):
         for p in sorted((repo / dirname).rglob("*")):
             if not p.is_file() or p.suffix not in allowed_exts:
                 continue
@@ -102,6 +102,51 @@ def package(repo: Path, output: Path) -> Path:
                    for part in p.relative_to(repo / dirname).parts):
                 continue
             entries[p.relative_to(repo).as_posix()] = p.read_bytes()
+    # Keep the report's evidence links usable in the review archive. Include
+    # only named test evidence, never local TLS keys, truststores or temp data.
+    evidence = [
+        "build/qa_windows/summary.json", "build/qa_windows/stata_existing.log",
+        "build/qa_windows/encrypted.log", "build/qa_windows/scale.log", "build/qa_windows/install.log",
+        "build/qa_windows/backend/original-suso.jar",
+        *[f"build/qa_api/{name}" for name in
+          ("summary.json", "results.tsv", "requests.json", "wire_errors.json", "cases.json",
+           "option_inventory.json", "qa_api_generated.do", "stata.log")],
+        *[f"build/qa_windows/paradata/{name}" for name in
+          ("results.tsv", "qa_paradata.log", "option_inventory.json", "case_inventory.txt", "browser_results.json")],
+    ]
+    backend_evidence = repo / "build/qa_windows/backend"
+    evidence += [p.relative_to(repo).as_posix() for pattern in ("*.log", "summary-*.json")
+                 for p in sorted(backend_evidence.glob(pattern))]
+    # Current report update evidence is deliberately separate from the historical
+    # Windows baseline. Only reviewed, named synthetic artifacts are distributable.
+    update = repo / "build/report_update"
+    report_names = ("report_full", "report_lite", "suite_full", "suite_lite",
+                    "report_explicit_qx", "report_explicit_noqx", "report_custom_qx",
+                    "report_custom_noqx", "suite_custom_qx", "suite_custom_noqx",
+                    "report_no_mapping", "report_absent_fields")
+    evidence += ["build/report_update/" + name for name in (
+        "summary.json", "regression_summary.json", "browser_results.json",
+        "qa_report_update.log", "qa_clock_map.log", "qa_clock_fallback.log",
+        "qa_clock_scale.log", "qa_clock_scale_summary.txt", "fixture_manifest.json",
+        "fixture_counts.txt", "paradata.tab", "paradata_custom.tab", "qx_labels.csv",
+        "report_full.csv", "report_lite.csv", "selected-row-2.png",
+        "selected-row-4.png", "questionnaire-tooltip.png")]
+    evidence += ["build/report_update/" + name + ".html" for name in report_names]
+    evidence += [p.relative_to(repo).as_posix() for p in sorted((update / "regressions").rglob("*"))
+                 if p.is_file() and p.suffix in {".json", ".log", ".tsv", ".txt", ".do"}]
+    # Preserve the evidence linked from the revised help's wiki history.
+    # Use an explicit list so temporary packaging files cannot enter a release.
+    evidence += ["build/help_refresh/baseline.sthlp",
+                 "build/help_refresh/baseline_qa/summary.json",
+                 "build/qa_wiki/validation.json"]
+    evidence += ["build/help_refresh/current/" + name for name in (
+        "summary.json", "stata.log", "qa_help_smcl.do", "suso.sthlp",
+        "width64.txt", "width79.txt", "width100.txt", "render.pdf",
+        "visual_review.json", "viewer_review.json")]
+    for name in evidence:
+        p = repo / name
+        if p.is_file():
+            entries[name] = p.read_bytes()
     manifest = {
         "version": version, "build": build,
         "upstream_commit": "0c41c81fa192b438b86ddb6db377942bd1e40104",
@@ -109,6 +154,7 @@ def package(repo: Path, output: Path) -> Path:
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(entries.items())},
     }
     entries["release-manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
+    (repo / "release-manifest.json").write_bytes(entries["release-manifest.json"])
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"suso_v{version}_local_review.zip"
     write_zip(archive, entries)

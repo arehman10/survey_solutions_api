@@ -1,283 +1,366 @@
 {smcl}
-{* *! version 1.7.37 FILTERSEARCH  08sep2026}{...}
 {vieweralsosee "[D] import" "help import"}{...}
-{vieweralsosee "" "--"}{...}
+{viewerjumpto "Quick start" "suso##quickstart"}{...}
 {viewerjumpto "Syntax" "suso##syntax"}{...}
-{viewerjumpto "Description" "suso##description"}{...}
-{viewerjumpto "Setup" "suso##setup"}{...}
+{viewerjumpto "Connection setup" "suso##setup"}{...}
 {viewerjumpto "Configuration options" "suso##configopts"}{...}
+{viewerjumpto "Exports" "suso##export"}{...}
+{viewerjumpto "Backup" "suso##backup"}{...}
 {viewerjumpto "Common options" "suso##common"}{...}
-{viewerjumpto "Subcommands" "suso##subcommands"}{...}
 {viewerjumpto "Pagination" "suso##pagination"}{...}
-{viewerjumpto "Export workflow" "suso##export"}{...}
-{viewerjumpto "Maps (GraphQL)" "suso##maps"}{...}
-{viewerjumpto "Destructive operations" "suso##destructive"}{...}
+{viewerjumpto "Paradata commands" "suso##paradata"}{...}
+{viewerjumpto "Behaviour report" "suso##report"}{...}
+{viewerjumpto "Combined QC suite" "suso##suite"}{...}
+{viewerjumpto "Report options" "suso##options"}{...}
+{viewerjumpto "Timing and flags" "suso##timing"}{...}
+{viewerjumpto "Skips and removals" "suso##skips"}{...}
+{viewerjumpto "Final-data checks" "suso##check"}{...}
+{viewerjumpto "Questionnaire metadata" "suso##qx"}{...}
+{viewerjumpto "API command reference" "suso##subcommands"}{...}
+{viewerjumpto "Maps" "suso##maps"}{...}
+{viewerjumpto "Server changes and confirmation" "suso##destructive"}{...}
 {viewerjumpto "Stored results" "suso##results"}{...}
 {viewerjumpto "Examples" "suso##examples"}{...}
+{viewerjumpto "Troubleshooting" "suso##troubleshooting"}{...}
 {viewerjumpto "Requirements" "suso##requirements"}{...}
 {viewerjumpto "Author" "suso##author"}{...}
-{title:Title}
 
-{phang}
-{bf:suso} {hline 2} Client for the Survey Solutions (SuSo) REST API
+{marker description}{...}
+{title:suso - Survey Solutions from Stata}
+
+{pstd}
+Use {cmd:suso} to download Survey Solutions data directly into your Stata
+workflow. You can also manage assignments and interviews, back up a workspace,
+and analyse paradata. Start below with a basic Stata data download.{p_end}
+
+{pstd}
+You will need your server's base URL, workspace short name, API account,
+and the questionnaire GUID and version. The first example shows how to
+configure these and download your data.{p_end}
+
+{pstd}
+{bf:Save your current dataset first.} Commands that load data or create result
+tables replace the data in memory. The {cmd:paradata suite} command restores
+the loaded events after it creates the reports.{p_end}
+
+{pstd}
+{help suso##quickstart:Download data} | {help suso##export:Export options} |
+{help suso##paradata:Paradata} | {help suso##subcommands:API commands} |
+{help suso##troubleshooting:Troubleshooting}{p_end}
+
+{marker quickstart}{...}
+{title:Quick start: download your survey data}
+
+{pstd}
+Replace the example server, account, questionnaire and file paths with your
+own. Paste the commands into a do-file. The {cmd:///} at the end of a line
+continues the command on the next line in a do-file.{p_end}
+
+{dlgtab:1. Connect to your Survey Solutions server}
+
+{pstd}
+Use the base server URL and workspace short name supplied for your survey.
+The example hostname is a placeholder.{p_end}
+
+{p 8 8 2}{cmd:suso config, server("https://survey.example.invalid") ///}{p_end}
+{p 12 12 2}{cmd:workspace("primary") user("API_USER")}{p_end}
+{p 8 8 2}{cmd:suso login}{p_end}
+{p 8 8 2}{cmd:suso ping}{p_end}
+
+{pstd}
+{cmd:login} opens a masked credentials prompt. {cmd:ping} checks that Stata
+can connect. Settings apply to the current Stata session.{p_end}
+
+{dlgtab:2. Choose the questionnaire}
+
+{pstd}
+List the questionnaires and identify the GUID and version you want.
+{cmd:all} retrieves every page. This command replaces the dataset in memory,
+so save any current work first.{p_end}
+
+{p 8 8 2}{cmd:suso questionnaire list, all}{p_end}
+{p 8 8 2}{cmd:browse}{p_end}
+
+{pstd}
+Set those values as your session defaults. The values below are examples:{p_end}
+
+{p 8 8 2}{cmd:suso config, ///}{p_end}
+{p 12 12 2}{cmd:guid("76732117-1b19-4c82-bd39-1e34a781a2e9") qver(11)}{p_end}
+
+{dlgtab:3. Download and extract Stata data}
+
+{pstd}
+Choose an existing folder for your ZIP. This command starts the export,
+waits for it to finish, downloads the ZIP, and extracts it:{p_end}
+
+{p 8 8 2}{cmd:suso export get, type(STATA) ///}{p_end}
+{p 12 12 2}{cmd:saving("C:/survey/data.zip") ///}{p_end}
+{p 12 12 2}{cmd:unzipto("C:/survey/export") replace}{p_end}
+{p 8 8 2}{cmd:return list}{p_end}
+
+{pstd}
+The default includes all interview statuses. Add
+{cmd:istatus(ApprovedBySupervisor)} if you want only that status.
+For an encrypted export, add {opt unzipw("archive_password")}.
+See {help suso##export:Exports} for other formats and download options.{p_end}
+
+{dlgtab:4. Open the exported dataset}
+
+{pstd}
+The files are now in {cmd:C:/survey/export}. Extraction does not load them
+automatically. Find your main {cmd:.dta} file in that folder and open it;
+replace {cmd:main.dta} below with its actual filename:{p_end}
+
+{p 8 8 2}{cmd:use "C:/survey/export/main.dta", clear}{p_end}
+
+{pstd}
+Keep roster datasets as separate files until you are ready to link them to
+the main data. For event timing and behaviour reports, continue to
+{help suso##paradata:Paradata analysis} later in this help file.{p_end}
 
 {marker syntax}{...}
 {title:Syntax}
 
-{pstd}
-Configure the connection (once per session):
-
-{p 8 15 2}
-{cmd:suso config} {cmd:,} {opt server(url)} {opt w:orkspace(name)} {opt u:ser(apiuser)}
-{opt p:assword(pw)} [{it:config_options}]
+{p 8 8 2}
+{cmd:suso} {it:command_group} {it:action} [{cmd:,} {it:options}]{p_end}
 
 {pstd}
-Run a command of the form:
-
-{p 8 15 2}
-{cmd:suso} {it:noun} {it:verb} [{cmd:,} {it:options}]
-
-{pstd}
-Quick utilities (no {it:verb}):
-
-{p 8 15 2}
-{cmd:suso} {opt ping}{p_end}
-{p 8 15 2}
-{cmd:suso} {opt doctor} [{cmd:,} {opt strict}]{p_end}
-{p 8 15 2}
-{cmd:suso} {opt login}{p_end}
-{p 8 15 2}
-{cmd:suso} {opt config} [{cmd:, show}|{cmd:clear}]{p_end}
-{p 8 15 2}
-{cmd:suso} {opt examples}{p_end}
-{p 8 15 2}
-{cmd:suso} {opt endpoints}{p_end}
-{p 8 15 2}
-{cmd:suso} {opt about}{p_end}
-{p 8 15 2}
-{cmd:suso} {opt raw} {it:path} [{cmd:,} {opt method(verb)} {opt q:uery(string)} {opt body(json)} {opt todata} {opt savefile(path)} {opt replace} ...]
+For example, {cmd:suso interview list, status(Completed) all} uses the
+{cmd:interview} group and the {cmd:list} action. Put options after a comma.
+Square brackets in syntax descriptions mean optional input; do not type them.
+Quote file paths and text that contain spaces.{p_end}
 
 {pstd}
-where {it:noun} is one of {cmd:assignment}, {cmd:interview}, {cmd:questionnaire},
-{cmd:export}, {cmd:paradata}, {cmd:user}, {cmd:supervisor}, {cmd:interviewer}, {cmd:workspace},
-{cmd:maps}, {cmd:settings}, or {cmd:statistics}; and {it:verb} is the action (for example,
-{cmd:list}, {cmd:get}, {cmd:create}). See {it:{help suso##subcommands:Subcommands}}.
+The API command reference lists options beside each action. For example,
+{cmd:get} with {opt id()} under {cmd:assignment} means
+{cmd:suso assignment get, id(123)}. Use full option names in your do-files;
+underlined prefixes in option descriptions show permitted abbreviations.{p_end}
 
 {pstd}
-Most {cmd:list}/{cmd:get} commands that return rows load them into memory as the
-current dataset, replacing any unsaved data. Scalar responses are returned in
-{cmd:r()}; see {it:{help suso##results:Stored results}}.
+Utilities do not take a separate action:{p_end}
 
-{marker description}{...}
-{title:Description}
+{phang}{cmd:suso doctor, strict}{break}
+Check the Stata/Java environment and package compatibility.{p_end}
 
-{pstd}
-{cmd:suso} is a complete Stata client for the World Bank
-{browse "https://docs.mysurvey.solutions/":Survey Solutions} REST API
-(API v1 and v2). It lets you script fieldwork operations that otherwise require
-the web interface: list and inspect assignments and interviews; approve, reject,
-comment on, reassign and delete interviews; create and manage assignments and
-users; start, monitor and download data exports; and administer workspaces and
-server settings {hline 1} all from Stata do-files.
+{phang}{cmd:suso config, show}{break}
+Show session settings with the password masked.{p_end}
 
-{pstd}
-{cmd:suso} talks to the server through a small, dependency-free Java backend
-({cmd:suso.jar}) using Stata's {helpb javacall}. The Java layer performs the
-HTTPS requests (with proper {cmd:PATCH}/{cmd:PUT}/{cmd:DELETE}, optional proxy,
-streaming file downloads, and redirect handling) and hands results back to
-Stata. You never call Java directly; the {cmd:.ado} interface is the whole API.
+{phang}{cmd:suso config, clear}{break}
+Clear session settings.{p_end}
 
-{pstd}
-List endpoints page through results automatically and load them as a Stata
-dataset; commands that fetch a single object expose its fields in {cmd:r()}.
-Operations that change or remove data on the server are guarded
-(see {it:{help suso##destructive:Destructive operations}}).
+{phang}{cmd:suso examples}{break}
+Print command recipes. Use this help file for the complete workflows.{p_end}
+
+{phang}{cmd:suso endpoints}{break}
+Print the available API command groups and actions.{p_end}
 
 {marker setup}{...}
-{title:Setup}
+{title:Connection setup}
 
 {pstd}
-Configure the server, workspace and an {bf:API user} once per session. Do not
-use Headquarters or Administrator credentials {hline 1} create a dedicated API
-user in the workspace.
+Configure the server and workspace once per Stata session. Use a dedicated
+Survey Solutions API account with the permissions needed for your work.
+Local paradata analysis does not require this step.{p_end}
 
-{p 8 12 2}
-{cmd:. suso config , server("https://your-server") workspace("myws") user("API_USER") password("secret")}{p_end}
-{p 8 12 2}
-{cmd:. suso ping}{p_end}
-
-{pstd}
-You may omit {opt user()} and {opt password()}: if they are not configured, {cmd:suso} prompts for them (with a masked password field) the first time a command contacts the server. You can also trigger this at any time with {cmd:suso login}. Credentials are kept for the session only.
+{p 8 8 2}{cmd:suso config, server("https://survey.example.invalid") ///}{p_end}
+{p 12 12 2}{cmd:workspace("primary") user("API_USER")}{p_end}
+{p 8 8 2}{cmd:suso login}{p_end}
+{p 8 8 2}{cmd:suso ping}{p_end}
 
 {pstd}
-Optionally pin a default questionnaire so you can omit {opt guid()}/{opt qver()}:
-
-{p 8 12 2}
-{cmd:. suso config , guid("76732117-1b19-4c82-bd39-1e34a781a2e9") qver(11)}{p_end}
+If credentials are missing, the first server command prompts for them.
+In batch mode, supply credentials beforehand with {opt user()} and
+{opt password()}, or the supported {cmd:SUSO_PASSWORD} environment variable.
+Bearer authentication uses {opt auth(bearer)} and {opt token()}.
+Settings are stored only for the current Stata session.{p_end}
 
 {pstd}
-Settings live in {cmd:global} macros for the session only. The displayed audit
-path is a destination for selected destructive actions, not a general command or
-paradata log; read-only commands do not create it. Review the current settings with
-{cmd:suso config , show} (the password is masked) and clear them with
-{cmd:suso config , clear}. Verify the Java runtime and the location of
-{cmd:suso.jar} with {cmd:suso doctor}.
+Set a default questionnaire after obtaining its GUID and version from
+{cmd:suso questionnaire list}. Substitute your questionnaire's values:{p_end}
+
+{p 8 8 2}{cmd:suso config, ///}{p_end}
+{p 12 12 2}{cmd:guid("76732117-1b19-4c82-bd39-1e34a781a2e9") qver(11)}{p_end}
+
+{pstd}
+Later commands can omit {opt guid()} and {opt qver()} when these defaults
+are set. File paths are relative to Stata's working directory unless you
+supply a full path; use {cmd:pwd} to see that directory.{p_end}
 
 {marker configopts}{...}
 {title:Configuration options}
 
 {pstd}
-For {cmd:suso config}:
-
-{synoptset 26 tabbed}{...}
-{synopthdr:config_option}
-{synoptline}
-{synopt :{opt server(url)}}base server URL, e.g. {cmd:https://demo.mysurvey.solutions}{p_end}
-{synopt :{opt w:orkspace(name)}}workspace short name (path segment), e.g. {cmd:primary}{p_end}
-{synopt :{opt u:ser(name)}}API user name{p_end}
-{synopt :{opt p:assword(pw)}}API user password{p_end}
-{synopt :{opt token(t)}}use a bearer token instead of user/password{p_end}
-{synopt :{opt auth(type)}}authentication scheme: {cmd:basic} (default) or {cmd:bearer}{p_end}
-{synopt :{opt jar(path)}}full path to {cmd:suso.jar} (only if not on the adopath){p_end}
-{synopt :{opt guid(id)}}default questionnaire GUID for later commands{p_end}
-{synopt :{opt qver(#)}}default questionnaire version{p_end}
-{synopt :{opt exportpw(string)}}archive password when the server encrypts exports (Export Encryption); used automatically by {cmd:export get}/{cmd:download} and {cmd:paradata get}/{cmd:load} when no {opt unzipw()} is given{p_end}
-{synopt :{opt proxyh:ost(h)}}proxy host (corporate networks){p_end}
-{synopt :{opt proxyport(#)}}proxy port{p_end}
-{synopt :{opt proxyuser(u)}}proxy user{p_end}
-{synopt :{opt proxypass(p)}}proxy password{p_end}
-{synopt :{opt insecure}}skip TLS certificate-chain verification for non-download requests only; file downloads require verified TLS{p_end}
-{synopt :{opt noinsecure}}re-enable TLS verification{p_end}
-{synopt :{opt connt:imeout(ms)}}connection timeout in milliseconds (default 30000){p_end}
-{synopt :{opt readt:imeout(ms)}}deadline for receiving the complete response, including its body, in milliseconds per request/redirect hop (default 300000); timed-out downloads do not replace an existing destination file{p_end}
-{synopt :{opt max:rows(#)}}safety cap on rows fetched by one paginated API {cmd:list, all} call (default 100000); it does not limit exports or paradata{p_end}
-{synopt :{opt audit:file(path)}}destination for selected destructive-action records; read-only/paradata commands do not create it{p_end}
-{synopt :{opt show}}display the current configuration (password masked){p_end}
-{synopt :{opt clear}}clear all session configuration{p_end}
-{synoptline}
-
-{marker common}{...}
-{title:Common options}
+For {cmd:suso config}:{p_end}
 
 {phang}
-{opt guid(id)} and {opt qver(#)} identify a questionnaire. They may be omitted
-when a default has been set with {cmd:suso config , guid() qver()}.
+{opt server(url)}{break}
+base server URL, e.g. {cmd:https://demo.mysurvey.solutions}{p_end}
 
 {phang}
-{opt all} on a {cmd:list} command fetches {bf:every} matching record by paging
-through the server; without {opt all} only the first page is returned.
-See {it:{help suso##pagination:Pagination}}.
+{opt w:orkspace(name)}{break}
+workspace short name (path segment), e.g. {cmd:primary}{p_end}
 
 {phang}
-{opt saving(filename)} (with {opt replace}) writes a downloaded artifact
-(export archive, interview/questionnaire PDF, statistics file). Relative paths
-resolve against the Stata working directory ({helpb pwd}).
+{opt u:ser(name)}{break}
+API user name{p_end}
 
 {phang}
-{opt confirm} is required to proceed with most destructive verbs;
-see {it:{help suso##destructive:Destructive operations}}.
+{opt p:assword(pw)}{break}
+API user password{p_end}
 
 {phang}
-{opt verbose} prints the HTTP method, URL and status for the request {hline 1}
-the first thing to add when a call behaves unexpectedly.
+{opt token(t)}{break}
+use a bearer token instead of user/password{p_end}
 
-{marker subcommands}{...}
-{title:Subcommands}
+{phang}
+{opt auth(type)}{break}
+authentication scheme: {cmd:basic} (default) or {cmd:bearer}{p_end}
 
-{pstd}{bf:Connection and utilities}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:suso ping}}test connectivity and credentials{p_end}
-{synopt :{cmd:suso doctor}}check Java/runtime/JAR compatibility; {opt strict} returns nonzero on failure{p_end}
-{synopt :{cmd:suso login}}prompt for the API user and password (masked){p_end}
-{synopt :{cmd:suso config}}set or {cmd:show}/{cmd:clear} the session configuration{p_end}
-{synopt :{cmd:suso about}}show package version{p_end}
-{synopt :{cmd:suso examples}}print copy-paste recipes{p_end}
-{synopt :{cmd:suso endpoints}}print the full command list{p_end}
-{synopt :{cmd:suso raw} {it:path}}call any endpoint not wrapped below{p_end}
-{synoptline}
+{phang}
+{opt jar(path)}{break}
+full path to {cmd:suso.jar} (only if not on the adopath){p_end}
 
-{pstd}{bf:assignment}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:list}}assignments; filters {opt searchby()} {opt resp:onsible()} {opt sup:ervisor()} {opt order()} {opt archived} {opt guid()} {opt qver()} {opt all}{p_end}
-{synopt :{cmd:get} {opt id()}}one assignment{p_end}
-{synopt :{cmd:history} {opt id()}}assignment history ({opt start()} {opt length()}){p_end}
-{synopt :{cmd:quantitysettings} {opt id()}}quantity settings for an assignment{p_end}
-{synopt :{cmd:create} {opt resp:onsible()}}create an assignment ({opt quant:ity()} {opt email()} {opt pass:word()} {opt webmode} {opt audio} {opt comm:ents()} {opt target:area()} {opt ident:ifying()}){p_end}
-{synopt :{cmd:assign} {opt id()} {opt resp:onsible()}}reassign an assignment{p_end}
-{synopt :{cmd:quantity} {opt id()} {opt n()}}change interview quantity{p_end}
-{synopt :{cmd:close} {opt id()}}close an assignment{p_end}
-{synopt :{cmd:archive} {opt id()}}archive an assignment{p_end}
-{synopt :{cmd:unarchive} {opt id()}}unarchive an assignment{p_end}
-{synopt :{cmd:audio} {opt id()} [{opt on} {opt off}]}get or set audio recording{p_end}
-{synopt :{cmd:targetarea} {opt id()} {opt area()}}set the target area{p_end}
-{synoptline}
+{phang}
+{opt guid(id)}{break}
+default questionnaire GUID for later commands{p_end}
 
-{pstd}{bf:interview}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:list}}interviews; filters {opt status()} {opt guid()} {opt qver()} {opt id()} {opt all}{p_end}
-{synopt :{cmd:get} {opt id()}}interview answers (loaded as data){p_end}
-{synopt :{cmd:stats} {opt id()}}interview statistics{p_end}
-{synopt :{cmd:history} {opt id()}}interview event history (loaded as data){p_end}
-{synopt :{cmd:pdf} {opt id()} {opt saving()}}download the interview PDF{p_end}
-{synopt :{cmd:approve} {opt id()}}supervisor approve ({opt comment()}){p_end}
-{synopt :{cmd:reject} {opt id()}}supervisor reject ({opt comment()} {opt resp:onsible()}){p_end}
-{synopt :{cmd:hqapprove} {opt id()}}HQ approve{p_end}
-{synopt :{cmd:hqreject} {opt id()}}HQ reject{p_end}
-{synopt :{cmd:hqunapprove} {opt id()}}HQ unapprove{p_end}
-{synopt :{cmd:assign} {opt id()}}assign to an interviewer ({opt resp:onsible()}|{opt responsibleid()}|{opt responsiblename()}){p_end}
-{synopt :{cmd:assignsupervisor} {opt id()}}assign to a supervisor{p_end}
-{synopt :{cmd:comment} {opt id()} {opt question()} {opt comment()}}comment on a question{p_end}
-{synopt :{cmd:commentbyvar} {opt id()} {opt var:iable()} {opt comment()}}comment by variable ({opt roster:vector()}){p_end}
-{synopt :{cmd:delete} {opt id()}}delete an interview {it:(destructive)}{p_end}
-{synoptline}
+{phang}
+{opt qver(#)}{break}
+default questionnaire version{p_end}
 
-{pstd}{bf:questionnaire}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:list}}questionnaires on the server ({opt all}){p_end}
-{synopt :{cmd:get}}details for {opt guid()} {opt qver()}{p_end}
-{synopt :{cmd:document} {opt saving()}}download the questionnaire document (PDF){p_end}
-{synopt :{cmd:interviews}}interviews for a questionnaire ({opt all}){p_end}
-{synopt :{cmd:audio} [{opt get} {opt on} {opt off}]}get/set audio recording for a questionnaire{p_end}
-{synopt :{cmd:criticality} [{opt get} {opt level()}]}get/set criticality level{p_end}
-{synoptline}
+{phang}
+{opt exportpw(string)}{break}
+archive password when the server encrypts exports (Export Encryption); used automatically by {cmd:export get}/{cmd:download} and {cmd:paradata get}/{cmd:load} when no {opt unzipw()} is given{p_end}
 
-{pstd}{bf:export}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:list}}existing export jobs ({opt type()} {opt istatus()} {opt estatus()} {opt hasfile} {opt all}){p_end}
-{synopt :{cmd:start} {opt type()}}start an export ({opt istatus()} {opt guid()} {opt qver()} {opt from()} {opt to()} {opt meta}|{opt nometa} {opt paradatareduced}){p_end}
-{synopt :{cmd:status} {opt id()}}poll an export job's status{p_end}
-{synopt :{cmd:download} {opt id()} {opt saving()}}download a completed export archive; add {opt unzip} (or {opt unzipw(pw)} for password-protected archives, {opt unzipto(dir)} for the target folder) to extract it{p_end}
-{synopt :{cmd:extract} {opt file()} [{opt unzipto()} {opt unzipw()}]}extract an existing export ZIP locally, without server requests or changing the active dataset{p_end}
-{synopt :{cmd:get}}one-shot {cmd:start} {it:->} poll {it:->} {cmd:download} ({opt saving()} {opt unzip} {opt unzipw()} {opt unzipto()} {opt from()} {opt to()} {opt pollsecs()} {opt jobtimeout()}){p_end}
-{synopt :{cmd:cancel} {opt id()}}cancel/delete an export job {it:(destructive)}{p_end}
-{synoptline}
+{phang}
+{opt proxyh:ost(h)}{break}
+proxy host (corporate networks){p_end}
+
+{phang}
+{opt proxyport(#)}{break}
+proxy port{p_end}
+
+{phang}
+{opt proxyuser(u)}{break}
+proxy user{p_end}
+
+{phang}
+{opt proxypass(p)}{break}
+proxy password{p_end}
+
+{phang}
+{opt insecure}{break}
+skip TLS certificate-chain verification for non-download requests only; file downloads require verified TLS{p_end}
+
+{phang}
+{opt noinsecure}{break}
+re-enable TLS verification{p_end}
+
+{phang}
+{opt connt:imeout(ms)}{break}
+connection timeout in milliseconds (default 30000){p_end}
+
+{phang}
+{opt readt:imeout(ms)}{break}
+deadline for receiving the complete response, including its body, in milliseconds per request/redirect hop (default 300000); timed-out downloads do not replace an existing destination file{p_end}
+
+{phang}
+{opt max:rows(#)}{break}
+safety cap on rows fetched by one paginated API {cmd:list, all} call (default 100000); it does not limit exports or paradata{p_end}
+
+{phang}
+{opt audit:file(path)}{break}
+destination for selected destructive-action records; read-only/paradata commands do not create it{p_end}
+
+{phang}
+{opt show}{break}
+display the current configuration (password masked){p_end}
+
+{phang}
+{opt clear}{break}
+clear all session configuration{p_end}
+
+{marker export}{...}
+{title:Exports}
 
 {pstd}
-{opt type()} is one of {cmd:STATA}, {cmd:SPSS}, {cmd:Tabular}, {cmd:Binary},
-{cmd:DDI}, {cmd:Paradata}. See {it:{help suso##export:Export workflow}}.
+{cmd:export get} starts a job, waits for it to finish, and downloads the
+archive. Set {opt guid()} and {opt qver()} first, or pass them on the command.
+For a Stata export:{p_end}
 
-{pstd}{bf:paradata} {it:(timing analysis and behaviour flags; see {help suso##paradata:Paradata analysis})}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:get}}export {cmd:type(Paradata)}, poll, download, unzip and load the event log ({opt saving()} {opt istatus()} {opt from()} {opt to()} {opt reduced} {opt unzipw()} {opt guid()} {opt qver()}){p_end}
-{synopt :{cmd:load} {opt file()}}load a previously downloaded paradata {cmd:.zip}/{cmd:.tab} offline ({opt unzipw()}){p_end}
-{synopt :{cmd:timing}}collapse events to one row per {opt by(interview)} (default), {opt by(question)} or {opt by(interviewer)} ({opt gapmins()} {opt fastsecs()} {opt allroles}){p_end}
-{synopt :{cmd:flags}}per-interview red flags + interviewer league table ({opt minactive()} {opt burstrun()} {opt nightshare()} {opt churn()} {opt zcut()} {opt top()} {opt saving()}; {opt burstshare()} is retained only as a deprecated compatibility option{p_end}
-{synopt :{cmd:skips}}exhaustive historical {cmd:AnswerRemoved} inventory with a compact-priority classification ({opt cascade()} {opt window()} {opt top()} {opt saving()} {opt vars()} {opt allroles}); {opt qx(file.html)} supplies inherited questionnaire logic and wording, {opt data(file.dta)} checks final values and supplies current/final status plus {cmd:assignment__id}, {opt messages(file.txt)} writes a review list, and {opt html(file.html)} writes the actor/status-filterable page - triage chip navigation over status-carrying collapsible blocks (verification cases open by default; patterns and resolved history behind their headers) - with Headquarters deep links ({opt hqurl()}){p_end}
-{synopt :{cmd:report} {opt saving()}}one-page offline HTML QC report: evidence-tiered review queue (Investigate/Verify/Watch), status-aware actor/question timing, a local-file raw event-history explorer, Headquarters interview/assignment links, CSV export, triage chip navigation over status-carrying collapsible sections, 8 behaviour signals, presets + full threshold panel (runs timing+flags+skips itself; {opt qx()} adds question wording; {opt data()} supplies final status/assignment/filter values; {opt vars()} focuses question/removal detail without changing lifecycle risk; {opt filters()} adds live marginal population controls; {opt hqurl()} overrides the configured workspace URL){p_end}
-{synopt :{cmd:qx} {opt file()}}parse the questionnaire HTML from the export into a dataset: variable, section, type, question text, enabling condition (skip logic), validations, options ({opt saving()}){p_end}
-{synopt :{cmd:suite} {opt saving()}}all three QC pages in one tabbed offline HTML: Behaviour (interactive paradata report, local-file history explorer, and Headquarters links), Skips & removals (supervisor review with Headquarters links), Data QC (needs {opt qx()} and, for the third tab, {opt data()}); the tab bar carries live severity badges and a one-line digest fed by each page, and all three tabs share the triage layout; accepts every threshold option plus {opt vars()}, {opt filters()}, {opt allroles}, and {opt hqurl()}; Behaviour risk uses the full event stream, while {opt vars()} focuses removal detail and the Skip tab{p_end}
-{synopt :{cmd:check} {opt qx()} {opt data()}}audit the exported data against the questionnaire: answers on disabled questions (hard skip violations), enabled-but-unanswered (item nonresponse), single-select values outside the option list ({opt misscodes()} {opt top()} {opt saving()}); {opt html(file.html)} writes a dynamic dashboard: search, section filter, an interview-status filter (e.g. approved-by-supervisor/HQ only, recomputed live from embedded per-status counts), problems-only view, expandable questions with text, skip conditions and out-of-list values, and triage chip navigation over status-carrying collapsible blocks (the question browser opens by default; empty hard checks stay visible as green ticks); {opt status(numlist|approved)} restricts the whole audit to those interview__status codes (approved = 120 130); the dashboard itself defaults its interview-status scope to {bf:fieldwork done} (completed + rejected + approved) so preloaded records that never became interviews do not inflate item nonresponse, and shows a live verdict strip plus a plain-language legend (asked / viol / unans / bad codes); an {it:if} qualifier restricts it by any expression ({cmd:check if lf_responsive==1, ...}); {opt filters(varlist)} adds live Filter variable {c 45} value dropdowns to the dashboard for the named numeric variables (up to 20 distinct values each, 40 in total){p_end}
-{synoptline}
+{p 8 8 2}{cmd:suso export get, type(STATA) ///}{p_end}
+{p 12 12 2}{cmd:saving("C:/survey/data.zip") unzip replace}{p_end}
 
-{pstd}{bf:maps} {it:(uploads/deletes via the GraphQL endpoint; see {help suso##maps:Maps})}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:list}}list maps on the server ({opt workspace()}){p_end}
-{synopt :{cmd:upload} {opt file()}}upload a map file ({opt name()} to override the stored name){p_end}
-{synopt :{cmd:delete} {opt name()}}delete one map {it:(destructive)}{p_end}
-{synopt :{cmd:deleteall}}delete {bf:every} map in the workspace {it:(destructive; dry-run unless confirmed)}{p_end}
-{synopt :{cmd:assign} {opt name()} {opt user()}}give an interviewer access to a map{p_end}
-{synopt :{cmd:unassign} {opt name()} {opt user()}}remove an interviewer's access{p_end}
-{synoptline}
+{pstd}
+Supported types are {cmd:STATA}, {cmd:SPSS}, {cmd:Tabular}, {cmd:Binary},
+{cmd:DDI}, and {cmd:Paradata}. Use {opt istatus()} to choose interview status,
+{opt from()} and {opt to()} to bound export dates, {opt pollsecs()} for the
+polling interval in seconds, and {opt jobtimeout()} for the preparation budget
+in seconds. {cmd:export get} defaults to 10-second polling and a 3,600-second
+preparation budget.{p_end}
+
+{dlgtab:Extract an archive}
+
+{phang}{opt unzip}{break}
+Extract after downloading. The default folder is named after the archive.{p_end}
+
+{phang}{opt unzipto(directory)}{break}
+Extract to this exact directory, including when it already exists.
+This option also requests extraction.{p_end}
+
+{phang}{opt unzipw(password)}{break}
+Supply the archive password and request extraction. Alternatively set
+{opt exportpw()} once with {cmd:suso config}.{p_end}
+
+{pstd}
+To extract a ZIP already on disk, without contacting the server:{p_end}
+
+{p 8 8 2}{cmd:suso export extract, file("C:/survey/data.zip") ///}{p_end}
+{p 12 12 2}{cmd:unzipto("C:/survey/export")}{p_end}
+
+{pstd}
+Extraction does not load the exported datasets into Stata. Use {cmd:use} to
+open the appropriate {cmd:.dta} file. The ZIP remains on disk.{p_end}
+
+{dlgtab:Manage the export steps separately}
+
+{pstd}
+Store the job ID immediately, before another command changes {cmd:r()}:{p_end}
+
+{p 8 8 2}{cmd:suso export start, type(STATA)}{p_end}
+{p 8 8 2}{cmd:local jobid "`r(jobid)'"}{p_end}
+{p 8 8 2}{cmd:suso export status, id(`jobid')}{p_end}
+
+{pstd}
+Repeat the status command until the job reports {cmd:Completed} and
+{cmd:hasexportfile} is true. Completed exports with no matching data have no
+archive to download. When a file is available, run:{p_end}
+
+{p 8 8 2}{cmd:suso export download, id(`jobid') ///}{p_end}
+{p 12 12 2}{cmd:saving("C:/survey/data.zip") replace unzip}{p_end}
+
+{pstd}
+Preparation messages distinguish queued, preparing, and ready states. The
+server percentage may restart between stages; it is not download progress.
+If downloading fails, retain the job ID and retry {cmd:export download}
+instead of creating a new job. A just-completed archive may need a short wait
+before its download endpoint is ready.{p_end}
+
+{dlgtab:Existing files and recovery}
+
+{pstd}
+Downloads require verified HTTPS. A successful {opt replace} download keeps
+an independent copy of the previous file at {cmd:r(backup)}. A failed transfer
+does not replace an existing destination file.{p_end}
+
+{pstd}
+Extraction verifies archive entries before installing them. Unrelated files
+remain in the target folder. Replaced files are backed up under
+{cmd:.suso-backups} in that folder; {cmd:r(unzip_backup)} identifies the backup.
+{cmd:r(unzipdir)} gives the actual extraction directory and {cmd:r(manifest)}
+identifies the file/hash manifest. An interrupted extraction can leave recovery
+material that must be resolved before another extraction; retain it when
+investigating an error.{p_end}
 
 {marker backup}{...}
 {title:Backup}
@@ -297,473 +380,716 @@ requested {opt dir()}. The requested root is returned in {cmd:r(root)} and
 the run's child directory in {cmd:r(dir)}. No sibling outside the root is used.
 Example: {cmd:suso backup , dir("C:/archive/mysurvey") types(STATA Paradata)}.{p_end}
 
-{pstd}{bf:user}, {bf:supervisor}, {bf:interviewer}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:user get} {opt id()}}user details{p_end}
-{synopt :{cmd:user create} {opt role()} {opt u:sername()} {opt p:assword()}}create a user ({opt full:name()} {opt phone()} {opt email()} {opt supervisor()}){p_end}
-{synopt :{cmd:user archive} {opt id()}}archive a user{p_end}
-{synopt :{cmd:user unarchive} {opt id()}}unarchive a user{p_end}
-{synopt :{cmd:supervisor list}}supervisors ({opt all}){p_end}
-{synopt :{cmd:supervisor get} {opt id()}}supervisor details{p_end}
-{synopt :{cmd:supervisor interviewers} {opt id()}}interviewers under a supervisor ({opt all}){p_end}
-{synopt :{cmd:interviewer get} {opt id()}}interviewer details{p_end}
-{synopt :{cmd:interviewer actionslog} {opt id()}}interviewer action log ({opt start()} {opt end()}){p_end}
-{synoptline}
+{marker common}{...}
+{title:Common options}
 
-{pstd}{bf:workspace}, {bf:settings}, {bf:statistics}{p_end}
-{synoptset 30 tabbed}{...}
-{synopt :{cmd:workspace list}}workspaces ({opt includedisabled}){p_end}
-{synopt :{cmd:workspace get|status} {opt name()}}workspace details/status{p_end}
-{synopt :{cmd:workspace create} {opt name()} {opt display:name()}}create a workspace{p_end}
-{synopt :{cmd:workspace update} {opt name()} {opt display:name()}}rename a workspace{p_end}
-{synopt :{cmd:workspace enable|disable} {opt name()}}enable/disable a workspace{p_end}
-{synopt :{cmd:workspace delete} {opt name()}}delete a workspace {it:(destructive)}{p_end}
-{synopt :{cmd:workspace assign} {opt userids()} {opt works:paces()}}assign users to workspaces ({opt mode()} {opt supervisor()}){p_end}
-{synopt :{cmd:settings get}}server global notice{p_end}
-{synopt :{cmd:settings set} {opt message()}}set the global notice{p_end}
-{synopt :{cmd:settings clear} {opt confirm}}clear the global notice (destructive){p_end}
-{synopt :{cmd:statistics questionnaires}}questionnaires available for reporting{p_end}
-{synopt :{cmd:statistics questions}}reportable questions for {opt guid()} {opt qver()}{p_end}
-{synopt :{cmd:statistics report} {opt question()}}tabulation report ({opt exporttype()} {opt saving()} {opt query()}){p_end}
-{synoptline}
+{phang}
+{opt guid(id)} and {opt qver(#)} identify a questionnaire. They may be omitted
+when a default has been set with {cmd:suso config , guid() qver()}.{p_end}
 
-{pstd}
-Most {cmd:workspace} verbs require admin rights and accept {opt usews} to act
-against the configured workspace context.
+{phang}
+{opt all} on a paginated API {cmd:list} command that accepts it fetches {bf:every} matching record by paging
+through the server; without {opt all} only the first page is returned.
+See {help suso##pagination:Pagination}.{p_end}
+
+{phang}
+{opt saving(filename)} (with {opt replace}) writes a downloaded artifact
+(export archive, interview/questionnaire PDF, statistics file). Relative paths
+resolve against the Stata working directory ({helpb pwd}).{p_end}
+
+{phang}
+{opt confirm} is required to proceed with most destructive verbs;
+see {help suso##destructive:Destructive operations}.{p_end}
+
+{phang}
+{opt verbose} prints the HTTP method, URL and status for the request {hline 1}
+the first thing to add when a call behaves unexpectedly.{p_end}
 
 {marker pagination}{...}
 {title:Pagination}
 
 {pstd}
-{cmd:list} commands fetch only the {bf:first page} by default. Add {opt all} to
+Paginated API lists that accept {opt all} fetch the {bf:first page} by
+default. {cmd:workspace list} does not use {opt all}; {cmd:maps list} pages
+automatically. Add {opt all} to
 page through and return every matching record. {cmd:suso} learns the server's
 effective page size automatically (Survey Solutions caps some lists, e.g.
 interviews at 40 per page) and keeps requesting pages until the reported total
 is reached, so {opt all} is reliable even when the server returns fewer rows than
 requested. The {opt maxrows()} configuration value is a safety ceiling on the
-total number of rows a single {opt all} call will load.
-
-{marker export}{...}
-{title:Export workflow}
-
-{pstd}
-Exporting data is three steps: {cmd:start}, poll {cmd:status} until it reports
-{cmd:Completed}, then {cmd:download}.
-
-{p 8 12 2}{cmd:. suso export start , type(STATA) qver(11) istatus(ApprovedBySupervisor)}{p_end}
-{p 8 12 2}{cmd:. suso export status , id(`=r(jobid)')}{p_end}
-{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("data.zip") replace unzip}{p_end}
-
-{pstd}
-Add {opt unzip} to extract the archive after download (into a folder named after the zip, or {opt unzipto(}{it:dir}{cmd:)}). Survey Solutions can password-protect exports; for those, use {opt unzipw(}{it:password}{cmd:)}. Extraction is done by the bundled Java backend and supports the traditional ZipCrypto scheme SuSo uses, so no external unzip tool is required. {cmd:r(unzipped)} and {cmd:r(unzipdir)} report the result.
-
-{pstd}
-Downloads reuse connections, hash bytes while receiving them and
-publish only complete, verified transfers. With {opt replace}, an independent
-copy of the prior file is retained at {cmd:r(backup)}. Downloading requires
-verified HTTPS; insecure TLS and HTTPS-to-HTTP redirects are rejected.
-An archive is extracted into staging inside the requested folder and every
-entry must pass size/CRC checks before verified files are installed.
-Version 1.7.30 honors {opt unzipto()} even when that directory exists.
-Unrelated files stay in place; replaced files are backed up under
-{cmd:.suso-backups} inside the same directory, returned in {cmd:r(unzip_backup)}.
-Handled installation errors trigger rollback. An unresolved rollback or
-interrupted transaction retains recovery material and blocks a later extraction
-instead of silently continuing. This is per-file publication with rollback,
-not a folder-wide atomic swap. {cmd:r(unzipdir)} is the requested destination.
-{cmd:r(manifest)} records this archive's extracted files and hashes; unrelated
-files in the destination are outside that manifest's scope. The source ZIP is retained.
-
-{pstd}
-Version 1.7.31 uses new numbered journal snapshots to avoid repeatedly
-replacing the same recovery file on Windows/network drives. Atomic renames
-retry access-denied errors at most five times, with 1.55 seconds of total
-backoff; persistent permission failures still stop. Rollback leaves an already
-unchanged original file in place. No delete-then-copy fallback is used.
-
-{pstd}
-To reuse a completed download without contacting the server:
-{cmd:suso export extract, file("data.zip") unzipto("your-existing-folder")}.
-{opt unzipw()} or the configured {opt exportpw()} supplies an archive password
-when needed. The command does not import data.
-
-{pstd}
-Early preparation checks wait 1, 2 and 5 seconds before using {opt pollsecs()},
-capped by the configured interval and remaining budget. Preparation time
-includes API calls; an in-flight call remains bounded separately by
-{opt readtimeout()}. GET responses 429/502/503/504 can retry twice within the
-same per-hop timeout. Write requests and timeout/security/disk failures are
-not automatically retried. Errors retain the existing export JobId for a
-manual retry without creating another export.
-
-{pstd}
-Preparation displays {it:Queued on server}, {it:Preparing on server}, or
-{it:Ready for download}; automatic polling also shows elapsed seconds.
-The server's raw percentage can reset between preparation stages and is not
-overall completion or file-transfer progress. Add {opt verbose} to see that
-diagnostic percentage. {cmd:r(progress)} remains the unchanged API value and
-{cmd:r(preparation_state)} contains the displayed state after {cmd:export status}.
-The automatic download waits for {cmd:Completed}, regardless of the percentage.
-
-{pstd}
-{cmd:start} returns the job id in {cmd:r(jobid)}. A questionnaire {bf:version}
-is required (the API identifies a questionnaire as {it:guid}${it:version}); set
-{opt qver()} or a default via {cmd:suso config}. Immediately after a job reports
-{cmd:Completed} the file endpoint can briefly return HTTP 403 while the archive
-is finalized {hline 1} simply retry {cmd:download} (or poll {cmd:status} once
-more). Downloads follow the server's redirect to storage and stream straight to
-{opt saving()}.
-
-{pstd}
-{cmd:export get} wraps the whole chain in one command {hline 1} start the job,
-poll until {cmd:Completed}, download to {opt saving()}, and (with {opt unzip},
-{opt unzipw()} or {opt unzipto()}) extract the archive; {opt unzipw()} is the
-archive password when the server protects exports (defaults to
-{cmd:suso config , exportpw()} when set). It returns {cmd:r(saved)},
-{cmd:r(jobid)} and, after extraction, {cmd:r(unzipdir)}.
+total number of rows a single {opt all} call will load.{p_end}
 
 {marker paradata}{...}
-{title:Paradata analysis}
+{title:Paradata: choose your workflow}
 
 {pstd}
-Survey Solutions records every action taken on an interview (each answer set or
-removed, completes, restarts, rejections, pauses) in the {bf:paradata} event log.
-{cmd:suso paradata} turns that log into fieldwork-quality intelligence in two steps:
+Paradata records what happened during an interview. Use the complete event
+export for timing, removal histories and behaviour review. Keep intervening
+events; use {opt vars()} to focus questions. Flags are review prompts, not proof
+of misconduct.{p_end}
 
-{p 8 12 2}{cmd:. suso paradata get}{space 30}{it:(or offline:} {cmd:suso paradata load , file("para.zip")}{it:)}{p_end}
-{p 8 12 2}{cmd:. suso paradata flags}{p_end}
+{phang}
+{bf:Build an HTML report:} {help suso##report:report} creates the Behaviour page;
+{help suso##suite:suite} combines Behaviour, Skips and optional Data QC.{p_end}
 
-{pstd}
-{cmd:get} runs the full export chain ({cmd:start} {it:->} poll {it:->} {cmd:download}
-{it:->} unzip) for {cmd:type(Paradata)} using your saved questionnaire, keeps the
-{cmd:.zip} on disk, and loads the events into memory. It accepts {opt from()}/{opt to()}
-(ISO dates) to bound large pulls, {opt istatus()}, {opt reduced} for the server's
-reduced paradata, and {opt unzipw()} (synonym: {opt pwd()}) if the server
-password-protects exports {hline 1} or set the password once per session with
-{cmd:suso config , exportpw()} and every unzip uses it automatically; if extraction fails, the downloaded archive is kept
-so you can retry with {cmd:load} without re-exporting.
-{cmd:load} reads a local {cmd:.zip} or {cmd:.tab} with no server connection. Both
-paradata layouts are supported (current {cmd:timestamp_utc}/{cmd:tz_offset} and the
-legacy {cmd:timestamp}/{cmd:offset} columns).
+{phang}
+{bf:Work with Stata tables:} {help suso##timing:timing and flags} summarize
+activity; {help suso##skips:skips} inventories answer removals.{p_end}
+
+{phang}
+{bf:Check final answers:} {help suso##check:check} compares the main data export
+with the questionnaire. It does not require loaded paradata.{p_end}
 
 {pstd}
-{cmd:timing} collapses the events. With {opt by(interview)} (the default) you get one
-row per interview: answer counts, removals, validation errors, rejections, work
-sessions, wall-clock span, {bf:active time} (every inter-event gap capped at
-{opt gapmins(30)} minutes and Paused/completed/session-boundary intervals zeroed), median and p90
-seconds per answer, the share of answers arriving in under {opt fastsecs(2)} seconds,
-the share answered at night (22:00{hline 1}05:59, device-local time), answer churn and
-pace. {opt by(question)} instead ranks questionnaire variables by median seconds to
-answer (slowest first {hline 1} instrument diagnostics), and {opt by(interviewer)}
-pools per interviewer. Milliseconds in {cmd:timestamp_utc} are preserved. Initial
-CAPI preload {cmd:AnswerSet} events at {cmd:InterviewCreated} time are retained for
-answer history but excluded from behaviour counts, timing, overlap, night work and
-churn. Supervisor, HQ and API traffic is likewise excluded: documented role labels
-and codes are mapped directly, with a Completed-event fallback only for unknown
-legacy role codes. {opt allroles} deliberately disables the role exclusion.
+Save your current work before loading data. After success, {cmd:get}/{cmd:load}
+leave event rows; {cmd:timing}, {cmd:flags}, {cmd:skips}, {cmd:report}, {cmd:qx}
+and {cmd:check} leave their result tables. {cmd:suite} restores the loaded events.
+Reload events before another event-based command.{p_end}
+
+{dlgtab:Load a local file}
+
+{p 8 12 2}
+{cmd:suso paradata load, file("C:/survey/paradata.tab")}{p_end}
+{p 8 12 2}
+{cmd:save "C:/survey/events.dta", replace}{p_end}
 
 {pstd}
-If {opt reduced} was used for the server export, the loaded data carry a reduced
-marker and every analysis prints a warning. Reduced paradata omits event context
-that can affect adjacency, enablement and timing; use a full export for acceptance
-or disciplinary review.
+{opt file()} accepts a ZIP or tab-delimited {cmd:.tab}, {cmd:.tsv} or {cmd:.txt}
+file. Alternatively, use {opt dir("folder")} for an extracted folder. The folder
+must contain {cmd:paradata.tab} or exactly one {cmd:.tab} file. To reuse prepared
+events saved as a Stata dataset, use {cmd:use "C:/survey/events.dta", clear}.
+No server configuration or API credentials are needed for local analysis.{p_end}
 
 {pstd}
-{cmd:flags} builds the interview table (if events are in memory) and raises six flags
-per interview: {bf:S} sustained speeding (median sec/answer below {opt fastsecs(2)});
-{bf:B} answer bursts (a within-actor, within-session fast run of at least
-{opt burstrun(8)} newly reached questions); {bf:T} too short (marked Completed
-with first-pass active time below {opt minactive(5)} minutes); {bf:N}
-night work (night share above {opt nightshare(0.25)}, 10+ timed answers); {bf:C}
-answer churn (removed/set above {opt churn(0.20)}, 10+ answers); and {bf:Z} a robust two-sided
-duration outlier (modified z-score of log active time beyond {opt zcut(3.5)}). It
-prints the flag summary, the {opt top(15)} flagged interviews and an interviewer
-league table, and leaves one row per interview in memory ({cmd:f_*} dummies plus
-{cmd:n_flags}) {hline 1} ready to {cmd:save}, merge with microdata, or feed a QC
-dashboard; {opt saving()} writes it directly.
+For a ZIP, {opt dir()} chooses the extraction folder; otherwise extraction uses
+a folder beside the ZIP with its base name. {opt unzipw("password")} supplies
+the archive password. {opt pwd()} is a synonym; explicit {opt unzipw()} takes
+precedence, followed by {opt pwd()}, then configured {opt exportpw()}.
+Import or schema errors preserve the previously loaded dataset.{p_end}
+
+{dlgtab:Download and load from the server}
+
+{p 8 12 2}
+{cmd:suso paradata get} [{cmd:,} {opt saving(path.zip)} {opt dir(folder)}
+{opt guid(id)} {opt qver(#)} {opt istatus(status)} {opt from(date)} {opt to(date)}
+{opt pollsecs(#)} {opt jobtimeout(#)} {opt unzipw(password)} {opt pwd(password)}
+{opt reduced} {opt replace} {opt verbose}]{p_end}
 
 {pstd}
-{cmd:skips} inventories {bf:every} in-scope {cmd:AnswerRemoved} event in the
-untouched paradata stream. Every maximal consecutive same-actor removal run is one
-history, including singletons, pairs, runs with no nearby {cmd:AnswerSet}, and runs
-with incomplete timestamps. By default the review scope is interviewer-role field
-activity; {opt allroles} also admits Supervisor, Headquarters, API, and other-role
-events. The command reports the loaded total across all AnswerRemoved roles
-separately from the current role-scoped total, so the role boundary remains
-visible.
+Configure the connection and questionnaire first. {cmd:get} requests a Paradata
+export, waits, downloads, extracts and loads it. Defaults are all interview
+statuses, polling every 10 seconds, a 3600-second job timeout, and an automatically
+named ZIP in the working directory. Dates use {cmd:YYYY-MM-DD}. The ZIP remains
+on disk; after extraction failure, retry with {cmd:load}. Prefer full exports:
+{opt reduced} omits event context used in QC.{p_end}
+
+{marker report}{...}
+{title:Behaviour report}
+
+{p 8 12 2}
+{cmd:suso paradata report} [{cmd:,} {opt saving(file.html)} {opt replace}
+{opt title(text)} {opt qx(file.html)} {opt data(main.dta)}
+{opt startvar(name)} {opt endvar(name)} {opt filters(varlist)} {opt vars(patterns)}
+{opt gapmins(#)} {opt fastsecs(#)} {opt allroles} {opt cascade(#)} {opt window(#)}
+{opt litecap(#)} {opt misscodes(numlist)} {opt hqurl(url)}]{p_end}
 
 {pstd}
-{opt cascade(3)} is the default {bf:compact-priority threshold}, not an inventory
-filter. {opt cascade(1)} is valid. A history is compact only when it has at least
-the requested number of consecutive removals, every removal is timed, its span is
-within {opt window(60)} seconds, and a question-named {cmd:AnswerSet} immediately
-before or after the run is also within that window. Changing {opt cascade()} can
-change compact histories and compact-event counts, but never the raw event or
-exhaustive-history totals. Events outside the compact subset remain in the review;
-histories whose compact timing cannot be classified are counted explicitly.
+Run directly after loading events. The report contains a review queue, actor and
+question timing, removal evidence, filters and CSV exports. It opens offline in
+a browser. The default filename is {cmd:suso_paradata_qc.html}; the default title
+is {cmd:Paradata QC report}, with the configured workspace appended when present.
+After success, Stata holds one row per interview with combined QC results.
+Use {cmd:save} if you want to keep that table.{p_end}
+
+{p 8 12 2}
+{cmd:suso paradata load, file("C:/survey/paradata.tab")}{p_end}
+{p 8 12 2}
+{cmd:suso paradata report, qx("C:/survey/questionnaire.html") ///}{break}
+{cmd:    saving("C:/survey/behaviour.html") replace}{p_end}
+
+{dlgtab:Question wording and interview clocks}
 
 {pstd}
-With {opt qx()}, inherited questionnaire enabling conditions are used to test the
-bounded preceding and following answer events and identify a questionnaire-linked
-relationship when supported. Without that evidence a nearby answer is timing
-context only, never a proven cause. Raw removal events are not assumed to describe
-the current interview: final-state adjudication covers every exhaustive history
-and separates question instances re-answered later, still ending in
-{cmd:AnswerRemoved}, and unknown. A removal with no usable question identity is
-retained as one explicit identity-unavailable review unit for that history.
-Split-column main-export questions (including checkbox/combobox multi-select and
-text-list families such as {cmd:q__1 q__2}) are resolved back to their parent
-paradata variable. Ordered/ranked or presentation-ambiguous split families are
-labelled not evaluable rather than compared under an assumed export shape.
-Rejection is advised only after the final export confirms that a question is
-actually blank and final questionnaire logic says it should be asked.
+{opt qx()} must name the matching Survey Solutions questionnaire preview HTML.
+It supplies question wording on hover or keyboard focus, question order, sections
+and questionnaire relationships. A variable absent from that questionnaire has
+an explicit unavailable-label message.{p_end}
 
 {pstd}
-{opt vars()} is applied only after all histories and compact flags have been
-constructed on the full event stream. A history is retained when the pattern
-matches any affected removal variable or a bounded preceding/following
-{cmd:AnswerSet}; the complete history is then kept. Thus {opt vars()} cannot delete
-an intervening event, manufacture a shorter run, or change global counts.
+Use {opt startvar(name)} and {opt endvar(name)} to select your questionnaire's
+interview start/end fields. Supply both together, as distinct single identifiers
+with the exact case used in the events. Each permits letters, digits and
+underscores, begins with a letter or underscore, and has at most 80 characters.
+The pair overrides automatic detection and works without {opt qx()}.
+These are questionnaire variable names, not columns to create in Stata.{p_end}
+
+{p 8 12 2}
+{cmd:suso paradata load, file("C:/survey/paradata.tab")}{p_end}
+{p 8 12 2}
+{cmd:suso paradata report, qx("C:/survey/questionnaire.html") ///}{break}
+{cmd:    startvar(a14hmindmy) endvar(a15hmindmy) ///}{break}
+{cmd:    saving("C:/survey/behaviour.html") replace}{p_end}
 
 {pstd}
-The one-row-per-interview result exposes both layers. Exhaustive fields include
-{cmd:n_removal_histories}, {cmd:removed_view}, {cmd:outside_removed},
-{cmd:timing_unknown_histories}/{cmd:timing_unknown_events}, the
-{cmd:removal_*} paradata-state fields, and the {cmd:hist_*} final-data fields.
-The established {cmd:n_cascades}, {cmd:casc_*}, {cmd:r(ncascades)}, and
-{cmd:r(nwiped)} remain compact-only for compatibility; {cmd:r(nwiped)} is an
-alias for the focused compact-event count. Fields ending in {cmd:_all} and
-stored results ending in {cmd:_global} describe the full current role scope
-before {opt vars()} focus. The result merges 1:1 on {cmd:interview__id} with the
-{cmd:flags} table. For enabled-but-unanswered counts across the full final
-dataset, use {cmd:check} or {cmd:suso interview stats , id()}.
+Replace those two example names with your own fields. Without an explicit pair,
+the command uses clear questionnaire boundary metadata and conservative name
+matching. Missing captures and incompatible time bases remain unknown.{p_end}
+
+{dlgtab:Read and use the report}
 
 {pstd}
-{cmd:report} is the recommended first look: run it straight after {cmd:get}/{cmd:load}
-and it produces an {bf:interactive} one-page HTML report. All derived QC data is
-embedded in the file (no internet and no external libraries), so it opens on
-locked-down machines, can be emailed as-is, and the QC views recompute live. The
-optional raw event-history explorer reads a matching {cmd:paradata.tab} locally;
-source events are not embedded or uploaded, and a recipient needs their own
-authorized copy of that file. The report is
-built for a TTL or field supervisor: a verdict line and a {bf:review queue} triage
-every started interview into {bf:Investigate} (an unchanged rejection cycle or
-at least three independent risk domains), {bf:Verify} (two domains, a concentrated
-pace/duration pattern, an overlap screen, a quick correction cycle, or an
-unresolved final-data check), and {bf:Watch} (an isolated signal or relevant
-continuation history). These are screening priorities, not findings of misconduct.
-Every queue row opens an evidence panel
-with the team benchmark alongside ({it:"Typical answer took 1.2 s across 90 timed
-answers (team typical 6.5 s)"}), the interview key ready to paste into Headquarters,
-and per-interview hour-of-day and answer-speed mini charts; the whole queue exports
-to CSV for the field team. Signals: {bf:S} sustained speeding, {bf:B} a streak of
-consecutive fast answers, {bf:T} completed too quickly, {bf:N} night work, {bf:C}
-answer churn, {bf:Z} robust duration outlier, {bf:P} faster than peers on the same
-questions (controls for question mix), {bf:O} two interviews answered in the same
-minute. False-positive control is built in: repeat answers on the same variable
-(multi-select taps) never count as fast, rate flags require a minimum number of
-timed answers, CAWI interviews (from {cmd:InterviewModeChanged}) get no timing
-flags, and a tablet whose {cmd:tz_offset} disagrees with the team caveats its own
-night flag. Sensitivity presets (Standard / Lenient / Strict) sit above the full
-threshold panel. The page also keeps the KPI cards, flag counts, duration and
-answer-speed histograms, answers by hour, fieldwork volume, the enumerator league
-table (now with a vs-team speed ratio and overlap minutes), question timing, and
-nearby or questionnaire-linked answer variables associated with exhaustive removal histories. Compact histories continue to feed the established cascade risk signal; outside-pattern histories remain visible for audit and final-state review but do not become compact risk. Records with no interviewer activity
-(API-preloaded grid points) are counted separately and excluded from all figures.
-The {bf:Actor / enumerator} control also switches {bf:Question timing} to that
-actor's own first-pass AnswerSet events and recomputes the technical
-removal-pattern table from {cmd:AnswerRemoved} histories actually emitted by that
-actor. The current/final Interview status control intersects that actor scope;
-{bf:Approved only} pools Supervisor- and Headquarters-approved statuses. With
-{opt data()}, {cmd:interview__status} supplies current/final status; otherwise the
-last recognized paradata workflow event is used. Empty actor/status intersections
-stay empty rather than falling back to all cases.
-An actor with correction/removal activity but no first-pass answers gets an
-explicit empty Question timing table; survey-wide results are never substituted.
-With {opt qx()}, the default Question timing order follows the static question
-sequence in the supplied Survey Solutions preview (the questionnaire/CAPI
-design order) among variables that have observed first-pass events. Skip logic
-means a particular interview may traverse only its enabled path. Roster
-instances collapse to their base-variable position; event variables absent from
-the preview are appended alphabetically. Without {opt qx()}, the deterministic
-fallback is each variable's first source-event position, with alphabetical
-tie-breaking. Actor, status and text filtering preserve this order. Clicking a
-column header deliberately switches to a diagnostic sort; the
-{bf:Questionnaire order} button restores the design sequence without clearing
-the active filters ({bf:Default order} when no {opt qx()} was supplied).
-It manages the event data internally and leaves the combined per-record QC table
-{hline 1} timing metrics, {cmd:f_*} flags at the defaults, cascade counts, the new
-signal columns ({cmd:rt} peer ratio, {cmd:ovm} overlap minutes, {cmd:fr} fast
-streak, {cmd:rbm}/{cmd:rbe} resubmit bounce, {cmd:pce} post-completion edits,
-{cmd:iscawi}, {cmd:ikey}) and a {cmd:started} marker {hline 1} in memory,
-merge-ready on {cmd:interview__id}. For very large surveys ({opt litecap(15000)}+
-started interviews) the per-interview hour/gap detail is omitted and the
-night-window and fast-seconds controls fall back to build-time values.
+Start with {bf:What needs attention}, then open a row's evidence. The queue uses
+{bf:Investigate}, {bf:Verify} and {bf:Watch} priorities. It considers individual
+contributors, workflow and multiple risk domains. Its eight behaviour signals
+include speed, fast streaks, short duration, night work, churn, duration outliers,
+peer speed and overlap. It is not a ranking of the six Stata flags alone.{p_end}
 
 {pstd}
-Question timing percentages are labelled {bf:Timed reaches < cutoff s (%)};
-0.76 is displayed as 76.0%. The underlying calculation and numeric sorting
-are unchanged. Missing timing remains unavailable.
+Separate {bf:Investigate} evidence identifies pauses during interviewing,
+comparable end-before-start values, and clock revisions of at least 60 seconds
+when the immediately preceding valid capture was by the same known actor.
+Normal terminal pauses are excluded, but a pause lasting at least 60 seconds
+before completion is still reviewed. These checks do not establish intent.{p_end}
 
 {pstd}
-Event history reads the selected local {cmd:paradata.tab} inside the browser;
-there is no upload. Its indexer reuses repeated IDs, scans literal TSV line
-endings with native byte searches, and reads one bounded chunk ahead. Status
-shows elapsed indexing time. Quoted TSV remains an explicit format choice.
-A copy on a local drive can reduce network-drive read delays. Keep the report
-tab open to reuse its index; reloading requires selecting and indexing again.
+Browser filters and thresholds change the HTML view; they do not change Stata's
+QC table. Hover or focus variable names for wording. Export the displayed review
+queue to CSV. The raw-history explorer requires selecting a matching local
+{cmd:paradata.tab}; that file is read locally and is not uploaded. Raw events are
+not embedded in the report, so a recipient needs their own authorized copy.
+Open interview/assignment links use the browser's Headquarters session.{p_end}
+
+{marker suite}{...}
+{title:Combined QC suite}
+
+{p 8 12 2}
+{cmd:suso paradata suite} [{cmd:if} {it:expression}] [{cmd:,}
+{opt saving(file.html)} {opt replace} {opt title(text)} {opt qx(file.html)}
+{opt data(main.dta)} {opt startvar(name)} {opt endvar(name)}
+{opt gapmins(#)} {opt fastsecs(#)} {opt allroles} {opt cascade(#)} {opt window(#)}
+{opt litecap(#)} {opt top(#)} {opt misscodes(numlist)} {opt status(status)}
+{opt filters(varlist)} {opt vars(patterns)} {opt hqurl(url)}]{p_end}
 
 {pstd}
-Interview search includes matching records with no active review signals.
-Changing a data filter can change the duration comparison group and clear an
-outlier signal even while the interview remains in the filtered data. Search
-results label these records {bf:No signal}; the {bf:No active signals} priority
-option lists them without a search. The evidence panel shows filter values
-saved in the report. A missing value means unavailable; it is never treated as
-zero. Values reflect the supplied data() snapshot when the HTML was generated.
-CSV export follows the displayed search, priority and data filters across all
-pages. With no search and All priorities, the default list contains only review
-signals. Signal counts and calculation methods are unchanged.
+The suite contains Behaviour and Skips tabs. Add both {opt qx()} and {opt data()}
+for Data QC; neither is required for the basic suite. {opt data()} requires
+{opt qx()}. The default output is {cmd:suso_qc_suite.html}; the default title is
+{cmd:Survey QC Suite}, with the workspace appended when present. Events are
+restored in memory after the command.{p_end}
+
+{p 8 12 2}
+{cmd:suso paradata load, file("C:/survey/paradata.tab")}{p_end}
+{p 8 12 2}
+{cmd:suso paradata suite, qx("C:/survey/questionnaire.html") ///}{break}
+{cmd:    data("C:/survey/main.dta") ///}{break}
+{cmd:    saving("C:/survey/qc_suite.html") replace}{p_end}
 
 {pstd}
-The history view now includes section timing for the selected interview, using
-all roles. Events without an actor name remain included in {bf:Active min}.
-Actor, event-type and text filters apply after gaps are calculated on the
-complete ordered history. Choose all activity, before first completion or
-later work. Initial preload answers, session/actor boundaries, long gaps and
-invalid timestamps do not create work intervals. Unknown questions remain
-unmapped. This raw-history estimate can differ from the survey-wide
-fieldwork-role summary. Supply {opt qx()} for section mapping.
+Suite {cmd:if} and {opt status()} restrict {bf:Data QC only}. They do not subset
+Behaviour events or the final evidence used for removal review. {cmd:report}
+does not accept {cmd:if} or {opt status()}. For a narrower Behaviour population,
+load complete histories for the intended interviews.{p_end}
+
+{marker options}{...}
+{title:Options shared by paradata workflows}
+
+{phang}
+{opt data(main.dta)} supplies final answers, current status, assignment IDs and
+filter values. Use the main Survey Solutions Stata export containing
+{cmd:interview__id}. With {opt data()}, status comes from {cmd:interview__status};
+otherwise Behaviour uses the last recognized workflow event.{p_end}
+
+{phang}
+{opt vars("patterns")} selects question names or space-separated wildcards,
+for example {cmd:vars("employment* sales*")}. It focuses question/removal detail,
+while retaining full interview lifecycle and risk calculations. It is not an
+interview filter. On {cmd:timing}, it affects question timing only.{p_end}
+
+{phang}
+{opt filters(varlist)} adds live controls from numeric {opt data()} fields, with
+at most 20 nonmissing values per field and 40 overall. Unsupported fields are
+skipped with messages. Behaviour actor/status controls synchronize with Skips;
+variable/value controls do not automatically restrict Skips. Data QC browser
+status and variable breakdowns are alternatives, not joint filters.{p_end}
+
+{phang}
+{opt gapmins(#)} is the positive finite timing-gap limit in minutes; default 30.
+{opt fastsecs(#)} is the fast-answer cutoff in seconds; default 2, allowed 0.5
+through 10 in steps of 0.5. {opt allroles} broadens interviewer-role analysis;
+it does not make preload or unreliable timing valid.{p_end}
+
+{phang}
+{opt cascade(#)} is the minimum compact-removal count; default 3, integer at
+least 1. {opt window(#)} is its positive finite time window in seconds; default
+60. These settings classify compact histories without dropping other histories.
+{opt top(#)} limits printed lists, not HTML case inventories; default 15 for
+{cmd:flags}, {cmd:skips} and {cmd:suite}, and 10 for {cmd:check}. It must be a
+nonnegative integer.{p_end}
+
+{phang}
+{opt litecap(#)} controls report/suite size; default 15000, nonnegative integer.
+When qualifying field-answer interviews exceed it, detailed hour/gap vectors are
+omitted and speed/share and night-window controls use build-time settings.
+{cmd:litecap(0)} requests this mode for any nonempty qualifying population.
+Fast streaks retain their build-time cutoff in either mode.{p_end}
+
+{phang}
+{opt misscodes(numlist)} is accepted by {cmd:report}, {cmd:suite}, {cmd:skips}
+and {cmd:check}. It replaces the default numeric missing list {cmd:-999999999};
+include that value yourself if still needed. Stata missing values remain missing.
+Numeric codes do not convert text such as {cmd:"-9"}; the string sentinel
+{cmd:##N/A##} is treated as missing. Source data files are not changed.{p_end}
+
+{phang}
+{opt hqurl("https://server/workspace")} overrides the configured workspace root
+for browser interview/assignment links. Use a plain HTTP(S) workspace URL.
+Credentials are not embedded. Normal report controls work offline; following
+a Headquarters link contacts that server.{p_end}
+
+{phang}
+{opt saving()}, {opt html()} and {opt messages()} name outputs. Paths resolve
+against Stata's working directory; quote paths containing spaces. Create the
+destination folder first. Add {opt replace} to overwrite an existing output.
+Reports contain interview-level information; share them as survey data.{p_end}
+
+{marker timing}{...}
+{title:Timing tables and six Stata flags}
+
+{p 8 12 2}
+{cmd:suso paradata timing} [{cmd:,} {opt by(level)} {opt gapmins(#)}
+{opt fastsecs(#)} {opt allroles} {opt vars(patterns)}]{p_end}
 
 {pstd}
-The history ID box also accepts {cmd:assignment: 12345}. It finds interviews
-included in this report through the {opt data()} assignment mapping. If several
-interviews share an assignment, choose one; their timelines are never pooled.
+{opt by(interview)} is the default. {opt by(question)} summarizes first-pass
+question timing; {opt by(interviewer)} summarizes actors. Each replaces events
+with its summary table. Active time estimates eligible within-session intervals;
+it excludes pauses, workflow/session boundaries, actor handoffs and long gaps.
+First-pass timing ends at first interviewer completion. Later work remains in
+total/workflow metrics. Invalid timing remains unavailable.{p_end}
+
+{p 8 12 2}
+{cmd:suso paradata flags} [{cmd:,} {opt gapmins(#)} {opt fastsecs(#)} {opt allroles}
+{opt minactive(#)} {opt burstrun(#)} {opt nightshare(#)} {opt churn(#)}
+{opt zcut(#)} {opt top(#)} {opt saving(file.dta)} {opt replace}]{p_end}
 
 {pstd}
-The {bf:Section timing} page (v1.7.32) shows time by top-level questionnaire
-section from {opt qx()}. It includes observed and timed interview counts,
-median and P90 minutes per interview, total hours, and share of scoped time.
-Choose first-pass work, later corrections, or all activity. Actor, current/final
-status, and {opt filters()} variable/value controls intersect; selecting an actor
-uses only that contributor's time. All contributors are summed within each
-interview before computing section medians and nearest-rank P90. Only positive
-durations contribute to quantiles. Unvisited sections show no quantiles.
-Section search and sorting do not change the overall scope denominator.
-CSV export includes the displayed rows, period and filter values.
+Input may be events or a compatible interview timing/flags table. Output is
+one row per interview with six {cmd:f_*} indicators and {cmd:n_flags}:
+{cmd:f_speed} for median answer gaps below {opt fastsecs(2)};
+{cmd:f_burst} for fast runs of at least {opt burstrun(8)};
+{cmd:f_short} for completed first-pass active time below {opt minactive(5)} minutes;
+{cmd:f_night} for night share above {opt nightshare(0.25)};
+{cmd:f_churn} for removals/answers above {opt churn(0.20)}; and
+{cmd:f_outlier} for an absolute robust duration score above {opt zcut(3.5)}.
+Rate/streak flags require at least 10 supporting answers; duration outliers need
+at least 10 eligible positive durations and nonzero median absolute deviation.
+Mode and timing safeguards also apply. {opt minactive()} and {opt churn()} must
+be nonnegative, {opt burstrun()} a positive integer, {opt zcut()} positive, and
+{opt nightshare()} between 0 and 1. Churn may exceed 1.{p_end}
 
 {pstd}
-Section allocation uses the existing full-stream active intervals. The interval
-ending at an answer, removal, or comment belongs to that question's section;
-other events inherit the last section only within the same actor and session.
-Automatic validity events do not move that context. Unknown question events
-reset it to {bf:Unmapped activity}, which remains in all totals. Without {opt qx()},
-all activity is shown as unmapped. Identical section titles in the metadata are
-grouped together. This page keeps the whole questionnaire regardless of {opt vars()}
-and retains full filter detail above {opt litecap()}. Timing estimates exclude
-the same pauses, session boundaries, and invalid intervals as the existing report.
+On existing interview tables, omitted timing options retain the table's settings.
+Flag thresholds can be changed directly. Reload events to change {opt gapmins()},
+{opt fastsecs()} or role scope. Question/interviewer summaries cannot be used as
+input to {cmd:flags}. The compatibility option {opt burstshare()} accepts -1 or
+0 to 1; fast runs are defined by {opt burstrun()}, not that share.{p_end}
+
+{marker skips}{...}
+{title:Answer-removal review}
+
+{p 8 12 2}
+{cmd:suso paradata skips} [{cmd:,} {opt qx(file.html)} {opt data(main.dta)}
+{opt cascade(#)} {opt window(#)} {opt top(#)} {opt vars(patterns)} {opt allroles}
+{opt misscodes(numlist)} {opt full} {opt saving(file.dta)}
+{opt messages(file.txt)} {opt html(file.html)} {opt hqurl(url)} {opt replace}]{p_end}
 
 {pstd}
-In v1.7.28 the review workspace keeps the interview list beside its selected
-case, with pagination, search, and direct navigation to questions, enumerators,
-removal history, and the local event viewer. The suite keeps one header while
-retaining standalone versions of each report. Counts distinguish interviews
-from removal histories and affected question-history units. Resolved means
-resolved under the current automated final-data rules; it does not record a
-human review decision.
+Requires events and leaves an interview-level removal table. Every consecutive
+same-actor {cmd:AnswerRemoved} run is retained, including singletons and unknown
+timing. Compact histories meet the count/window thresholds and have a nearby
+question-named answer. A past removal does not establish that today's value is
+missing. {opt qx()} supplies wording and logic; {opt data()} supplies final-state
+evidence. {opt full} prints detailed cases up to {opt top()} and includes those
+details in the text output.{p_end}
+{p 8 12 2}
+{cmd:suso paradata load, file("C:/survey/paradata.tab")}{p_end}
+{p 8 12 2}
+{cmd:suso paradata skips, qx("C:/survey/questionnaire.html") ///}{break}
+{cmd:    data("C:/survey/main.dta") ///}{break}
+{cmd:    html("C:/survey/removals.html") replace}{p_end}
+
+{marker check}{...}
+{title:Check the final data}
+
+{p 8 12 2}
+{cmd:suso paradata check} [{cmd:if} {it:expression}]{cmd:,}
+{opt qx(file.html)} {opt data(main.dta)} [{opt status(status)}
+{opt misscodes(numlist)} {opt filters(varlist)} {opt top(#)}
+{opt saving(file.dta)} {opt html(file.html)} {opt replace}]{p_end}
 
 {pstd}
-The default interview queue includes qualifying evidence from every contributing
-actor. Each actor is scored separately, and the interview inherits the strongest
-actor priority; signals belonging to different actors are not pooled to create a
-stronger allegation. The evidence panel preserves the responsible actor's name.
-Enumerator fast/night shares use the same live thresholds as interview evidence.
-Supported {opt fastsecs()} values are 0.5 to 10 seconds in half-second steps,
-matching the exact histogram boundaries available to the offline report.
+Both input files are required; loaded events are unnecessary. {cmd:if} is
+evaluated against {opt data()}. {opt status(approved)} selects Supervisor- and
+Headquarters-approved records (120 and 130); a numeric status list is also
+accepted. No command-level status restriction is applied by default.{p_end}
 
 {pstd}
-{opt misscodes(numlist)} is accepted by {cmd:report}, {cmd:skips}, {cmd:check},
-and {cmd:suite}. The same numeric missing-value policy is applied to final-state
-removal checks and Data QC. An explicit list replaces the default numeric list;
-string values such as {cmd:"-9"} remain text. The canonical {cmd:##N/A##}
-string sentinel is treated as missing. Single-select validation uses the full
-option list, including questions with more than 60 options.
+Checks cover enabled-but-missing answers, answered disabled questions,
+undetermined enablement and invalid single-select codes. Unsupported logic
+remains unknown. This does not execute every Survey Solutions validation rule.
+The result in memory is one row per codebook question. {opt saving()} saves it;
+{opt html()} writes the dashboard. No HTML is written without {opt html()}.
+The HTML's initial status view can be narrower than the command population;
+browser selections do not change the Stata audit table.{p_end}
+{p 8 12 2}
+{cmd:suso paradata check, qx("C:/survey/questionnaire.html") ///}{break}
+{cmd:    data("C:/survey/main.dta") status(approved) ///}{break}
+{cmd:    html("C:/survey/data_qc.html") replace}{p_end}
+
+{marker qx}{...}
+{title:Inspect questionnaire metadata}
+
+{p 8 12 2}
+{cmd:suso paradata qx, file(}{it:questionnaire.html}{cmd:)}
+[{opt saving(file.dta)} {opt replace}]{p_end}
 
 {pstd}
-Population scopes remain explicit. Actor and status selection synchronize between
-Behaviour and Skips. Data QC has its own status or supplied-variable breakdown;
-these are alternatives, not joint intersections. Daily activity and question
-timing identify their supported scope beside their results. The interface does
-not imply that unavailable cross-tab intersections have been computed.
+Reads a Survey Solutions questionnaire preview HTML locally through the Java
+backend. The metadata table replaces memory and includes names, wording,
+sections, types, inherited conditions and option values. {cmd:r(nq)} is the
+parsed row count. A separate {cmd:qx} call is unnecessary before other commands:
+pass their {opt qx()} option and they load the metadata internally.{p_end}
+
+{marker subcommands}{...}
+{title:API command reference}
 
 {pstd}
-{cmd:report}, the {cmd:skips, html()} page, and both corresponding tabs in
-{cmd:suite} add an {bf:Open interview} link for every review case. The target is
-the exact Headquarters review route under the current
-{cmd:suso config , server() workspace()} settings. When {opt data()} contains the
-standard numeric or string {cmd:assignment__id}, a second {bf:Open assignment}
-link is added for that case. Use
-{opt hqurl(https://server/workspace)} to override the configured workspace root
-when building a report offline. The URL must be a plain HTTP(S) workspace URL;
-credentials and API tokens are never written into the HTML. Links open in a new
-browser tab and use that browser's existing Headquarters login session.
+Choose a group below, then use its action with the shown options after a comma.
+Required identifiers are shown beside the action; optional filters follow in
+parentheses. Server permissions determine which actions you can perform.{p_end}
 
 {pstd}
-The {opt html()} review page first applies the {bf:Removal-run actor / enumerator}
-and {bf:Current/final interview status} controls to one common case array. Every
-headline card, technical-pattern row, verification group, and resolved history is
-then recomputed from that exact intersection. The Approved choice pools
-Supervisor- and Headquarters-approved interviews. In {cmd:suite}, actor and status
-selections are synchronized with the Behaviour tab. These browser controls do not
-change Stata's stored results, which retain the command's role/{opt vars()} scope.
+{help suso##assignment:Assignments} | {help suso##interview:Interviews} |
+{help suso##questionnaire:Questionnaires} | {help suso##export:Exports} |
+{help suso##maps:Maps}{p_end}
+
+{marker assignment}{...}
+{dlgtab:Assignments}
+
+{pstd}{cmd:suso assignment} {it:action}{p_end}
+
+{phang}
+{cmd:list}{break}
+assignments; filters {opt searchby()} {opt resp:onsible()} {opt sup:ervisor()} {opt order()} {opt archived} {opt guid()} {opt qver()} {opt all}{p_end}
+
+{phang}
+{cmd:get} {opt id()}{break}
+one assignment{p_end}
+
+{phang}
+{cmd:history} {opt id()}{break}
+assignment history ({opt start()} {opt length()}){p_end}
+
+{phang}
+{cmd:quantitysettings} {opt id()}{break}
+quantity settings for an assignment{p_end}
+
+{phang}
+{cmd:create} {opt resp:onsible()}{break}
+create an assignment ({opt quant:ity()} {opt email()} {opt pass:word()} {opt webmode} {opt audio} {opt comm:ents()} {opt target:area()} {opt ident:ifying()}){p_end}
+
+{phang}
+{cmd:assign} {opt id()} {opt resp:onsible()}{break}
+reassign an assignment{p_end}
+
+{phang}
+{cmd:quantity} {opt id()} {opt n()}{break}
+change interview quantity{p_end}
+
+{phang}
+{cmd:close} {opt id()}{break}
+close an assignment{p_end}
+
+{phang}
+{cmd:archive} {opt id()} {opt confirm}{break}
+Archive an assignment{p_end}
+
+{phang}
+{cmd:unarchive} {opt id()}{break}
+unarchive an assignment{p_end}
+
+{phang}
+{cmd:audio} {opt id()} [{opt on} {opt off}]{break}
+get or set audio recording{p_end}
+
+{phang}
+{cmd:targetarea} {opt id()} {opt area()}{break}
+set the target area{p_end}
+
+
+{marker interview}{...}
+{dlgtab:Interviews}
+
+{pstd}{cmd:suso interview} {it:action}{p_end}
+
+{phang}
+{cmd:list}{break}
+interviews; filters {opt status()} {opt guid()} {opt qver()} {opt id()} {opt all}{p_end}
+
+{phang}
+{cmd:get} {opt id()}{break}
+interview answers (loaded as data){p_end}
+
+{phang}
+{cmd:stats} {opt id()}{break}
+interview statistics{p_end}
+
+{phang}
+{cmd:history} {opt id()}{break}
+interview event history (loaded as data){p_end}
+
+{phang}
+{cmd:pdf} {opt id()} {opt saving()}{break}
+download the interview PDF{p_end}
+
+{phang}
+{cmd:approve} {opt id()}{break}
+supervisor approve ({opt comment()}){p_end}
+
+{phang}
+{cmd:reject} {opt id()}{break}
+supervisor reject ({opt comment()} {opt resp:onsible()}){p_end}
+
+{phang}
+{cmd:hqapprove} {opt id()}{break}
+HQ approve{p_end}
+
+{phang}
+{cmd:hqreject} {opt id()}{break}
+HQ reject{p_end}
+
+{phang}
+{cmd:hqunapprove} {opt id()}{break}
+HQ unapprove{p_end}
+
+{phang}
+{cmd:assign} {opt id()}{break}
+Assign to an interviewer. Supply one of {opt resp:onsible()}, {opt responsibleid()}, or {opt responsiblename()}.{p_end}
+
+{phang}
+{cmd:assignsupervisor} {opt id()}{break}
+Assign to a supervisor. Supply one of {opt resp:onsible()}, {opt responsibleid()}, or {opt responsiblename()}.{p_end}
+
+{phang}
+{cmd:comment} {opt id()} {opt question()} {opt comment()}{break}
+comment on a question{p_end}
+
+{phang}
+{cmd:commentbyvar} {opt id()} {opt var:iable()} {opt comment()}{break}
+comment by variable ({opt roster:vector()}){p_end}
+
+{phang}
+{cmd:delete} {opt id()}{break}
+delete an interview {it:(destructive)}{p_end}
+
+
+{marker questionnaire}{...}
+{dlgtab:Questionnaires}
+
+{pstd}{cmd:suso questionnaire} {it:action}{p_end}
+
+{phang}
+{cmd:list}{break}
+questionnaires on the server ({opt all}){p_end}
+
+{phang}
+{cmd:get}{break}
+details for {opt guid()} {opt qver()}{p_end}
+
+{phang}
+{cmd:document} {opt saving()}{break}
+download the questionnaire document (PDF){p_end}
+
+{phang}
+{cmd:interviews}{break}
+interviews for a questionnaire ({opt all}){p_end}
+
+{phang}
+{cmd:audio} [{opt get} {opt on} {opt off}]{break}
+get/set audio recording for a questionnaire{p_end}
+
+{phang}
+{cmd:criticality} [{opt get} {opt level()}]{break}
+get/set criticality level{p_end}
+
+
+{dlgtab:Export jobs}
+
+{pstd}{cmd:suso export} {it:action}{p_end}
+
+{phang}
+{cmd:list}{break}
+existing export jobs ({opt type()} {opt istatus()} {opt estatus()} {opt hasfile} {opt all}){p_end}
+
+{phang}
+{cmd:start} {opt type()}{break}
+start an export ({opt istatus()} {opt guid()} {opt qver()} {opt from()} {opt to()} {opt meta}|{opt nometa} {opt paradatareduced}){p_end}
+
+{phang}
+{cmd:status} {opt id()}{break}
+poll an export job's status{p_end}
+
+{phang}
+{cmd:download} {opt id()} {opt saving()}{break}
+download a completed export archive; add {opt unzip} (or {opt unzipw(pw)} for password-protected archives, {opt unzipto(dir)} for the target folder) to extract it{p_end}
+
+{phang}
+{cmd:extract} {opt file()} [{opt unzipto()} {opt unzipw()}]{break}
+extract an existing export ZIP locally, without server requests or changing the active dataset{p_end}
+
+{phang}
+{cmd:get} {opt type()} {opt saving()}{break}
+one-shot {cmd:start} {it:->} poll {it:->} {cmd:download} ({opt saving()} {opt unzip} {opt unzipw()} {opt unzipto()} {opt from()} {opt to()} {opt pollsecs()} {opt jobtimeout()}){p_end}
+
+{phang}
+{cmd:cancel} {opt id()}{break}
+cancel/delete an export job {it:(destructive)}{p_end}
+
 
 {pstd}
-The page separates cases into two plain-language sections.
-{bf:Cases needing verification} contains only histories with at least one affected
-question that still appears removed or has an unknown final paradata state.
-{bf:Resolved history - no action} contains fully re-answered cases and is collapsed
-by default. A group labelled {bf:Cause not identified} means that no questionnaire
-relationship was found; the nearest answer event appears only in Technical details.
-A label of {bf:Questionnaire link} means only that the affected questions' conditions
-mention that variable; the interview history still needs review. Raw event counts,
-question text, conditions, and variable names are placed under expandable
-technical details. Technical patterns and resolved histories cover the complete
-filtered inventory; {opt top()} limits only the printed Stata interview list, not
-those HTML sections. The page does not say that answers are
-currently empty merely because an earlier removal event exists, and the size of a
-historical run does not by itself create an action flag.
-Point {opt qx()} at the questionnaire HTML for question wording and
-questionnaire-link review; {opt messages()} writes the same evidence to a plain-text review
-file. {cmd:report , qx()} embeds it in the interactive report. {cmd:check} then
-audits the final exported data against the questionnaire, complementing the
-historical event-stream evidence from {cmd:skips}.
+{opt type()} is one of {cmd:STATA}, {cmd:SPSS}, {cmd:Tabular}, {cmd:Binary},
+{cmd:DDI}, {cmd:Paradata}. See {help suso##export:Export workflow}.
+
+{dlgtab:Maps}
+
+{pstd}{cmd:suso maps} {it:action}. See {help suso##maps:Maps}.{p_end}
+
+{phang}
+{cmd:list}{break}
+list maps on the server ({opt workspace()}){p_end}
+
+{phang}
+{cmd:upload} {opt file()}{break}
+upload a map file ({opt name()} to override the stored name){p_end}
+
+{phang}
+{cmd:delete} {opt name()}{break}
+delete one map {it:(destructive)}{p_end}
+
+{phang}
+{cmd:deleteall}{break}
+delete {bf:every} map in the workspace {it:(destructive; dry-run unless confirmed)}{p_end}
+
+{phang}
+{cmd:assign} {opt name()} {opt user()}{break}
+give an interviewer access to a map{p_end}
+
+{phang}
+{cmd:unassign} {opt name()} {opt user()}{break}
+remove an interviewer's access{p_end}
+
+
+{dlgtab:Users, supervisors, and interviewers}
+
+{pstd}Prefix the actions below with {cmd:suso}.{p_end}
+
+{phang}
+{cmd:user get} {opt id()}{break}
+user details{p_end}
+
+{phang}
+{cmd:user create} {opt role()} {opt u:sername()} {opt p:assword()}{break}
+create a user ({opt full:name()} {opt phone()} {opt email()} {opt supervisor()}){p_end}
+
+{phang}
+{cmd:user archive} {opt id()} {opt confirm}{break}
+Archive a user and that user's interviewers{p_end}
+
+{phang}
+{cmd:user unarchive} {opt id()}{break}
+unarchive a user{p_end}
+
+{phang}
+{cmd:supervisor list}{break}
+supervisors ({opt all}){p_end}
+
+{phang}
+{cmd:supervisor get} {opt id()}{break}
+supervisor details{p_end}
+
+{phang}
+{cmd:supervisor interviewers} {opt id()}{break}
+interviewers under a supervisor ({opt all}){p_end}
+
+{phang}
+{cmd:interviewer get} {opt id()}{break}
+interviewer details{p_end}
+
+{phang}
+{cmd:interviewer actionslog} {opt id()}{break}
+interviewer action log ({opt start()} {opt end()}){p_end}
+
+
+{dlgtab:Workspaces, settings, and statistics}
+
+{pstd}Prefix the actions below with {cmd:suso}.{p_end}
+
+{phang}
+{cmd:workspace list}{break}
+workspaces ({opt includedisabled}){p_end}
+
+{phang}
+{cmd:workspace get|status} {opt name()}{break}
+workspace details/status{p_end}
+
+{phang}
+{cmd:workspace create} {opt name()} {opt display:name()}{break}
+create a workspace{p_end}
+
+{phang}
+{cmd:workspace update} {opt name()} {opt display:name()}{break}
+rename a workspace{p_end}
+
+{phang}
+{cmd:workspace enable|disable} {opt name()}{break}
+Enable/disable a workspace; {cmd:disable} requires {opt confirm}{p_end}
+
+{phang}
+{cmd:workspace delete} {opt name()} {opt iknowthis()}{break}
+delete a workspace {it:(destructive)}{p_end}
+
+{phang}
+{cmd:workspace assign} {opt userids()} {opt works:paces()}{break}
+assign users to workspaces ({opt mode()} {opt supervisor()}){p_end}
+
+{phang}
+{cmd:settings get}{break}
+server global notice{p_end}
+
+{phang}
+{cmd:settings set} {opt message()}{break}
+set the global notice{p_end}
+
+{phang}
+{cmd:settings clear} {opt confirm}{break}
+clear the global notice (destructive){p_end}
+
+{phang}
+{cmd:statistics questionnaires}{break}
+questionnaires available for reporting{p_end}
+
+{phang}
+{cmd:statistics questions}{break}
+reportable questions for {opt guid()} {opt qver()}{p_end}
+
+{phang}
+{cmd:statistics report} {opt question()}{break}
+tabulation report ({opt exporttype()} {opt saving()} {opt query()}){p_end}
+
 
 {pstd}
-Thresholds are deliberately conservative defaults for face-to-face firm surveys;
-tune them to your instrument. Flags are screening signals for review, not proof of
-fabrication. {cmd:timing}/{cmd:flags} replace the event data in memory (like other
-{cmd:suso} data commands), so {cmd:save} the loaded events first if you plan to
-iterate on {opt gapmins()}/{opt fastsecs()}; {cmd:flags} can be re-run on its own
-output with different flag thresholds without reloading.
-
-{pstd}
-{opt fastsecs()} accepts {bf:0.5 to 10 seconds, in steps of 0.5}. These exact
-cutoffs match the half-second answer-gap buckets embedded in interactive reports.
-Unsupported values are rejected; they are never rounded up to another bucket.
-The live speed/share control uses the same range. In large-survey lite mode, the
-speed cutoff and night window stay fixed at their build-time values because the
-per-actor gap/hour vectors are not embedded. Fast streaks always retain their
-build-time cutoff even when the live speed/share setting changes.
-
-{pstd}
-The default interactive review queue scores each contributor separately and
-includes an interview when any contributor has a review signal. Its tier is the
-strongest individual contributor tier or interview-level workflow tier. Signals
-from different contributors are never pooled to create a stronger tier. Numeric
-summary columns show the primary actor; evidence and CSV identify every flagged
-contributor. Selecting an actor scores that actor's behavior. Shared final-state
-issues remain visible as interview context; they are not assigned to an unrelated
-correction actor. Re-completion evidence retains the named re-completion actor.
+Most {cmd:workspace} verbs require admin rights and accept {opt usews} to act
+against the configured workspace context.
 
 {marker maps}{...}
 {title:Maps (GraphQL)}
@@ -771,10 +1097,10 @@ correction actor. Re-completion evidence retains the named re-completion actor.
 {pstd}
 Unlike the rest of {cmd:suso}, map management uses Survey Solutions' {bf:GraphQL}
 endpoint ({cmd:/graphql}), not the REST API. The {cmd:maps} subcommands wrap this
-for you, so the workflow is the same as any other {cmd:suso} command:
+for you, so the workflow is the same as any other {cmd:suso} command:{p_end}
 
 {p 8 12 2}{cmd:. suso maps list}{p_end}
-{p 8 12 2}{cmd:. suso maps upload , file("C:/maps/region.tpk")}{p_end}
+{p 8 12 2}{cmd:. suso maps upload , file("C:/maps/region.zip")}{p_end}
 {p 8 12 2}{cmd:. suso maps assign , name("region.tpk") user("FieldInt01")}{p_end}
 {p 8 12 2}{cmd:. suso maps delete , name("region.tpk") confirm}{p_end}
 
@@ -789,61 +1115,164 @@ delete you confirm by typing the workspace name, e.g. {cmd:suso maps deleteall ,
 default 200) and tolerant of per-map failures, reporting {cmd:r(deleted)}/{cmd:r(failed)}. {cmd:assign}/{cmd:unassign} control which interviewers
 can download a given map to their tablet. If your server expects a workspace
 argument on a map operation and rejects a call, the GraphQL error message is
-shown verbatim so you can adjust.
+shown verbatim so you can adjust.{p_end}
 
 {marker destructive}{...}
-{title:Destructive operations}
+{title:Server changes and confirmation}
 
 {pstd}
-Verbs that delete or irreversibly change server state {hline 1} for example
-{cmd:interview delete}, {cmd:export cancel}, {cmd:workspace delete} {hline 1}
-require the {opt confirm} option to proceed. Selected destructive actions append
-to the configured {opt auditfile()} or the default destination under
-{cmd:sysdir PERSONAL}; read-only, export-download, and paradata/report commands
-do not create that file. {cmd:workspace delete} additionally requires
-{opt iknowthis()} matching the workspace name. This guard is deliberate; review
-the target before adding {opt confirm} in a do-file.
+Actions such as {cmd:interview delete}, {cmd:export cancel},
+{cmd:assignment archive}, {cmd:user archive}, {cmd:workspace disable},
+and {cmd:maps delete} require {opt confirm}. Review the target before adding
+that option. {cmd:user archive} also archives that user's interviewers.{p_end}
+
+{pstd}
+{cmd:workspace delete} instead requires {opt iknowthis(workspace_name)}
+matching the workspace name. {cmd:maps deleteall} lists its targets by default;
+{opt iknowthis(workspace_name)} authorizes deletion of the workspace's maps.
+These two commands do not use {opt confirm}.{p_end}
+
+{pstd}
+Selected destructive actions write records to {opt auditfile()} or its default
+destination under {cmd:sysdir PERSONAL}. This is not a general command log:
+read-only, export-download, and paradata/report commands do not create it.{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
 
 {pstd}
-{cmd:suso} commands are {cmd:rclass}. After any command:
+{cmd:suso} commands are {cmd:rclass}. Available results depend on the action. Run {cmd:return list} immediately
+after that action; copy values into locals before running another command.{p_end}
 
-{synoptset 22 tabbed}{...}
-{p2col 5 22 26 2: Scalars and macros}{p_end}
-{synopt:{cmd:r(http)}}HTTP status code of the last request{p_end}
-{synopt:{cmd:r(nobs)}}number of rows loaded (list/get-as-data commands){p_end}
-{synopt:{cmd:r(totalcount)}}server-reported total for a paginated list{p_end}
-{synopt:{cmd:r(saved)}}path written by a download/{opt saving()} command{p_end}
-{synopt:{cmd:r(bytes)}}bytes written by a download{p_end}
-{synopt:{cmd:r(sha256)}}SHA-256 fingerprint of a successful download{p_end}
-{synopt:{cmd:r(backup)}}preserved previous file when replacing a download; empty for a new path{p_end}
-{synopt:{cmd:r(elapsed_seconds)}, {cmd:r(attempts)}}transfer operation time and HTTP attempt count for a download{p_end}
-{synopt:{cmd:r(prepare_seconds)}, {cmd:r(download_seconds)}, {cmd:r(unzip_seconds)}}export stage times; preparation/extraction use whole-second Stata clocks{p_end}
-{synopt:{cmd:r(unzipdir)}, {cmd:r(manifest)}, {cmd:r(unzip_bytes)}}actual completed extraction directory, file/hash manifest and expanded byte count{p_end}
-{synopt:{cmd:r(unzip_backup)}}directory containing prior files replaced during this extraction, if any{p_end}
-{synopt:{cmd:r(dir)}}actual fresh output directory for a backup run{p_end}
-{synopt:{cmd:r(root)}}requested parent directory containing backup runs{p_end}
-{synopt:{cmd:r(jobid)}}export job id (after {cmd:export start}){p_end}
-{synopt:{cmd:r(nevents)}, {cmd:r(nints)}}events and interviews loaded ({cmd:paradata get}/{cmd:load}){p_end}
-{synopt:{cmd:r(nflagged)}, {cmd:r(n_}{it:flag}{cmd:)}}flagged interviews, and count per flag ({cmd:paradata flags}){p_end}
-{synopt:{cmd:r(nhistories)}, {cmd:r(nhistories_global)}}exhaustive histories in the focused inventory, and in the full current role scope before {opt vars()}{p_end}
-{synopt:{cmd:r(nremovalevents)}, {cmd:r(nremovalevents_global)}, {cmd:r(nremovalevents_allroles)}}raw events in focused histories, in the full current role scope, and across all loaded roles{p_end}
-{synopt:{cmd:r(ncascades)}, {cmd:r(ncascades_global)}}focused and role-scope compact-priority histories{p_end}
-{synopt:{cmd:r(ncompactevents)}, {cmd:r(ncompactevents_global)}, {cmd:r(nwiped)}}focused and role-scope compact events; {cmd:r(nwiped)} is the compatibility alias for focused compact events{p_end}
-{synopt:{cmd:r(noutsideevents)}, {cmd:r(noutsideevents_global)}}focused and role-scope raw events outside compact-priority histories{p_end}
-{synopt:{cmd:r(ntimingunknownhistories)}, {cmd:r(ntimingunknownhistories_global)}}focused and role-scope histories whose compact timing cannot be classified{p_end}
-{synopt:{cmd:r(ntimingunknownevents)}, {cmd:r(ntimingunknownevents_global)}}raw events in those focused and role-scope timing-unknown histories{p_end}
-{synopt:{cmd:r(naffectedquestions)}, {cmd:r(nidentityunknown)}}distinct question-within-history units in the exhaustive focus, including histories represented by an identity-unavailable unit{p_end}
-{synopt:{cmd:r(nreanswered)}, {cmd:r(nopen)}, {cmd:r(nunknown)}}exhaustive-inventory units re-answered later, still ending in AnswerRemoved, or with unknown paradata final state{p_end}
-{synopt:{cmd:r(nfinalanswered)}, {cmd:r(nexpectedblank)}}affected instances answered in the supplied final export or correctly blank because disabled{p_end}
-{synopt:{cmd:r(nanswereddisabled)}, {cmd:r(nblankenabled)}}answers present while disabled or final blanks while enabled{p_end}
-{synopt:{cmd:r(nlogicunknown)}, {cmd:r(nnotindata)}, {cmd:r(nfinalcheck)}}effective logic unknown, absent from supplied data/roster export, and total instances requiring review{p_end}
-{synopt:{cmd:r(hasfinaldata)}, {cmd:r(naffected)}}whether {opt data()} was supplied, and interviews with at least one focused removal history{p_end}
-{synopt:{cmd:r(report)}}path of the written HTML report ({cmd:paradata report}){p_end}
-{synopt:{cmd:r(}{it:field}{cmd:)}}each scalar field of a single-object response, lowercased{p_end}
-{synoptline}
+{phang}
+{cmd:r(http)}{break}
+HTTP status code of the last request{p_end}
+
+{phang}
+{cmd:r(nobs)}{break}
+number of rows loaded (list/get-as-data commands){p_end}
+
+{phang}
+{cmd:r(totalcount)}{break}
+server-reported total for a paginated list{p_end}
+
+{phang}
+{cmd:r(saved)}{break}
+path written by a download/{opt saving()} command{p_end}
+
+{phang}
+{cmd:r(bytes)}{break}
+bytes written by a download{p_end}
+
+{phang}
+{cmd:r(sha256)}{break}
+SHA-256 fingerprint of a successful download{p_end}
+
+{phang}
+{cmd:r(backup)}{break}
+preserved previous file when replacing a download; empty for a new path{p_end}
+
+{phang}
+{cmd:r(elapsed_seconds)}, {cmd:r(attempts)}{break}
+transfer operation time and HTTP attempt count for a download{p_end}
+
+{phang}
+{cmd:r(prepare_seconds)}, {cmd:r(download_seconds)}, {cmd:r(unzip_seconds)}{break}
+export stage times; preparation/extraction use whole-second Stata clocks{p_end}
+
+{phang}
+{cmd:r(unzipdir)}, {cmd:r(manifest)}, {cmd:r(unzip_bytes)}{break}
+actual completed extraction directory, file/hash manifest and expanded byte count{p_end}
+
+{phang}
+{cmd:r(unzip_backup)}{break}
+directory containing prior files replaced during this extraction, if any{p_end}
+
+{phang}
+{cmd:r(dir)}{break}
+actual fresh output directory for a backup run{p_end}
+
+{phang}
+{cmd:r(root)}{break}
+requested parent directory containing backup runs{p_end}
+
+{phang}
+{cmd:r(jobid)}{break}
+Export job ID; a local macro after {cmd:export start}, a scalar after {cmd:export get}{p_end}
+
+{phang}
+{cmd:r(nevents)}, {cmd:r(nints)}{break}
+events and interviews loaded ({cmd:paradata get}/{cmd:load}){p_end}
+
+{phang}
+{cmd:r(nflagged)}, {cmd:r(n_}{it:flag}{cmd:)}{break}
+flagged interviews, and count per flag ({cmd:paradata flags}){p_end}
+
+{phang}
+{cmd:r(nhistories)}, {cmd:r(nhistories_global)}{break}
+exhaustive histories in the focused inventory, and in the full current role scope before {opt vars()}{p_end}
+
+{phang}
+{cmd:r(nremovalevents)}, {cmd:r(nremovalevents_global)}, {cmd:r(nremovalevents_allroles)}{break}
+raw events in focused histories, in the full current role scope, and across all loaded roles{p_end}
+
+{phang}
+{cmd:r(ncascades)}, {cmd:r(ncascades_global)}{break}
+focused and role-scope compact-priority histories{p_end}
+
+{phang}
+{cmd:r(ncompactevents)}, {cmd:r(ncompactevents_global)}, {cmd:r(nwiped)}{break}
+focused and role-scope compact events; {cmd:r(nwiped)} is the compatibility alias for focused compact events{p_end}
+
+{phang}
+{cmd:r(noutsideevents)}, {cmd:r(noutsideevents_global)}{break}
+focused and role-scope raw events outside compact-priority histories{p_end}
+
+{phang}
+{cmd:r(ntimingunknownhistories)}, {cmd:r(ntimingunknownhistories_global)}{break}
+focused and role-scope histories whose compact timing cannot be classified{p_end}
+
+{phang}
+{cmd:r(ntimingunknownevents)}, {cmd:r(ntimingunknownevents_global)}{break}
+raw events in those focused and role-scope timing-unknown histories{p_end}
+
+{phang}
+{cmd:r(naffectedquestions)}, {cmd:r(nidentityunknown)}{break}
+distinct question-within-history units in the exhaustive focus, including histories represented by an identity-unavailable unit{p_end}
+
+{phang}
+{cmd:r(nreanswered)}, {cmd:r(nopen)}, {cmd:r(nunknown)}{break}
+exhaustive-inventory units re-answered later, still ending in AnswerRemoved, or with unknown paradata final state{p_end}
+
+{phang}
+{cmd:r(nfinalanswered)}, {cmd:r(nexpectedblank)}{break}
+affected instances answered in the supplied final export or correctly blank because disabled{p_end}
+
+{phang}
+{cmd:r(nanswereddisabled)}, {cmd:r(nblankenabled)}{break}
+answers present while disabled or final blanks while enabled{p_end}
+
+{phang}
+{cmd:r(nlogicunknown)}, {cmd:r(nnotindata)}, {cmd:r(nfinalcheck)}{break}
+effective logic unknown, absent from supplied data/roster export, and total instances requiring review{p_end}
+
+{phang}
+{cmd:r(hasfinaldata)}, {cmd:r(naffected)}{break}
+whether {opt data()} was supplied, and interviews with at least one focused removal history{p_end}
+
+{phang}
+{cmd:r(report)}{break}
+Path of the written Behaviour report ({cmd:paradata report}){p_end}
+
+{phang}
+{cmd:r(suite)}{break}
+Path of the written combined report ({cmd:paradata suite}){p_end}
+
+{phang}
+{cmd:r(}{it:field}{cmd:)}{break}
+each scalar field of a single-object response, lowercased{p_end}
+
 
 {pstd}
 For a single-object response (for example {cmd:export status} or
@@ -855,59 +1284,121 @@ in {cmd:r()}.
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Set up and test:{p_end}
-{p 8 12 2}{cmd:. suso config , server("https://demo.mysurvey.solutions") workspace("primary") user("API_USER") password("pw")}{p_end}
-{p 8 12 2}{cmd:. suso ping}{p_end}
+{pstd}
+Run these as separate recipes, substituting your own paths and identifiers.
+The server examples assume that you have already configured a connection.{p_end}
 
-{pstd}List all completed interviews:{p_end}
-{p 8 12 2}{cmd:. suso interview list , status(Completed) all}{p_end}
+{dlgtab:Save all completed interviews}
 
-{pstd}Approve, then reject, an interview with a comment:{p_end}
-{p 8 12 2}{cmd:. suso interview approve , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457) comment("looks good")}{p_end}
-{p 8 12 2}{cmd:. suso interview reject  , id(2e0ec4fa-9ec7-4849-ba6e-1e8a18995457) comment("please revisit the GPS point")}{p_end}
+{p 8 8 2}{cmd:suso interview list, status(Completed) all}{p_end}
+{p 8 8 2}{cmd:save "C:/survey/completed.dta", replace}{p_end}
 
-{pstd}Export STATA data and download it:{p_end}
-{p 8 12 2}{cmd:. suso config , guid("76732117-1b19-4c82-bd39-1e34a781a2e9") qver(11)}{p_end}
-{p 8 12 2}{cmd:. suso export start , type(STATA) istatus(ApprovedBySupervisor)}{p_end}
-{p 8 12 2}{cmd:. suso export status , id(`=r(jobid)')}{p_end}
-{p 8 12 2}{cmd:. suso export download , id(`=r(jobid)') saving("ses_v11.zip") replace}{p_end}
+{dlgtab:Keep events so you can run several analyses}
 
-{pstd}Paradata QC: pull the event log, flag suspicious interviews, keep the tables:{p_end}
-{p 8 12 2}{cmd:. suso paradata get , saving("para_ises.zip")}{p_end}
-{p 8 12 2}{cmd:. suso paradata report , saving("qc.html") replace qx("English_MySurvey.html")}{p_end}
-{p 8 12 2}{cmd:. suso paradata skips , qx("English_MySurvey.html") data("mysurvey.dta") messages("skip_review.txt") html("skip_review.html") replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata check , qx("English_MySurvey.html") data("mysurvey.dta") saving("qc_codebook.dta") html("qc_dashboard.html") replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata suite , qx("English_MySurvey.html") data("mysurvey.dta") saving("qc_suite.html") replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata suite , qx("English_MySurvey.html") data("mysurvey.dta") hqurl("https://server/workspace") saving("qc_suite.html") replace}{space 2}{it:(offline URL override)}{p_end}
-{p 8 12 2}{cmd:. save para_events, replace}{p_end}
-{p 8 12 2}{cmd:. suso paradata flags , saving("para_flags.dta") replace}{p_end}
-{p 8 12 2}{cmd:. use para_events, clear}{p_end}
-{p 8 12 2}{cmd:. suso paradata timing , by(question)}{p_end}
+{p 8 8 2}{cmd:suso paradata load, file("C:/survey/paradata.tab")}{p_end}
+{p 8 8 2}{cmd:save "C:/survey/events.dta", replace}{p_end}
+{p 8 8 2}{cmd:suso paradata flags, saving("C:/survey/flags.dta") replace}{p_end}
+{p 8 8 2}{cmd:use "C:/survey/events.dta", clear}{p_end}
+{p 8 8 2}{cmd:suso paradata timing, by(question)}{p_end}
 
-{pstd}Create an assignment for a responsible interviewer:{p_end}
-{p 8 12 2}{cmd:. suso assignment create , responsible("FieldInt01") quantity(3) webmode}{p_end}
+{dlgtab:Investigate removed answers against final data}
 
-{pstd}Call an endpoint that is not wrapped:{p_end}
-{p 8 12 2}{cmd:. suso raw /api/v1/interviews , query("status=Completed") todata arraykey(Interviews)}{p_end}
+{p 8 8 2}{cmd:suso paradata load, file("C:/survey/paradata.tab")}{p_end}
+{p 8 8 2}{cmd:suso paradata skips, ///}{p_end}
+{p 12 12 2}{cmd:qx("C:/survey/questionnaire.html") ///}{p_end}
+{p 12 12 2}{cmd:data("C:/survey/main.dta") ///}{p_end}
+{p 12 12 2}{cmd:html("C:/survey/removals.html") ///}{p_end}
+{p 12 12 2}{cmd:messages("C:/survey/review.txt") replace}{p_end}
+
+{dlgtab:Audit final data without loading paradata}
+
+{p 8 8 2}{cmd:suso paradata check, ///}{p_end}
+{p 12 12 2}{cmd:qx("C:/survey/questionnaire.html") ///}{p_end}
+{p 12 12 2}{cmd:data("C:/survey/main.dta") status(approved) ///}{p_end}
+{p 12 12 2}{cmd:html("C:/survey/data_qc.html") replace}{p_end}
+
+{dlgtab:Call another API endpoint}
+
+{p 8 8 2}{cmd:suso raw /api/v1/interviews, ///}{p_end}
+{p 12 12 2}{cmd:query("status=Completed") todata arraykey(Interviews)}{p_end}
 
 {pstd}
-{cmd:suso examples} prints these and more inside Stata.
+{cmd:raw} defaults to GET. It accepts {opt method()}, {opt query()},
+{opt body()}, {opt todata}, {opt arraykey()}, and {opt savefile()} with
+{opt replace}. Raw DELETE requests require {opt allowdestructive}.
+Use the named commands where available for their option checks and safeguards.{p_end}
 
+{marker troubleshooting}{...}
+{title:Troubleshooting}
+
+{phang}{bf:Stata finds an older or different installation}{break}
+Run {cmd:which suso} and {cmd:findfile suso.sthlp}. Load the ADO, help file,
+and JAR from the same package directory. Close and reopen the help Viewer
+after updating the file. Restart Stata after replacing a loaded JAR.{p_end}
+
+{phang}{bf:Java or package compatibility error}{break}
+Run {cmd:suso doctor, strict}. If the JAR is not found, set its full path
+with {cmd:suso config, jar("C:/path/to/suso.jar")}.{p_end}
+
+{phang}{bf:Server or authentication error}{break}
+Check {cmd:suso config, show}, then run {cmd:suso login} and {cmd:suso ping}.
+Verify the base URL, workspace short name, API credentials, and permissions.
+Add {opt verbose} to a failing API call to inspect the method, URL, and status.{p_end}
+
+{phang}{bf:Only part of an API list appears}{break}
+Add {opt all}. If the row limit is reached, review the configured
+{opt maxrows()} value; it applies to API pagination, not export file size.{p_end}
+
+{phang}{bf:A paradata command asks for events}{break}
+Reload the original paradata with {cmd:paradata load}, or {cmd:use} a saved
+events dataset. {cmd:report}, {cmd:timing}, {cmd:flags}, and {cmd:skips}
+leave summary tables in memory. Those tables cannot reconstruct the event log.{p_end}
+
+{phang}{bf:Question wording or start/end checks are unavailable}{break}
+Supply the matching questionnaire HTML with {opt qx()}. For clock checks,
+supply both {opt startvar()} and {opt endvar()} with exact event-variable
+names. Missing variables or captures remain unavailable; they are not inferred
+from unrelated questions. Generate a new HTML report after changing inputs.{p_end}
+
+{phang}{bf:Report controls change the display but Stata data stay the same}{break}
+Browser filters and thresholds operate inside the HTML. They do not rewrite
+the Stata table. Export the displayed review queue using the report's CSV
+control when you need its current selection.{p_end}
+
+{phang}{bf:An output file already exists}{break}
+Choose a new filename, or add {opt replace} when you intend to replace it.
+{opt saving()} writes a Stata table for analysis commands but an HTML file
+for {cmd:report} and {cmd:suite}; {cmd:skips} and {cmd:check} use {opt html()}
+for their browser reports.{p_end}
 
 {marker requirements}{...}
-{title:Requirements}
+{title:Requirements and local installation}
 
 {pstd}
-Stata 14.2 or later and a Java 11+ runtime. Stata ships a bundled Java; confirm
-with {cmd:suso doctor}. The Java backend {cmd:suso.jar} is installed alongside
-{cmd:suso.ado} and is found automatically on the adopath; if you keep it
-elsewhere, point to it with {cmd:suso config , jar(}{it:path}{cmd:)}.
+The command declares Stata 14.2 language mode and requires a Java runtime
+supporting Java 11 or later. Run {cmd:suso doctor, strict} to check your
+environment. The project wiki records the environments actually tested.{p_end}
 
 {pstd}
-{cmd:suso} requires a Survey Solutions {bf:API user} (not Headquarters or
-Administrator credentials). All settings are session-only globals; only the
-optional audit log is written to disk.
+Keep {cmd:suso.ado}, {cmd:suso.sthlp}, and {cmd:suso.jar} together. To try
+the local package, set Stata's working directory to the extracted project
+folder, then run:{p_end}
 
+{p 8 8 2}{cmd:adopath ++ "./install"}{p_end}
+{p 8 8 2}{cmd:which suso}{p_end}
+{p 8 8 2}{cmd:suso doctor, strict}{p_end}
+{p 8 8 2}{cmd:help suso}{p_end}
+
+{pstd}
+For a persistent local installation, substitute the full package path:{p_end}
+
+{p 8 8 2}{cmd:net install suso, ///}{p_end}
+{p 12 12 2}{cmd:from("C:/path/to/survey_solutions_api-main/install") replace}{p_end}
+
+{pstd}
+The detailed offline project guide is {cmd:wiki/index.html} in the source
+package. Open it in a browser for report interpretation, development notes,
+and validation records.{p_end}
 
 {marker author}{...}
 {title:Author}
@@ -916,7 +1407,7 @@ optional audit log is written to disk.
 {bf:Attique Ur Rehman}, Economist{break}
 The World Bank {hline 1} Development Economics (DEC), Enterprise Surveys{break}
 Email: {browse "mailto:attique@worldbank.org":attique@worldbank.org}{break}
-Web: {browse "https://sites.google.com/view/attique-ur-rehman":https://sites.google.com/view/attique-ur-rehman}
+Web: {browse "https://sites.google.com/view/attique-ur-rehman":https://sites.google.com/view/attique-ur-rehman}{p_end}
 
 {title:Acknowledgments}
 
@@ -924,17 +1415,18 @@ Web: {browse "https://sites.google.com/view/attique-ur-rehman":https://sites.goo
 Thanks to {bf:Fahad Mirza} (World Bank / CERP,
 {browse "https://github.com/fahad-mirza":github.com/fahad-mirza}) for his insights
 and guidance, and for his self-contained Stata tooling ({cmd:sparkta},
-{cmd:wordcloud2}) that helped shape this package's design.
+{cmd:wordcloud2}) that helped shape this package's design.{p_end}
 
 {pstd}
 Built on the World Bank
 {browse "https://docs.mysurvey.solutions/":Survey Solutions} platform and its
 public REST API. This package is an independent client and is not an official
-Survey Solutions product.
+Survey Solutions product.{p_end}
 
 {title:Also see}
 
 {pstd}
 Online: {browse "https://docs.mysurvey.solutions/headquarters/api/api-r-package/":Survey Solutions API documentation}{p_end}
+
 {pstd}
 Help:  {helpb survEye}, {helpb javacall}, {helpb import}, {helpb shell}{p_end}

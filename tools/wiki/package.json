@@ -1,0 +1,15 @@
+{
+  "name": "suso-wiki-builder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Development-only HTML wiki generator; the generated wiki needs no dependencies",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "marked": "17.0.5"
+  }
+}

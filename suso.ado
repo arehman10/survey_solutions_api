@@ -1,3 +1,5 @@
+*! suso v1.7.39 build 2026-09-21-REVIEWFLAGS  (questionnaire hover labels, explicit interview clocks, pause/time investigation and selection fix)
+*! suso v1.7.38 build 2026-09-19-WINDOWSQA  (local validation: Stata options, API pagination, GraphQL and offline workflows)
 *! suso v1.7.37 build 2026-09-08-FILTERSEARCH  (local review: keep matching interviews searchable when signals clear)
 *! suso v1.7.36 build 2026-09-05-CENTERED  (local review: centered numeric interview timing columns)
 *! suso v1.7.35 build 2026-09-05-HISTORYLAYOUT  (local review: aligned interview section timing table)
@@ -178,12 +180,34 @@ end
 *===============================================================================
 program _suso_config, rclass
     version 14.2
+    * Stata otherwise discards a lone negative option when both forms appear
+    * in one syntax declaration. Preserve it before parsing the full options.
+    local original0 : copy local 0
+    syntax [, NOINSECURE *]
+    local requested_noinsecure "`noinsecure'"
+    local 0 : copy local original0
     syntax [, SERVER(string) Workspace(string) User(string) Password(string)   ///
         TOKEN(string) AUTH(string) JAR(string) PROXYHost(string)               ///
         PROXYPort(integer 0) PROXYUser(string) PROXYPass(string)               ///
         INSECURE NOINSECURE CONNTimeout(integer 0) READTimeout(integer 0)      ///
         MAXrows(integer 0) AUDITfile(string) GUID(string) QVER(integer 0)      ///
         EXPORTPw(string) SHOW CLEAR ]
+    local noinsecure "`requested_noinsecure'"
+
+    if "`auth'"!="" & !inlist(lower(strtrim("`auth'")),"basic","bearer") {
+        di as err "suso config: auth() must be basic or bearer."
+        exit 198
+    }
+    foreach option in proxyport conntimeout readtimeout maxrows qver {
+        if missing(``option'') | ``option''<0 {
+            di as err "suso config: `option'() must be a nonnegative integer."
+            exit 198
+        }
+    }
+    if `proxyport'>65535 {
+        di as err "suso config: proxyport() must be between 1 and 65535 when specified."
+        exit 198
+    }
 
     if "`insecure'"!="" & "`noinsecure'"!="" {
         di as err "suso config: specify only one of insecure or noinsecure."
@@ -208,7 +232,7 @@ program _suso_config, rclass
     if "`user'"!=""      global SUSO_USER     "`user'"
     if "`password'"!=""  global SUSO_PWD      "`password'"
     if "`token'"!=""     global SUSO_TOKEN    "`token'"
-    if "`auth'"!=""      global SUSO_AUTHTYPE = strlower("`auth'")
+    if "`auth'"!=""      global SUSO_AUTHTYPE = strlower(strtrim("`auth'"))
     if "`jar'"!=""       global SUSO_JAR      "`jar'"
     if "`proxyhost'"!="" global SUSO_PROXYHOST "`proxyhost'"
     if `proxyport'>0     global SUSO_PROXYPORT "`proxyport'"
@@ -226,7 +250,9 @@ program _suso_config, rclass
     if `qver'>0          global SUSO_QVER    "`qver'"
     if `"`exportpw'"'!="" global SUSO_EXPORTPWD `"`exportpw'"'   // export-archive password
 
-    _suso_init
+    * Configuration also serves offline extraction/report workflows. Credential
+    * prompting belongs to explicit login or the first actual API request.
+    _suso_init, defaultsonly
 
     if "`insecure'"!="" {
         di as err "suso: WARNING — TLS certificate-chain verification is DISABLED for this session."
@@ -271,7 +297,7 @@ end
 
 program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.37 (build 2026-09-08-FILTERSEARCH)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.39 (build 2026-09-21-REVIEWFLAGS)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -281,9 +307,9 @@ program _suso_about, rclass
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
-    return local version "1.7.37"
-    return local build "2026-09-08-FILTERSEARCH"
-    return local expected_backend "1.7.32-SECTIONS"
+    return local version "1.7.39"
+    return local build "2026-09-21-REVIEWFLAGS"
+    return local expected_backend "1.7.38-WINDOWSQA"
 end
 
 *===============================================================================
@@ -299,7 +325,7 @@ program _suso_doctor, rclass
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
-    di as txt "  ado code build : " as res "1.7.37-FILTERSEARCH"
+    di as txt "  ado code build : " as res "1.7.39-REVIEWFLAGS"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -322,10 +348,10 @@ program _suso_doctor, rclass
             local javaver "$SUSO_JAVAVER"
             di as txt "  Java 11+      : " as res "yes  ($SUSO_JAVAVER)"
             di as txt "  backend build : " as res cond("$SUSO_JARBUILD"=="","(not reported)","$SUSO_JARBUILD")
-            if "$SUSO_JARBUILD"!="1.7.32-SECTIONS" {
+            if "$SUSO_JARBUILD"!="1.7.38-WINDOWSQA" {
                 local ok 0
                 di as err "  WARNING       : suso.jar does not match the backend required by this package."
-                di as err "                  Reinstall both files from the same v1.7.37 package, then restart Stata."
+                di as err "                  Reinstall both files from the same v1.7.39 package, then restart Stata."
             }
         }
         else {
@@ -336,7 +362,7 @@ program _suso_doctor, rclass
     }
     _suso_showconfig
     return scalar ok = `ok'
-    return local ado_build "1.7.37-FILTERSEARCH"
+    return local ado_build "1.7.39-REVIEWFLAGS"
     return local backend_build "`backend'"
     return local java_version "`javaver'"
     capture macro drop SUSO_JAVAVER SUSO_JAVAOK SUSO_JARBUILD
@@ -355,6 +381,7 @@ end
 * Core helpers
 *===============================================================================
 program _suso_init
+    syntax [, DEFAULTSONLY]
     if "$SUSO_AUTHTYPE"=="" global SUSO_AUTHTYPE "basic"
     if "$SUSO_CONNTO"==""   global SUSO_CONNTO   "30000"
     if "$SUSO_READTO"==""   global SUSO_READTO   "300000"
@@ -364,7 +391,7 @@ program _suso_init
         if "`e'"!="" global SUSO_PWD "`e'"
     }
     * Ask for the API user/password if they were never supplied (basic auth only).
-    if "$SUSO_AUTHTYPE"=="basic" & "$SUSO_TOKEN"=="" & ("$SUSO_USER"=="" | "$SUSO_PWD"=="") {
+    if "`defaultsonly'"=="" & "$SUSO_AUTHTYPE"=="basic" & "$SUSO_TOKEN"=="" & ("$SUSO_USER"=="" | "$SUSO_PWD"=="") {
         _suso_prompt , user("$SUSO_USER")
     }
 end
@@ -395,6 +422,17 @@ end
 program _suso_unzip, rclass
     syntax , FILE(string) [ DIR(string) PWD(string) ]
     _suso_jar
+    * The JVM's working directory differs from Stata's on Windows. Resolve
+    * both paths before crossing the bridge, including an explicit unzipto().
+    foreach pathopt in file dir {
+        if `"``pathopt''"'!="" {
+            local resolved = subinstr(`"``pathopt''"', "\", "/", .)
+            if substr(`"`resolved'"',2,1)!=":" & substr(`"`resolved'"',1,1)!="/" {
+                local resolved `"`c(pwd)'/`resolved'"'
+            }
+            local `pathopt' `"`resolved'"'
+        }
+    }
     * default destination: a folder named after the archive, beside it
     if `"`dir'"' == "" {
         local k = strrpos(`"`file'"', ".")
@@ -534,6 +572,11 @@ program _suso_maps, rclass
             if `k' > 0 local fn = substr(`"`f2'"', `k'+1, .)
             else       local fn `"`f2'"'
         }
+        * The embedded JVM has a different working directory from Stata.
+        local file = subinstr(`"`file'"', "\", "/", .)
+        if substr(`"`file'"',1,1)!="/" & substr(`"`file'"',2,1)!=":" {
+            local file `"`c(pwd)'/`file'"'
+        }
         * Survey Solutions uploadMap takes a .zip archive (shapefile family / GeoTIFF / TPK).
         local ops `"{"query":"mutation(__DOLLAR__file:Upload!,__DOLLAR__workspace:String){uploadMap(file:__DOLLAR__file,workspace:__DOLLAR__workspace){fileName size shapeType wkid importDateUtc}}","variables":{"file":null,"workspace":"`jws'"}}"'
         mata: st_global("SUSO_GQL_BODY",       "")
@@ -564,6 +607,10 @@ program _suso_maps, rclass
     }
     if "`verb'"=="deleteall" {
         syntax [ , WORKSPACE(string) Iknowthis(string) SLEEP(integer 200) PAGESize(integer 100) DRYrun VERBOSE ]
+        if missing(`sleep') | `sleep'<0 {
+            di as err "suso maps: sleep() must be a nonnegative integer."
+            exit 198
+        }
         if "`workspace'"=="" local workspace "$SUSO_WS"
         if `"`workspace'"'=="" {
             di as err "suso maps: no workspace set. Run:  suso config , workspace(<name>)"
@@ -660,9 +707,16 @@ program _suso_maps_fetch, rclass
     * Load ALL maps in a workspace into memory (paginating with skip), since the
     * server caps a page at ~100. Returns r(nobs) and r(totalcount).
     syntax , WORKSPACE(string) [ PAGESize(integer 100) VERBOSE ]
+    if missing(`pagesize') | `pagesize'<1 {
+        di as err "suso maps: pagesize() must be a positive integer."
+        exit 198
+    }
     _suso_jsonesc `"`workspace'"'
     local jws `"`r(js)'"'
-    tempfile acc
+    tempfile acc prior pg
+    local hadprior 0
+    capture quietly save `"`prior'"'
+    if !_rc local hadprior 1
     local skip    = 0
     local total   = .
     local haveacc = 0
@@ -673,11 +727,27 @@ program _suso_maps_fetch, rclass
         mata: st_global("SUSO_GQL_BODY",       st_local("body"))
         mata: st_global("SUSO_GQL_OPERATIONS", "")
         mata: st_global("SUSO_UP_FILE",        "")
-        _suso_gql , todata nodepath(maps.nodes) `verbose'
+        capture noisily _suso_gql , todata nodepath(maps.nodes) `verbose'
+        if _rc {
+            local callrc = _rc
+            if `hadprior' quietly use `"`prior'"', clear
+            else clear
+            exit `callrc'
+        }
         local n = r(nobs)
         if "`r(totalcount)'"!="" & "`r(totalcount)'"!="." local total = r(totalcount)
         if `n'==0 continue, break
-        if `haveacc' append using `acc'
+        if `haveacc' {
+            quietly save `"`pg'"', replace
+            quietly use `"`acc'"', clear
+            capture quietly append using `"`pg'"'
+            if _rc {
+                if `hadprior' quietly use `"`prior'"', clear
+                else clear
+                di as err "suso maps: column types differ across pages; original data restored."
+                exit 459
+            }
+        }
         quietly save `acc', replace
         local haveacc = 1
         local skip = `skip' + `n'
@@ -703,7 +773,7 @@ program _suso_maps_del1, rclass
     mata: st_global("SUSO_GQL_OPERATIONS", "")
     mata: st_global("SUSO_UP_FILE",        "")
     _suso_gql , `verbose'
-    return scalar http = r(http)
+    return scalar http = real("`r(http)'")
 end
 
 program _suso_export_status, rclass
@@ -752,9 +822,20 @@ program _suso_export_get, rclass
     * failure/timeout so callers can wrap in capture. A Completed job with no
     * data file returns r(status)=="NoFile" (not an error). Mirrors the backup
     * notebook's start_export / wait_for_export / download_export chain.
+    * Parse the negative switch separately: with both META and NOMETA in one
+    * syntax declaration, Stata consumes nometa as negation of meta and drops it.
+    local original0 : copy local 0
+    syntax [, NOMETA *]
+    local requested_nometa "`nometa'"
+    local 0 : copy local original0
     syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)         ///
         ISTATUS(string) FROM(string) TO(string) REDUCED META NOMETA             ///
         POLLSecs(integer 10) JOBTimeout(integer 3600) replace VERBOSE ]
+    local nometa "`requested_nometa'"
+    if "`meta'"!="" & "`nometa'"!="" {
+        di as err "suso export: specify only one of meta or nometa."
+        exit 198
+    }
     if `pollsecs'<1 | missing(`pollsecs') | `jobtimeout'<1 | missing(`jobtimeout') {
         di as err "suso: pollsecs() and jobtimeout() must be positive integers."
         exit 198
@@ -876,16 +957,15 @@ program _suso_backup_dir, rclass
     }
     local stamp : di %tcCCYYNNDD-HHMMSS clock("`c(current_date)' `c(current_time)'", "DMYhms")
     local stamp = strtrim("`stamp'")
+    local allocated 0
     forvalues attempt=0/999 {
         local candidate `"`requested'/suso_backup_`stamp'"'
         if `attempt'>0 local candidate `"`requested'/suso_backup_`stamp'_`attempt'"'
         capture mkdir `"`candidate'"'
         local mkdir_rc = _rc
         if !`mkdir_rc' {
-            di as txt "suso backup: this run stays inside dir() at " as res `"`candidate'"'
-            return local dir `"`candidate'"'
-            return local root `"`requested'"'
-            exit
+            local allocated 1
+            continue, break
         }
         mata: st_local("present", strofreal(direxists(st_local("candidate")) | fileexists(st_local("candidate"))))
         if !`present' {
@@ -893,6 +973,12 @@ program _suso_backup_dir, rclass
             di as err "             Choose a new dir() with an existing, writable parent folder."
             exit `mkdir_rc'
         }
+    }
+    if `allocated' {
+        di as txt "suso backup: this run stays inside dir() at " as res `"`candidate'"'
+        return local dir `"`candidate'"'
+        return local root `"`requested'"'
+        exit
     }
     di as err "suso backup: could not allocate a new output directory after 1,000 name checks."
     di as err "             Choose a new dir(); all existing folders were kept."
@@ -1252,6 +1338,11 @@ program _suso_getall, rclass
         [ BASEQ(string) MAXsize(integer 200) ARRAYkey(string) ROOT VERBOSE     ///
           ALL LIMIT(integer 0) OFFSET(integer -1) PAGE(integer -1) PAGESize(integer 0) ]
 
+    if missing(`limit',`offset',`page',`pagesize') | `limit'<0 | `pagesize'<0 | `offset'<-1 | `page'<-1 {
+        di as err "suso: limit()/pagesize() must be nonnegative; offset()/page() must be -1 (default) or nonnegative."
+        exit 198
+    }
+
     local rootopt = cond("`root'"!="","root","")
     local vopt    = cond("`verbose'"!="","verbose","")
 
@@ -1270,7 +1361,7 @@ program _suso_getall, rclass
     else                 local pos = 1
 
     local maxrows = real("$SUSO_MAXROWS")
-    if `maxrows'<=0 local maxrows 100000
+    if `maxrows'<=0 | missing(`maxrows') local maxrows 100000
 
     tempfile acc __suso_getall_prior
     local __suso_hadprior 0
@@ -1295,15 +1386,21 @@ program _suso_getall, rclass
         }
         local n = r(nobs)
         if "`n'"=="" local n 0
+        local http "`r(http)'"
         if !missing(r(totalcount)) local total = r(totalcount)
 
         * A valid empty response has no variables, so there is no first page to
         * save as an accumulator. Return the empty dataset cleanly.
         if `first' & `n'==0 {
             return scalar nobs = 0
+            return scalar nvars = c(k)
+            return local http "`http'"
             if !missing(`total') return scalar totalcount = `total'
             exit
         }
+
+        * An empty final page has no variables; keep the accumulated pages.
+        if !`first' & `n'==0 continue, break
 
         if `first' {
             quietly save `"`acc'"', replace
@@ -1345,8 +1442,11 @@ program _suso_getall, rclass
 
     quietly use `"`acc'"', clear
     if `limit'>0 & _N>`limit' quietly keep in 1/`limit'
+    if _N>`maxrows' quietly keep in 1/`maxrows'
 
     return scalar nobs = _N
+    return scalar nvars = c(k)
+    return local http "`http'"
     if !missing(`total') return scalar totalcount = `total'
 end
 
@@ -1502,7 +1602,7 @@ end
 program _suso_isuuid, rclass
     gettoken val : 0
     local val = trim("`val'")
-    if regexm("`val'","^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$") ///
+    if ustrregexm("`val'","^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$") ///
         return scalar isuuid = 1
     else return scalar isuuid = 0
 end
@@ -1904,7 +2004,7 @@ program _suso_interview, rclass
         syntax , ID(string) VARiable(string) COMMENT(string) [ ROSTERvector(numlist) VERBOSE ]
         _suso_enc `"`comment'"'
         local q "comment=`r(enc)'"
-        foreach rv of numlist `rostervector' {
+        foreach rv of local rostervector {
             local q "`q'&rosterVector=`rv'"
         }
         _suso_call , method(POST) path(/api/v1/interviews/`id'/comment-by-variable/`variable') query(`q') `verbose'
@@ -2077,12 +2177,9 @@ program _suso_export, rclass
         if `"`unzipw'"'=="" local unzipw `"$SUSO_EXPORTPWD"'
         local unzip_started = clock("`c(current_date)' `c(current_time)'", "DMYhms")
         _suso_unzip , file(`"`file'"') dir(`"`unzipto'"') pwd(`"`unzipw'"')
+        local unzipped = r(nfiles)
         return add
-        return local unzipdir `"`r(unzipdir)'"'
-        return local manifest `"`r(manifest)'"'
-        return local unzip_backup `"`r(unzip_backup)'"'
-        return scalar unzip_bytes = r(unzip_bytes)
-        return scalar unzipped = r(nfiles)
+        return scalar unzipped = `unzipped'
         return local archive `"`file'"'
         local unzip_seconds = max(0, (clock("`c(current_date)' `c(current_time)'", "DMYhms")-`unzip_started')/1000)
         return scalar unzip_seconds = `unzip_seconds'
@@ -2116,8 +2213,17 @@ program _suso_export, rclass
     }
 
     if "`verb'"=="start" {
+        local original0 : copy local 0
+        syntax [, NOMETA *]
+        local requested_nometa "`nometa'"
+        local 0 : copy local original0
         syntax , TYPE(string) [ ISTATUS(string) GUID(string) QVER(integer 0)    ///
             FROM(string) TO(string) META NOMETA PARADATAReduced VERBOSE ]
+        local nometa "`requested_nometa'"
+        if "`meta'"!="" & "`nometa'"!="" {
+            di as err "suso export: specify only one of meta or nometa."
+            exit 198
+        }
         _suso_gq "`guid'" "`qver'"
         _suso_needq "`guid'"
         if `qver'<=0 {
@@ -2158,10 +2264,19 @@ program _suso_export, rclass
 
     if "`verb'"=="get" {
         * one-shot convenience: start -> poll -> download [-> unzip]
+        local original0 : copy local 0
+        syntax [, NOMETA *]
+        local requested_nometa "`nometa'"
+        local 0 : copy local original0
         syntax , TYPE(string) SAVING(string) [ GUID(string) QVER(integer 0)     ///
             ISTATUS(string) FROM(string) TO(string) PARADATAReduced META NOMETA ///
             POLLSecs(integer 10) JOBTimeout(integer 3600) replace               ///
             UNZIP UNZIPW(string) UNZIPto(string) VERBOSE ]
+        local nometa "`requested_nometa'"
+        if "`meta'"!="" & "`nometa'"!="" {
+            di as err "suso export: specify only one of meta or nometa."
+            exit 198
+        }
         local redopt = cond("`paradatareduced'"!="","reduced","")
         _suso_export_get , type(`type') saving(`"`saving'"') guid(`guid')       ///
             qver(`qver') istatus(`istatus') from(`from') to(`to') `redopt'      ///
@@ -3937,21 +4052,67 @@ end
 * ---- flags: per-interview red flags + interviewer league table -----------------
 program _suso_para_flags, rclass
     version 14.2
-    syntax [, GAPMins(real 30) FASTsecs(real 2) ALLRoles MINactive(real 5)      ///
+    syntax [, GAPMins(string) FASTsecs(string) ALLRoles MINactive(real 5)     ///
         BURSTrun(integer 8) BURSTshare(real -1) NIGHTshare(real 0.25) CHURN(real 0.20) ///
         Zcut(real 3.5) TOP(integer 15) SAVing(string) replace ]
 
+    local kind : char _dta[suso_paradata]
+    local cachedgap : char _dta[suso_para_gapmins]
+    local cachedfast : char _dta[suso_para_fastsecs]
+    if `"`gapmins'"'=="" {
+        local gapmins 30
+        if "`kind'"=="timing" & "`cachedgap'"!="" local gapmins `cachedgap'
+    }
+    if `"`fastsecs'"'=="" {
+        local fastsecs 2
+        if "`kind'"=="timing" & "`cachedfast'"!="" local fastsecs `cachedfast'
+    }
+    capture confirm number `gapmins'
+    if _rc {
+        di as err "suso paradata flags: gapmins() must be a positive number."
+        exit 198
+    }
+    capture confirm number `fastsecs'
+    if _rc {
+        di as err "suso paradata flags: fastsecs() must be a number from 0.5 to 10."
+        exit 198
+    }
+    if missing(`gapmins') | `gapmins'<=0 {
+        di as err "suso paradata flags: gapmins() must be positive."
+        exit 198
+    }
     if missing(`fastsecs') | `fastsecs'<0.5 | `fastsecs'>10 | ///
         `fastsecs'*2!=round(`fastsecs'*2) {
         di as err "suso paradata flags: fastsecs() must be 0.5 to 10 seconds in steps of 0.5."
         exit 198
     }
+    if missing(`minactive') | `minactive'<0 | `burstrun'<1 | ///
+        missing(`nightshare') | !inrange(`nightshare',0,1) | ///
+        missing(`churn') | `churn'<0 | missing(`zcut') | `zcut'<=0 | `top'<0 {
+        di as err "suso paradata flags: minactive(), churn(), and top() must be nonnegative;"
+        di as err "                     burstrun() and zcut() must be positive; nightshare() must be 0 to 1."
+        exit 198
+    }
+    if missing(`burstshare') | (`burstshare'!=-1 & !inrange(`burstshare',0,1)) {
+        di as err "suso paradata flags: deprecated burstshare() must be -1 or 0 to 1."
+        exit 198
+    }
 
-    local kind : char _dta[suso_paradata]
     if "`kind'"=="events" {
         quietly _suso_para_timing , by(interview) gapmins(`gapmins') fastsecs(`fastsecs') `allroles'
     }
     else if "`kind'"=="timing" {
+        if (`"`cachedgap'"'!="" & `gapmins'!=real("`cachedgap'")) | ///
+            (`"`cachedfast'"'!="" & `fastsecs'!=real("`cachedfast'")) {
+            di as err "suso paradata flags: gapmins()/fastsecs() differ from the cached timing table."
+            di as err "                     Reload the original events to change timing settings."
+            exit 459
+        }
+        if "`allroles'"!="" & `"`: char _dta[suso_para_derived_allroles]'"'!="1" {
+            di as err "suso paradata flags: allroles requires timing built with allroles."
+            di as err "                     Reload the original events to change the role scope."
+            exit 459
+        }
         local __tschema : char _dta[suso_paradata_schema]
         local __oldtiming = (`"`__tschema'"'!="1714")
         foreach __tv in primary_n_answers_metric primary_n_answers_first_metric ///
@@ -4868,6 +5029,10 @@ program _suso_para_skips, rclass
     syntax [, CASCade(integer 3) WINdow(real 60) TOP(integer 15) SAVing(string) replace ///
         QX(string) DATA(string) MESSages(string) HTML(string) DETail(string) VARS(string) ///
         HQURL(string) FULL ALLRoles PREComputed(string) STATUSMap(string) MISScodes(numlist) ]
+    if `cascade'<1 | missing(`window') | `window'<=0 | `top'<0 {
+        di as err "suso paradata skips: cascade() must be at least 1, window() must be finite and positive, and top() cannot be negative."
+        exit 198
+    }
     local missopt ""
     if "`misscodes'"!="" local missopt "misscodes(`misscodes')"
     _suso_para_need events
@@ -4928,6 +5093,7 @@ program _suso_para_skips, rclass
     * separately lets final-data adjudication apply three-valued logic correctly:
     * a false parent condition disables a question even when a child referent is blank.
     local hasqx 0
+    local nqx 0
     tempfile QXT QXMETA
     if `"`qx'"'!="" {
         preserve
@@ -6101,7 +6267,7 @@ program _suso_para_skips, rclass
         gsort -nqrem -nrem interview__id sk_run
         local hasqxt 0
         capture confirm variable qx_text
-        if !_rc local hasqxt 1
+        if !_rc & `hasqx' local hasqxt 1
 
         * ---- automatic triage: classify every case, roll up to findings -------------
         quietly gen byte nsecs = 1
@@ -6288,7 +6454,7 @@ program _suso_para_skips, rclass
             quietly file open `mf' using `"`messages'"', write replace text
             local mh 1
             file write `mf' "PARADATA SKIP/REMOVAL REVIEW" _n
-            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.37)" _n
+            file write `mf' "Generated `c(current_date)' `c(current_time)' by suso paradata skips (suso v1.7.39)" _n
             file write `mf' "Definition: every consecutive same-actor AnswerRemoved history is inventoried; cascade(`cascade')/window(`window') marks the compact-priority subset." _n
             file write `mf' "`nhist' histories and `nremevents' raw role-scoped event(s); `ncasc' compact histories / `nwiped' compact events; `noutsideevents' outside-pattern events; `naffectedqall' question-history units." _n
             file write `mf' "Loaded all-role raw total: `nraw_allroles_global'; current role-scope raw total: `nraw_role_global'." _n
@@ -6643,7 +6809,7 @@ program _suso_para_skips, rclass
             file write `hf' `"<div class='sblock' id='s_res'><button class='shead' type='button' aria-expanded='false'><h2>Resolved history - no action</h2><span class='pillc' id='p_res' style='display:none'></span><span class='sfind' id='f_res'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
             file write `hf' `"<details><summary id="sk_resolved_summary" style="cursor:pointer;font-size:13px;color:#555;padding:6px 0"></summary><div id="sk_resolved"></div></details><div id="sk_resolved_more" class="meta"></div>"' _n
             file write `hf' `"</div></div>"' _n
-            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.37). Exhaustive histories are audit inventory; compact classification is a prioritization signal, not proof of misconduct. Actor ownership is the actor who emitted the AnswerRemoved run. Current/final status uses data() when supplied, otherwise paradata workflow history.</div>"' _n
+            file write `hf' `"<div class="foot">Produced by suso paradata skips (suso v1.7.39). Exhaustive histories are audit inventory; compact classification is a prioritization signal, not proof of misconduct. Actor ownership is the actor who emitted the AnswerRemoved run. Current/final status uses data() when supplied, otherwise paradata workflow history.</div>"' _n
             file write `hf' `"</div><script>"' _n
             file write `hf' `"var SK={meta:{allRole:`nraw_allroles_global',role:`nraw_role_global',globalHistories:`nhist_global',globalCompact:`ncasc_global',globalCompactEvents:`ncompactevents_global'},cases:["' _n
             quietly use `"`DET2'"', clear
@@ -6919,9 +7085,11 @@ program _suso_para_report_js
     file write `fh' `"    if(kind==='resub' && P.norm(row.rba)) return P.norm(row.vr)===P.norm(row.rba);"' _n
     file write `fh' `"    return row.vp===1;"' _n
     file write `fh' `"  },"' _n
+    file write `fh' `"  timingEvidence: function(row){ var k=P.norm(row.vr||''); return (row.te||[]).filter(function(e){return !k||P.norm(e.actorKey||e.actor)===k;}); },"' _n
+    file write `fh' `"  timingCounts: function(row){var c={pause:0,end_before_start:0,time_revision:0},a=P.timingEvidence(row);for(var i=0;i<a.length;i++)if(Object.prototype.hasOwnProperty.call(c,a[i].kind))c[a[i].kind]++;return c;},"' _n
     file write `fh' `"  tierFor: function(row){"' _n
     file write `fh' `"    var d=P.domains(row);"' _n
-    file write `fh' `"    if(row._r) return 'A';"' _n
+    file write `fh' `"    if(row._r || P.timingEvidence(row).length) return 'A';"' _n
     file write `fh' `"    if(d.n>=3) return 'A';"' _n
     file write `fh' `"    if(d.n>=2 || d.pace>=2 || d.duration>=2 || row._f[7]) return 'V';"' _n
     file write `fh' `"    if(P.ownsWorkflow(row,'resub') && (P.softResub(row)||P.unknownResub(row))) return 'V';"' _n
@@ -6935,13 +7103,14 @@ program _suso_para_report_js
     file write `fh' `"    for(i=0;i<row._actorFindings.length;i++){"' _n
     file write `fh' `"      a=row._actorFindings[i]; if(a.vp===1) continue;"' _n
     file write `fh' `"      ev=P.evidenceFor(a,S,team,meta);"' _n
-    file write `fh' `"      for(j=0;j<ev.length;j++) if(ev[j].scope==='actor' && ev[j].t!=='info') out.push(ev[j]);"' _n
+    file write `fh' `"      for(j=0;j<ev.length;j++) if(ev[j].scope==='actor' && ev[j].t!=='info' && !ev[j].kind) out.push(ev[j]);"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"    return out;"' _n
     file write `fh' `"  },"' _n
     file write `fh' `"  evidenceFor: function(row,S,team,meta){"' _n
     file write `fh' `"    meta=meta||{};"' _n
     file write `fh' `"    var out=[], f=row._f;"' _n
+    file write `fh' `"    P.timingEvidence(row).forEach(function(e){out.push({t:'flag',scope:'actor',kind:e.kind,s:e.text});});"' _n
     file write `fh' `"    if(f[7]) out.push({t:'flag', scope:'actor', s:(row.ova||'An interviewer')+' recorded answers in this and another interview in '+row.ov+' shared UTC-minute bucket(s). This is a screening match, not proof of simultaneous interviewing.'+(row.ovd?(' Trace: '+row.ovd):'')});"' _n
     file write `fh' `"    if(P.resub(row)){"' _n
     file write `fh' `"      var w='Rejected, then re-completed ';"' _n
@@ -7047,7 +7216,7 @@ program _suso_para_report_js
     file write `fh' `"        r._primaryFinding=primary; r._actorFindings=views; r._reviewActors=views.filter(function(v){return v._t!=='';}).map(function(v){return v.vr;});"' _n
     file write `fh' `"        r._f=union; r._n=0; for(k=0;k<8;k++) if(union[k]) r._n++;"' _n
     file write `fh' `"        r._r=P.resub(r); r._d=best._d; r._t=best._t; var w=P.copyRow(r); w._f=[false,false,false,false,false,false,false,false]; w._n=0; w._r=P.resub(w); var wt=P.tierFor(w); if(rank[wt]<rank[r._t]) r._t=wt;"' _n
-    file write `fh' `"        if((P.resub(r)||P.softResub(r)||P.unknownResub(r)) && r.rba && r._reviewActors.map(P.norm).indexOf(P.norm(r.rba))<0) r._reviewActors.push(r.rba);"' _n
+    file write `fh' `"        if((P.resub(r)||P.softResub(r)||P.unknownResub(r)) && r.rba && r._reviewActors.map(P.norm).indexOf(P.norm(r.rba))<0) r._reviewActors.push(r.rba); P.timingEvidence(r).forEach(function(e){var actor=e.actor||'Unknown actor';if(r._reviewActors.map(P.norm).indexOf(P.norm(actor))<0)r._reviewActors.push(actor);});"' _n
     file write `fh' `"      }"' _n
     file write `fh' `"      for(j=0;j<8;j++) if(r._f[j]) tot[j]++;"' _n
     file write `fh' `"      if(r._t!==''){flagged.push(r);tiers[r._t]++;}"' _n
@@ -7151,18 +7320,18 @@ program _suso_para_report_js
     file write `fh' `"      return s;"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"    meta=meta||{};"' _n
-    file write `fh' `"    var head=['tier','risk_domains','flags','interview_key','interview_id','assignment_id','metric_actor','primary_interviewer','last_editor','first_interviewer','metric_actor_answer_share','metric_actor_answers','metric_actor_first_pass_answers','metric_actor_active_first_pass_min','metric_actor_active_total_min','metric_actor_question_instances','metric_actor_sessions','field_actor_count','primary_answer_share','status','status_source','status_paradata','status_final_data','status_mismatch','first_pass_first_day','first_pass_last_day','first_pass_work_days','interview_sessions_total','interview_sessions_first_pass','interview_sessions_rework','interview_active_first_pass_min','interview_active_total_min','interview_elapsed_span_min','interview_first_pass_span_min','longest_pause_min','longest_precompletion_pause_min','continued_multiple_days','postcompletion_return','metric_actor_timing_ok','metric_actor_local_time_ok','metric_actor_mode','interview_timing_ok','interview_mode','metric_actor_timed_answers','interview_timed_answers_total','interview_questions_answered','primary_question_instances','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_actor','overlap_min_actor','overlap_min_all_actors','overlap_trace','rejections','resubmit_min','resubmit_questions','resubmit_edit_events','resubmit_field_edit_events','resubmit_actor','resubmit_question_list','cascades','questions_affected','post_completion_field_answer_sets','post_completion_all_answer_edits','post_completion_nonfield_edits','post_completion_outside_cycle','post_completion_field_outside_cycle','post_completion_nonfield_outside_cycle','post_completion_trace','open_errors','review_reasons','context_notes','interview_url','assignment_url','review_actors','actor_flag_evidence'];"' _n
+    file write `fh' `"    var head=['tier','risk_domains','flags','interview_key','interview_id','assignment_id','metric_actor','primary_interviewer','last_editor','first_interviewer','metric_actor_answer_share','metric_actor_answers','metric_actor_first_pass_answers','metric_actor_active_first_pass_min','metric_actor_active_total_min','metric_actor_question_instances','metric_actor_sessions','field_actor_count','primary_answer_share','status','status_source','status_paradata','status_final_data','status_mismatch','first_pass_first_day','first_pass_last_day','first_pass_work_days','interview_sessions_total','interview_sessions_first_pass','interview_sessions_rework','interview_active_first_pass_min','interview_active_total_min','interview_elapsed_span_min','interview_first_pass_span_min','longest_pause_min','longest_precompletion_pause_min','continued_multiple_days','postcompletion_return','metric_actor_timing_ok','metric_actor_local_time_ok','metric_actor_mode','interview_timing_ok','interview_mode','metric_actor_timed_answers','interview_timed_answers_total','interview_questions_answered','primary_question_instances','sec_per_answer','fast_share','fast_run','night_share','churn','peer_ratio','overlap_actor','overlap_min_actor','overlap_min_all_actors','overlap_trace','rejections','resubmit_min','resubmit_questions','resubmit_edit_events','resubmit_field_edit_events','resubmit_actor','resubmit_question_list','cascades','questions_affected','post_completion_field_answer_sets','post_completion_all_answer_edits','post_completion_nonfield_edits','post_completion_outside_cycle','post_completion_field_outside_cycle','post_completion_nonfield_outside_cycle','post_completion_trace','open_errors','review_reasons','context_notes','interview_url','assignment_url','review_actors','actor_flag_evidence','in_survey_pauses','end_before_start_events','boundary_time_revisions','timing_evidence'];"' _n
     file write `fh' `"    var lines=[head.join(',')], i, r, j, pat,ev,why,notes,vals,base,iu,au;"' _n
     file write `fh' `"    var tname={A:'INVESTIGATE',V:'VERIFY',W:'WATCH','':'NO_ACTIVE_SIGNALS'};"' _n
     file write `fh' `"    for(i=0;i<flagged.length;i++){"' _n
     file write `fh' `"      r=flagged[i]; pat='';"' _n
     file write `fh' `"      for(j=0;j<8;j++) if(r._f[j]) pat+=P.letters[j];"' _n
-    file write `fh' `"      if(r._r) pat+='R';"' _n
+    file write `fh' `"      if(r._r) pat+='R'; var tc=P.timingCounts(r); if(tc.pause)pat+=(pat?'|':'')+'PAUSE'; if(tc.end_before_start)pat+=(pat?'|':'')+'TIME_ORDER'; if(tc.time_revision)pat+=(pat?'|':'')+'TIME_EDIT';"' _n
     file write `fh' `"      if(P.ownsWorkflow(r,'resub')&&P.softResub(r)) pat+='Q'; if(P.ownsWorkflow(r,'resub')&&P.unknownResub(r)) pat+='X'; if(P.ownsWorkflow(r)&&P.unresolvedRemoval(r)) pat+='U'; if(P.ownsWorkflow(r)&&P.multiDay(r)) pat+='D'; if(P.ownsWorkflow(r)&&P.postEdit(r)) pat+='E'; if(P.ownsWorkflow(r)&&r.wsm===1) pat+='M';"' _n
     file write `fh' `"      ev=P.evidence(r,S,team,meta); why=[]; notes=[];"' _n
     file write `fh' `"      for(j=0;j<ev.length;j++){ if(ev[j].t==='info') notes.push(ev[j].s); else why.push(ev[j].s); }"' _n
     file write `fh' `"      base=meta.hq?String(meta.hq).replace(/\/+$/,''):''; iu=base?(base+'/Interview/Review/'+encodeURIComponent(r.id)):''; au=(base&&r.a)?(base+'/Assignments/'+encodeURIComponent(r.a)):'';"' _n
-    file write `fh' `"      vals=[tname[r._t],r._d?r._d.n:'',pat,r.k,r.id,r.a,(r.vr||r.r),r.r,r.le,r.fi,P.f1(r.vr?r.vshare:r.pas,3),(r.vr?r.vans:r.pans),(r.vr?r.vansf:r.pansf),P.f1(r.vr?r.vaf:r.paf,2),P.f1(r.vr?r.vact:r.pact,2),(r.vr?r.vq:r.pq),(r.vr?r.vss:r.pss),r.na,P.f1(r.pas,3),r.ws,r.wss,r.wsp,r.wsd,r.wsm,r.d0,r.d1,r.wd,r.ss,r.sf,r.sr,P.f1(r.af,2),P.f1(r.act,2),P.f1(r.sp,1),P.f1(r.spf,1),P.f1(r.lp,1),P.f1(r.lpp,1),(P.multiDay(r)?1:0),r.pr,r.tq,r.lq,(r.mu===1?'UNKNOWN':(r.mm===1?'MIXED':(r.m===1?'CAWI':'CAPI'))),r.itq,(r.imu===1?'UNKNOWN':(r.imm===1?'MIXED':(r.im===1?'CAWI':'CAPI'))),r.nt,r.ntt,r.nq,r.pq,P.f1(r.med,2),P.f1(P.fastShare(r,S.fs),3),r.fr,P.f1(P.nightShare(r,S.n1,S.n2),3),P.f1(r.ch,3),P.f1(r.rt,3),r.ova,r.ov,r.ovt,r.ovd,r.rj,P.f1(r.rb,1),r.rq,r.re,r.ref,r.rba,r.rbv,r.cas,r.wip,r.pc,r.pca,r.pcn,r.pco,r.pcf,r.pcno,r.pcd,(r.ve===null?'':r.ve),why.join(' | '),notes.join(' | '),iu,au,(r._reviewActors||[r.vr||r.r]).join(' | '),(r._actorFindings||[r]).map(function(v){var flags=[];for(var k=0;k<8;k++)if(v._f[k])flags.push(P.letters[k]);return flags.length?((v.vr||v.r)+': '+flags.join('')):'';}).filter(Boolean).join(' | ')];"' _n
+    file write `fh' `"      vals=[tname[r._t],r._d?r._d.n:'',pat,r.k,r.id,r.a,(r.vr||r.r),r.r,r.le,r.fi,P.f1(r.vr?r.vshare:r.pas,3),(r.vr?r.vans:r.pans),(r.vr?r.vansf:r.pansf),P.f1(r.vr?r.vaf:r.paf,2),P.f1(r.vr?r.vact:r.pact,2),(r.vr?r.vq:r.pq),(r.vr?r.vss:r.pss),r.na,P.f1(r.pas,3),r.ws,r.wss,r.wsp,r.wsd,r.wsm,r.d0,r.d1,r.wd,r.ss,r.sf,r.sr,P.f1(r.af,2),P.f1(r.act,2),P.f1(r.sp,1),P.f1(r.spf,1),P.f1(r.lp,1),P.f1(r.lpp,1),(P.multiDay(r)?1:0),r.pr,r.tq,r.lq,(r.mu===1?'UNKNOWN':(r.mm===1?'MIXED':(r.m===1?'CAWI':'CAPI'))),r.itq,(r.imu===1?'UNKNOWN':(r.imm===1?'MIXED':(r.im===1?'CAWI':'CAPI'))),r.nt,r.ntt,r.nq,r.pq,P.f1(r.med,2),P.f1(P.fastShare(r,S.fs),3),r.fr,P.f1(P.nightShare(r,S.n1,S.n2),3),P.f1(r.ch,3),P.f1(r.rt,3),r.ova,r.ov,r.ovt,r.ovd,r.rj,P.f1(r.rb,1),r.rq,r.re,r.ref,r.rba,r.rbv,r.cas,r.wip,r.pc,r.pca,r.pcn,r.pco,r.pcf,r.pcno,r.pcd,(r.ve===null?'':r.ve),why.join(' | '),notes.join(' | '),iu,au,(r._reviewActors||[r.vr||r.r]).join(' | '),(r._actorFindings||[r]).map(function(v){var flags=[];for(var k=0;k<8;k++)if(v._f[k])flags.push(P.letters[k]);var tc=P.timingCounts(v);if(tc.pause)flags.push('PAUSE');if(tc.end_before_start)flags.push('TIME_ORDER');if(tc.time_revision)flags.push('TIME_EDIT');return flags.length?((v.vr||v.r)+': '+flags.join('')):'';}).filter(Boolean).join(' | '),tc.pause,tc.end_before_start,tc.time_revision,P.timingEvidence(r).map(function(e){return e.text;}).join(' | ')];"' _n
     file write `fh' `"      for(j=0;j<vals.length;j++) vals[j]=cell(vals[j]); lines.push(vals.join(','));"' _n
     file write `fh' `"    }"' _n
     file write `fh' `"    return lines.join('\n');"' _n
@@ -7327,7 +7496,7 @@ program _suso_para_report_js
     file write `fh' `"function renderQuestions(){"' _n
     file write `fh' `"  var filt=(el('c_q').value||'').toLowerCase(), resp=el('c_resp').value, ws=el('c_ws').value;"' _n
     file write `fh' `"  var src=P.questionRows(D.q,qActorIndex,resp,ws), rows=[],i;"' _n
-    file write `fh' `"  for(i=0;i<src.length;i++) if(!filt||src[i].v.toLowerCase().indexOf(filt)>=0) rows.push(src[i]);"' _n
+    file write `fh' `"  for(i=0;i<src.length;i++) if(!filt||(src[i].v.toLowerCase().indexOf(filt)>=0||SusoQL.lookup(src[i].v).label.toLowerCase().indexOf(filt)>=0)) rows.push(src[i]);"' _n
     file write `fh' `"  P.questionSort(rows,qSortKey,qSortDir);"' _n
     file write `fh' `"  var s='<tr><th class=\"srt\" onclick=\"qSort(String.fromCharCode(118))\">question</th>'+"' _n
     file write `fh' `"        '<th class=\"r srt\" title=\"First-pass AnswerSet saves; revisions and roster instances can count more than once\" onclick=\"qSort(String.fromCharCode(110))\">answer events</th>'+"' _n
@@ -7339,14 +7508,14 @@ program _suso_para_report_js
     file write `fh' `"  var k=rows.length;"' _n
     file write `fh' `"  for(i=0;i<k;i++){"' _n
     file write `fh' `"    var q=rows[i];"' _n
-    file write `fh' `"    s+='<tr><td class=\"mono\">'+esc(q.v)+'</td><td class=\"r\">'+fmtc(q.n)+'</td><td class=\"r\">'+fmtc(q.ni)+"' _n
+    file write `fh' `"    s+='<tr><td class=\"mono\">'+SusoQL.html(q.v)+'</td><td class=\"r\">'+fmtc(q.n)+'</td><td class=\"r\">'+fmtc(q.ni)+"' _n
     file write `fh' `"       '</td><td class=\"r\">'+fmtc(q.nt)+'</td><td class=\"r\">'+fmt(q.med)+'</td><td class=\"r\">'+fmt(q.p90)+'</td><td class=\"r\">'+(q.fsh===null||q.fsh===undefined?'—':fmt(100*q.fsh,1)+'%')+'</td></tr>';"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  el('t_q').innerHTML=s;var hs=el('t_q').querySelectorAll('.srt');for(var hi=0;hi<hs.length;hi++){hs[hi].tabIndex=0;hs[hi].setAttribute('role','button');hs[hi].setAttribute('aria-label','Sort by '+hs[hi].textContent);}"' _n
     file write `fh' `"  var sb=[],scope,msg; if(resp) sb.push(resp); if(ws) sb.push(ws==='APP'?'Approved only (Sup + HQ)':ws);"' _n
     file write `fh' `"  scope=sb.length?(' for '+sb.join(' / ')):' across all enumerators and statuses';"' _n
     file write `fh' `"  if(!src.length) msg='No first-pass answer events'+scope+' in this vars() scope.';"' _n
-    file write `fh' `"  else if(!rows.length) msg='No question names match the search'+scope+'.';"' _n
+    file write `fh' `"  else if(!rows.length) msg='No question names or labels match the search'+scope+'.';"' _n
     file write `fh' `"  else if(filt) msg='Showing '+rows.length+' of '+src.length+' observed questions matching the search'+scope+'.';"' _n
     file write `fh' `"  else msg='Showing all '+rows.length+' observed question'+(rows.length===1?'':'s')+scope+'.';"' _n
     file write `fh' `"  el('q_more').textContent=msg;el('q_scope').textContent='Scope: actor + interview status; supplied variable/value filters do not apply. Timing shares use the build-time '+D.meta.fastsecs+' second cutoff.';"' _n
@@ -7355,7 +7524,7 @@ program _suso_para_report_js
     file write `fh' `"function renderRemovals(resp,ws){"' _n
     file write `fh' `"  var V=P.removalView(D.rem||[],resp,ws),body=el('t_rsum'),i,s='',cs,shown=0,match,key=P.norm(resp),sw=String(ws||''),cw;"' _n
     file write `fh' `"  if(body){"' _n
-    file write `fh' `"    for(i=0;i<V.patterns.length;i++){var g=V.patterns[i];s+='<tr><td class='+Q+'mono'+Q+'>'+esc(g.v)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.h)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.ch)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.i)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.n)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.cn)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.out)+'</td></tr>'; }"' _n
+    file write `fh' `"    for(i=0;i<V.patterns.length;i++){var g=V.patterns[i];s+='<tr><td class='+Q+'mono'+Q+'>'+SusoQL.html(g.v)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.h)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.ch)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.i)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.n)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.cn)+'</td><td class='+Q+'r'+Q+'>'+fmtc(g.out)+'</td></tr>'; }"' _n
     file write `fh' `"    if(!s) s='<tr><td colspan='+Q+'7'+Q+' class='+Q+'nodata'+Q+'>No removal histories for this actor/status and vars() scope.</td></tr>';"' _n
     file write `fh' `"    body.innerHTML=s;"' _n
     file write `fh' `"    el('r_more').textContent=V.histories+' exhaustive histor'+(V.histories===1?'y':'ies')+', '+V.events+' raw events, '+V.compactHistories+' compact histories / '+V.compactEvents+' compact events, and '+V.outsideEvents+' outside-pattern events in this actor/status scope.';"' _n
@@ -7408,7 +7577,7 @@ program _suso_para_report_js
     file write `fh' `"  for(i=0;i<ev.length;i++){"' _n
     file write `fh' `"    if(ev[i].t==='info'){context=context.replace('</details>','<p class='+Q+'note'+Q+'>'+esc(ev[i].s)+'</p></details>');continue;}var cls=(ev[i].t==='hard')?'ev hard':'ev';"' _n
     file write `fh' `"    var pre=(ev[i].t==='hard')?'<b style='+Q+'color:#8a1f1f'+Q+'>! </b>':((ev[i].t==='info')?'<span style='+Q+'color:#888'+Q+'>i </span>':'<span style='+Q+'color:#C9A227'+Q+'>&#9679; </span>');"' _n
-    file write `fh' `"    s+='<div class='+Q+cls+Q+'>'+pre+esc(ev[i].s)+'</div>';"' _n
+    file write `fh' `"    s+='<div class='+Q+cls+Q+'>'+pre+SusoQL.textHtml(ev[i].s)+'</div>';"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  s+=context;"' _n
     file write `fh' `"  if(!D.meta.lite && (r.h||r.g)){"' _n
@@ -7435,7 +7604,7 @@ program _suso_para_report_js
     file write `fh' `"function selectReviewCase(id,focus){selectedCaseId=id;reviewLastFocus=id;renderWorst();if(focus&&el('case_title'))el('case_title').focus();}"' _n
     file write `fh' `"function reviewDataValues(r){"' _n
     file write `fh' `"  var dims=(D.meta&&D.meta.fdims)||[],parts=[];"' _n
-    file write `fh' `"  for(var i=0;i<dims.length;i++){var key=dims[i].v,v=r.f&&r.f[key];parts.push('<span class='+Q+'mono'+Q+'>'+esc(key)+' = '+esc(v===undefined||v===null||v===''?'not available':String(v))+'</span>');}"' _n
+    file write `fh' `"  for(var i=0;i<dims.length;i++){var key=dims[i].v,v=r.f&&r.f[key];parts.push('<span class='+Q+'mono'+Q+'>'+SusoQL.html(key)+' = '+esc(v===undefined||v===null||v===''?'not available':String(v))+'</span>');}"' _n
     file write `fh' `"  return parts.length?'<p class='+Q+'scope-line report-data-values'+Q+'><b>Values saved in this report:</b> '+parts.join(' / ')+'</p>':'';"' _n
     file write `fh' `"}"' _n
     file write `fh' `"function renderCaseDetail(r){"' _n
@@ -8034,6 +8203,140 @@ end
 * keeps only a compact interview-to-byte-range index, and reads one interview on
 * demand.  Keeping this static engine in its own program also preserves Stata's
 * fixed per-program compiler headroom.
+
+program _suso_para_labels_js
+    version 14.2
+    args fh
+    file write `fh' `"<script>"' _n
+    file write `fh' `"/* suso questionnaire labels: questionnaire text is data, never HTML or code. */"' _n
+    file write `fh' `"(function (global) {"' _n
+    file write `fh' `"  'use strict';"' _n
+    file write `fh' `"  var cached = null, exact = Object.create(null), folded = Object.create(null);"' _n
+    file write `fh' `"  var tip = null, active = null, closeTimer = null;"' _n
+    file write `fh' `"  function data() { return typeof D !== 'undefined' && D ? D : {}; }"' _n
+    file write `fh' `"  function base(value) {"' _n
+    file write `fh' `"    return String(value === null || value === undefined ? '' : value).trim()"' _n
+    file write `fh' `"      .replace(/^"|"$/g, '').split('||')[0].replace(/\s*\[[^\]]*\]\s*$/, '').trim();"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function refresh() {"' _n
+    file write `fh' `"    var rows = data().ql || [];"' _n
+    file write `fh' `"    if (rows === cached) return;"' _n
+    file write `fh' `"    cached = rows; exact = Object.create(null); folded = Object.create(null);"' _n
+    file write `fh' `"    rows.forEach(function (row) {"' _n
+    file write `fh' `"      if (!Array.isArray(row) || row.length < 2) return;"' _n
+    file write `fh' `"      var name = base(row[0]), label = String(row[1] === null || row[1] === undefined ? '' : row[1]).trim();"' _n
+    file write `fh' `"      if (!name || !label || Object.prototype.hasOwnProperty.call(exact, name)) return;"' _n
+    file write `fh' `"      exact[name] = label;"' _n
+    file write `fh' `"      var lower = name.toLowerCase();"' _n
+    file write `fh' `"      if (!Object.prototype.hasOwnProperty.call(folded, lower)) folded[lower] = name;"' _n
+    file write `fh' `"      else if (folded[lower] !== name) folded[lower] = null;"' _n
+    file write `fh' `"    });"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function lookup(value) {"' _n
+    file write `fh' `"    refresh();"' _n
+    file write `fh' `"    var name = base(value), key = Object.prototype.hasOwnProperty.call(exact, name) ? name : folded[name.toLowerCase()];"' _n
+    file write `fh' `"    return {variable: name, known: !!key, label: key ? exact[key] : 'Question label unavailable for ' + (name || 'this variable') + '. Supply a matching qx() questionnaire to include it.'};"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function escape(value) {"' _n
+    file write `fh' `"    return String(value === null || value === undefined ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function html(value) {"' _n
+    file write `fh' `"    var result = lookup(value), quote = String.fromCharCode(34);"' _n
+    file write `fh' `"    return '<span class=' + quote + 'suso-qvar' + quote + ' tabindex=' + quote + '0' + quote + ' data-qvar=' + quote + escape(result.variable) + quote + ' title=' + quote + escape(result.label) + quote + ' aria-label=' + quote + escape(value) + quote + '>' + escape(value) + '</span>';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function node(value) {"' _n
+    file write `fh' `"    var result = lookup(value), element = document.createElement('span');"' _n
+    file write `fh' `"    element.className = 'suso-qvar'; element.tabIndex = 0;"' _n
+    file write `fh' `"    element.setAttribute('data-qvar', result.variable); element.title = result.label;"' _n
+    file write `fh' `"    element.setAttribute('aria-label', String(value)); element.textContent = String(value);"' _n
+    file write `fh' `"    return element;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function parameterParts(value, event) {"' _n
+    file write `fh' `"    var source = String(value === null || value === undefined ? '' : value);"' _n
+    file write `fh' `"    var match = source.match(/^(\s*"?)([A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^\]]*\])?)(?=\s*(?:\|\||"|$))/);"' _n
+    file write `fh' `"    if (!match || (!lookup(match[2]).known && !/^(answer|question|comment|variable)/i.test(String(event || '')))) return {before: source, variable: '', after: ''};"' _n
+    file write `fh' `"    return {before: match[1], variable: match[2], after: source.slice(match[0].length)};"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function parameters(value, event) {"' _n
+    file write `fh' `"    var parts = parameterParts(value, event), fragment = document.createDocumentFragment();"' _n
+    file write `fh' `"    fragment.appendChild(document.createTextNode(parts.before));"' _n
+    file write `fh' `"    if (parts.variable) fragment.appendChild(node(parts.variable));"' _n
+    file write `fh' `"    if (parts.after) fragment.appendChild(document.createTextNode(parts.after));"' _n
+    file write `fh' `"    return fragment;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function textHtml(value) {"' _n
+    file write `fh' `"    var source = String(value === null || value === undefined ? '' : value), out = '', end = 0;"' _n
+    file write `fh' `"    var pattern = /[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^\]]*\])?/g, match;"' _n
+    file write `fh' `"    while ((match = pattern.exec(source))) {"' _n
+    file write `fh' `"      out += escape(source.slice(end, match.index));"' _n
+    file write `fh' `"      out += lookup(match[0]).known ? html(match[0]) : escape(match[0]);"' _n
+    file write `fh' `"      end = match.index + match[0].length;"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"    return out + escape(source.slice(end));"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function decorate(root) {"' _n
+    file write `fh' `"    var nodes = root.querySelectorAll('[data-qvars]');"' _n
+    file write `fh' `"    for (var i = 0; i < nodes.length; i++) {"' _n
+    file write `fh' `"      // Only explicitly marked plain-text variable lists; never arbitrary page HTML."' _n
+    file write `fh' `"      if (!nodes[i].querySelector('.suso-qvar')) nodes[i].innerHTML = textHtml(nodes[i].textContent);"' _n
+    file write `fh' `"    }"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function target(event) { return event.target && event.target.closest ? event.target.closest('.suso-qvar') : null; }"' _n
+    file write `fh' `"  function hide() {"' _n
+    file write `fh' `"    clearTimeout(closeTimer);"' _n
+    file write `fh' `"    if (active) active.removeAttribute('aria-describedby');"' _n
+    file write `fh' `"    active = null; if (tip) tip.hidden = true;"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function show(element) {"' _n
+    file write `fh' `"    clearTimeout(closeTimer);"' _n
+    file write `fh' `"    if (active && active !== element) active.removeAttribute('aria-describedby');"' _n
+    file write `fh' `"    active = element; tip.textContent = lookup(element.getAttribute('data-qvar')).label;"' _n
+    file write `fh' `"    element.setAttribute('aria-describedby', tip.id); tip.hidden = false;"' _n
+    file write `fh' `"    var rect = element.getBoundingClientRect(), width = Math.max(120, Math.min(440, global.innerWidth - 24)), left, top;"' _n
+    file write `fh' `"    tip.style.width = width + 'px';"' _n
+    file write `fh' `"    // Prefer beside the variable, keeping adjacent table rows reachable."' _n
+    file write `fh' `"    // On narrow screens place above/below without covering the source token."' _n
+    file write `fh' `"    if (rect.right + width + 20 <= global.innerWidth) { left = rect.right + 12; top = rect.top; }"' _n
+    file write `fh' `"    else if (rect.left >= width + 20) { left = rect.left - width - 12; top = rect.top; }"' _n
+    file write `fh' `"    else { left = Math.max(8, Math.min(rect.left, global.innerWidth - width - 8)); top = rect.bottom + 8; if (top + tip.offsetHeight > global.innerHeight - 8) top = rect.top - tip.offsetHeight - 8; }"' _n
+    file write `fh' `"    tip.style.left = left + 'px'; tip.style.top = Math.max(8, Math.min(top, global.innerHeight - tip.offsetHeight - 8)) + 'px';"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function laterHide() {"' _n
+    file write `fh' `"    clearTimeout(closeTimer);"' _n
+    file write `fh' `"    closeTimer = setTimeout(function () { if (document.activeElement !== active && !(active && active.matches(':hover')) && !tip.matches(':hover')) hide(); }, 120);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  function bind() {"' _n
+    file write `fh' `"    if (tip || typeof document === 'undefined') return;"' _n
+    file write `fh' `"    var style = document.createElement('style');"' _n
+    file write `fh' `"    style.textContent = '.suso-qvar{cursor:help;text-decoration:underline dotted;text-underline-offset:3px}.suso-qvar:focus-visible{outline:3px solid #1675b8;outline-offset:2px;border-radius:2px}#suso-question-tooltip{position:fixed;z-index:10000;box-sizing:border-box;max-height:min(70vh,28rem);overflow:auto;padding:11px 14px;border:1px solid #93adc3;border-radius:7px;background:#fff;color:#15324b;box-shadow:0 4px 18px #1234;font:14px/1.5 system-ui,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;text-align:left}#suso-question-tooltip[hidden]{display:none!important}';"' _n
+    file write `fh' `"    document.head.appendChild(style);"' _n
+    file write `fh' `"    tip = document.createElement('div'); tip.id = 'suso-question-tooltip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true;"' _n
+    file write `fh' `"    document.body.appendChild(tip); decorate(document);"' _n
+    file write `fh' `"    document.addEventListener('mouseover', function (event) { var element = target(event); if (element) show(element); });"' _n
+    file write `fh' `"    document.addEventListener('mouseout', function (event) { if (target(event)) laterHide(); });"' _n
+    file write `fh' `"    document.addEventListener('focusin', function (event) { var element = target(event); if (element) show(element); else hide(); });"' _n
+    file write `fh' `"    document.addEventListener('focusout', function (event) { if (target(event)) laterHide(); });"' _n
+    file write `fh' `"    document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && active) { hide(); event.stopPropagation(); } });"' _n
+    file write `fh' `"    document.addEventListener('scroll', function (event) {"' _n
+    file write `fh' `"      if (event.target === tip || !active) return;"' _n
+    file write `fh' `"      // Browser focus/scrollIntoView and iframe resizing can emit a late scroll"' _n
+    file write `fh' `"      // after focus or pointer entry. Keep a still-active tooltip in place."' _n
+    file write `fh' `"      if (active.isConnected && (document.activeElement === active || active.matches(':hover'))) show(active);"' _n
+    file write `fh' `"      else hide();"' _n
+    file write `fh' `"    }, true);"' _n
+    file write `fh' `"    global.addEventListener('resize', hide);"' _n
+    file write `fh' `"    tip.addEventListener('mouseenter', function () { clearTimeout(closeTimer); });"' _n
+    file write `fh' `"    tip.addEventListener('mouseleave', laterHide);"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"  global.SusoQL = {base: base, lookup: lookup, html: html, node: node, parameters: parameters, parameterParts: parameterParts, textHtml: textHtml, decorate: decorate};"' _n
+    file write `fh' `"  if (typeof document !== 'undefined') {"' _n
+    file write `fh' `"    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);"' _n
+    file write `fh' `"    else bind();"' _n
+    file write `fh' `"  }"' _n
+    file write `fh' `"})(typeof window === 'undefined' ? globalThis : window);"' _n
+    file write `fh' `"</script>"' _n
+end
+
 program _suso_para_history_js
     version 14.2
     args fh
@@ -8433,7 +8736,7 @@ program _suso_para_history_js
     file write `fh' `"    n.appendChild(text('span','hvc-ord mono','#'+(r.order||'?')));"' _n
     file write `fh' `"    n.appendChild(text('span','hvc-kind',r.event||'(blank event)'));"' _n
     file write `fh' `"    par=document.createElement('span');par.className='hvc-par mono';"' _n
-    file write `fh' `"    if(r.parameters){seg=String(r.parameters).split('||');for(j=0;j<seg.length;j++){if(j)par.appendChild(text('span','pp','||'));par.appendChild(document.createTextNode(seg[j]));}par.title=r.parameters;}"' _n
+    file write `fh' `"    if(r.parameters){par.appendChild(SusoQL.parameters(r.parameters,r.event));}"' _n
     file write `fh' `"    else{par.className='hvc-par mono dim';par.textContent='-';}"' _n
     file write `fh' `"    n.appendChild(par);"' _n
     file write `fh' `"    n.appendChild(text('span','hvc-actor'+(it.dimA?' dim':''),it.actor));"' _n
@@ -8464,7 +8767,7 @@ program _suso_para_history_js
     file write `fh' `"    cp=text('button','cpy','Copy');cp.type='button';"' _n
     file write `fh' `"    cp.addEventListener('click',function(ev){ev.stopPropagation();copyText(r.parameters||'',cp);});"' _n
     file write `fh' `"    ph.appendChild(cp);n.appendChild(ph);"' _n
-    file write `fh' `"    n.appendChild(text('div','hv-parameters mono',r.parameters||'(no parameters)'));"' _n
+    file write `fh' `"    var pv=text('div','hv-parameters mono','');pv.appendChild(SusoQL.parameters(r.parameters||'(no parameters)',r.event));n.appendChild(pv);"' _n
     file write `fh' `"    return n;"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  function copyText(s,btn){"' _n
@@ -8529,10 +8832,10 @@ program _suso_para_history_js
     file write `fh' `"    head.className='hv-event-head';head.appendChild(text('span','hv-order mono','#'+(r.order||'?')));head.appendChild(text('span','hv-kind',r.event||'(blank event)'));if(r._gap!==null)head.appendChild(text('span','hv-gap',gapText(r._gap)));n.appendChild(head);"' _n
     file write `fh' `"    meta.className='hv-event-meta';meta.appendChild(text('span','hv-local',t.local?('Local '+t.local):'Local time unavailable'));meta.appendChild(text('span','mono',t.utc?('UTC '+t.utc):('Source '+r.timestamp)));meta.appendChild(text('span','mono','offset '+(r.tz||'?')));n.appendChild(meta);"' _n
     file write `fh' `"    if(r.responsible||r.role)n.appendChild(text('div','hv-actor',(HSections.actor(r))+(r.role?' - '+r.role:'')));"' _n
-    file write `fh' `"    if(r.parameters){p.className='hv-parameters mono';p.textContent=r.parameters;n.appendChild(p);}return n;"' _n
+    file write `fh' `"    if(r.parameters){p.className='hv-parameters mono';p.appendChild(SusoQL.parameters(r.parameters,r.event));n.appendChild(p);}return n;"' _n
     file write `fh' `"  }"' _n
     file write `fh' `"  function rawCell(tr,value,cls){var td=text('td',cls||'',value);tr.appendChild(td);}"' _n
-    file write `fh' `"  function rawRow(r){var tr=document.createElement('tr'),t=r._time||{};rawCell(tr,r.seq,'r mono');rawCell(tr,r.order,'r mono');rawCell(tr,r.event);rawCell(tr,r.responsible);rawCell(tr,r.role);rawCell(tr,r.timestamp,'mono');rawCell(tr,t.utc,'mono');rawCell(tr,r.tz,'mono');rawCell(tr,t.local,'mono');rawCell(tr,r.parameters,'mono hv-raw-parameters');return tr;}"' _n
+    file write `fh' `"  function rawRow(r){var tr=document.createElement('tr'),t=r._time||{};rawCell(tr,r.seq,'r mono');rawCell(tr,r.order,'r mono');rawCell(tr,r.event);rawCell(tr,r.responsible);rawCell(tr,r.role);rawCell(tr,r.timestamp,'mono');rawCell(tr,t.utc,'mono');rawCell(tr,r.tz,'mono');rawCell(tr,t.local,'mono');var pc=text('td','mono hv-raw-parameters','');pc.appendChild(SusoQL.parameters(r.parameters,r.event));tr.appendChild(pc);return tr;}"' _n
     file write `fh' `"  function init(){"' _n
     file write `fh' `"    /* Pure-UI wiring first: views, expansion, and filters work even where file streaming is unsupported (and for susoHistoryPreview rows). */"' _n
     file write `fh' `"    E('hv_view_compact').addEventListener('click',function(){view='compact';render();});E('hv_view_timeline').addEventListener('click',function(){view='cards';render();});E('hv_view_raw').addEventListener('click',function(){view='raw';render();});"' _n
@@ -8604,13 +8907,164 @@ program _suso_para_sectionpayload, rclass
     restore
 end
 
+
+* Explicit timing review evidence; independent of statistical pace thresholds.
+program _suso_para_timeopts
+    version 14.2
+    syntax , [STARTVAR(string) ENDVAR(string)]
+    if (`"`startvar'"'=="") != (`"`endvar'"'=="") {
+        di as err "suso paradata: startvar() and endvar() must be supplied together."
+        exit 198
+    }
+    foreach v in startvar endvar {
+        if `"``v''"'!="" {
+            if !regexm(`"``v''"',"^[A-Za-z_][A-Za-z0-9_]*$") | strlen(`"``v''"')>80 {
+                di as err "suso paradata: `v'() requires one questionnaire variable name (letters, digits, underscore; at most 80 characters)."
+                exit 198
+            }
+        }
+    }
+    if `"`startvar'"'!="" & lower(`"`startvar'"')==lower(`"`endvar'"') {
+        di as err "suso paradata: startvar() and endvar() must name distinct variables."
+        exit 198
+    }
+end
+
+program _suso_para_timechecks, rclass
+    version 14.2
+    syntax , SAVing(string) [QXMAP(string) STARTVAR(string) ENDVAR(string)]
+    preserve
+        * by: generate skips execution on an empty dataset. Return the same
+        * typed schema without entering grouped event calculations.
+        if _N==0 {
+            quietly keep interview__id
+            quietly gen strL timing_evidence = ""
+            quietly gen long timing_pauses = 0
+            quietly gen long timing_backwards = 0
+            quietly gen long timing_revisions = 0
+            quietly save `"`saving'"', replace
+            restore
+            return scalar startcaptures = 0
+            return scalar endcaptures = 0
+            exit
+        }
+        capture confirm variable para_var, exact
+        if _rc quietly gen str80 para_var = ""
+        capture confirm variable para_val, exact
+        if _rc quietly gen strL para_val = ""
+        capture confirm variable para_roster, exact
+        if _rc quietly gen str160 para_roster = ""
+        if `"`startvar'"'!="" {
+            quietly gen byte tm_kind = cond(para_var==`"`startvar'"',1,cond(para_var==`"`endvar'"',2,0))
+            quietly gen str244 tm_pair = "interview" if tm_kind>0
+        }
+        else if `"`qxmap'"'!="" {
+            quietly merge m:1 para_var using `"`qxmap'"', keep(master match) nogenerate
+            quietly replace tm_kind = 0 if missing(tm_kind)
+        }
+        else {
+            * Without metadata only explicit interview-time names qualify.
+            quietly gen byte tm_kind = 0
+            quietly replace tm_kind = 1 if regexm(lower(para_var),"^(interview_?)?(start|begin)(_?(time|datetime|timestamp))$|^(start|begin)_interview(_time)?$")
+            quietly replace tm_kind = 2 if regexm(lower(para_var),"^(interview_?)?(end|finish)(_?(time|datetime|timestamp))$|^(end|finish)_interview(_time)?$")
+            quietly gen str244 tm_pair = "interview" if tm_kind>0
+            * Names alone cannot choose between multiple clock-field families.
+            * Explicit startvar()/endvar() can resolve an ambiguous interview.
+            if _N>0 {
+                tempvar clockfirst clockstarts clockends
+                quietly bysort interview__id para_var: gen byte `clockfirst' = _n==1
+                quietly by interview__id: egen long `clockstarts' = total(`clockfirst' & tm_kind==1)
+                quietly by interview__id: egen long `clockends' = total(`clockfirst' & tm_kind==2)
+                quietly replace tm_pair = "" if `clockstarts'!=1 | `clockends'!=1
+            }
+        }
+        quietly count if para_fieldans & tm_kind==1
+        local startcaptures = r(N)
+        quietly count if para_fieldans & tm_kind==2
+        local endcaptures = r(N)
+        quietly gen str80 tm_role = ""
+        capture confirm string variable role
+        if !_rc quietly replace tm_role = strtrim(role)
+        else {
+            capture confirm numeric variable role
+            if !_rc quietly replace tm_role = strtrim(strofreal(role))
+        }
+        quietly sort interview__id para_ord para_seq
+        quietly by interview__id: gen byte tm_keep = _n==1
+        quietly keep if tm_keep | (para_ivw & (para_fieldans | para_fieldrem | para_fieldcmp | inlist(para_ev,"paused","restarted","resumed","started"))) | (tm_kind>0 & (para_ans | para_rem))
+        * Only clock values enter the string copy; other answers can be large.
+        quietly replace para_val = "" if tm_kind==0
+        quietly gen strL timing_evidence = "[]"
+        quietly gen long timing_pauses = 0
+        quietly gen long timing_backwards = 0
+        quietly gen long timing_revisions = 0
+        mata: _suso_tm_scan()
+        quietly by interview__id: keep if _n==_N
+        quietly keep interview__id timing_evidence timing_pauses timing_backwards timing_revisions
+        quietly save `"`saving'"', replace
+    restore
+    return scalar startcaptures = `startcaptures'
+    return scalar endcaptures = `endcaptures'
+end
+
+program _suso_para_clockmap
+    version 14.2
+    syntax , SAVing(string)
+    preserve
+        quietly gen byte tm_kind = 0
+        tempvar typ txt nam
+        quietly gen strL `typ' = lower(qx_type)
+        quietly gen strL `txt' = lower(qx_text)
+        quietly gen str80 `nam' = lower(qx_var)
+        * Date type + explicit interview boundary wording, or a current-time
+        * question with a start/end name. Business dates/screening are excluded.
+        quietly replace tm_kind = 1 if strpos(`typ',"date") & ///
+            (regexm(`txt',"(^|[^a-z])interview[ :_-]*(begins|starts|start time|beginning)([^a-z]|$)") | ///
+             regexm(`txt',"(^|[^a-z])(beginning|start|begin)( time)?( of)?( the)? interview([^a-z]|$)") | ///
+             (strpos(`typ',"current") & regexm(`nam',"^(start|begin)(_|time|$)")) | ///
+             regexm(`nam',"^(interview_?)?(start|begin)(_?(time|datetime|timestamp))$|^(start|begin)_interview(_time)?$"))
+        quietly replace tm_kind = 2 if strpos(`typ',"date") & ///
+            (regexm(`txt',"(^|[^a-z])interview[ :_-]*(ends|finishes|end time|ending)([^a-z]|$)") | ///
+             regexm(`txt',"(^|[^a-z])(ending|end|finish)( time)?( of)?( the)? interview([^a-z]|$)") | ///
+             (strpos(`typ',"current") & regexm(`nam',"^(end|finish)(_|time|$)")) | ///
+             regexm(`nam',"^(interview_?)?(end|finish)(_?(time|datetime|timestamp))$|^(end|finish)_interview(_time)?$"))
+        quietly gen str244 tm_pair = regexr(`nam',"^(start|begin|end|finish)_?","") if tm_kind>0
+        quietly replace tm_pair = "interview" if inlist(tm_pair,"time","datetime","timestamp","interview","interview_time") | ///
+            regexm(`nam',"^interview_?(start|begin|end|finish)")
+        quietly count if tm_kind==1
+        local nstart = r(N)
+        quietly count if tm_kind==2
+        if `nstart'==1 & r(N)==1 quietly replace tm_pair = "interview" if tm_kind>0
+        quietly keep if tm_kind>0
+        quietly keep qx_var tm_kind tm_pair
+        quietly rename qx_var para_var
+        * egen's group helpers require observations. An empty typed map is
+        * valid: questionnaires need not contain any interview-clock fields.
+        if _N>0 {
+            quietly bysort para_var: keep if _n==1
+            * A pair is comparable only with one start and one end field.
+            quietly bysort tm_pair: gen byte tm_n = _N
+            quietly by tm_pair: egen byte tm_min = min(tm_kind)
+            quietly by tm_pair: egen byte tm_max = max(tm_kind)
+            quietly replace tm_pair = "" if tm_n!=2 | tm_min!=1 | tm_max!=2
+            quietly drop tm_n tm_min tm_max
+        }
+        quietly save `"`saving'"', replace
+    restore
+end
+
 program _suso_para_report, rclass
     version 14.2
     syntax [, SAVing(string) replace TITle(string) QX(string)                    ///
         DATA(string) FILTERS(string) VARS(string)                                ///
         GAPMins(real 30) FASTsecs(real 2) ALLRoles                               ///
         CASCade(integer 3) WINdow(real 60) LITEcap(integer 15000) HQURL(string)   ///
-        SKIPHTML(string) SKIPTOP(integer 15) MISScodes(numlist) ]
+        SKIPHTML(string) SKIPTOP(integer 15) MISScodes(numlist) STARTVAR(string) ENDVAR(string) ]
+    _suso_para_timeopts , startvar(`"`startvar'"') endvar(`"`endvar'"')
+    if `litecap'<0 | `skiptop'<0 | `cascade'<1 | missing(`window') | `window'<=0 {
+        di as err "suso paradata report: litecap()/skiptop() cannot be negative; cascade() must be at least 1 and window() must be finite and positive."
+        exit 198
+    }
     local missopt ""
     if "`misscodes'"!="" local missopt "misscodes(`misscodes')"
     _suso_para_need events
@@ -8638,8 +9092,8 @@ program _suso_para_report, rclass
     local htitle `"`r(out)'"'
 
     di as txt "suso paradata: building the interactive QC report ..."
-    tempfile EVD EVSK SK QT AQT QTK QWS QXO SQMAP SMAP STF STIMAP SACT STJSON DAILY HHF GGF MERGED RSD RSDFOCUS FLK HQF ///
-        KEYF MODEF TZF REJF REJDF OVF OVDF OVB OVP OVACT OVADF OVS PCEF VERF NQF RTF FRF ACTF ACTPF
+    tempfile EVD EVSK SK QT AQT QTK QWS QXO QXLABELS SQMAP SMAP STF STIMAP SACT STJSON DAILY HHF GGF MERGED RSD RSDFOCUS FLK HQF ///
+        KEYF MODEF TZF REJF REJDF OVF OVDF OVB OVP OVACT OVADF OVS PCEF VERF NQF RTF FRF ACTF ACTPF TMQ TMF
     tempname derivecap skipcap
     local nevents = _N
 
@@ -8674,6 +9128,7 @@ program _suso_para_report, rclass
     * keeps the first design position, and roster instances later collapse onto
     * their base para_var.  Parsing here also makes a bad qx() fail before the
     * multi-million-event behaviour derivation begins.
+    local timingopt ""
     local hasqxorder 0
     local hassections 0
     local sectionopt ""
@@ -8683,12 +9138,17 @@ program _suso_para_report, rclass
     if `"`qx'"'!="" {
         preserve
             quietly _suso_para_qxload , file(`"`qx'"')
+            quietly _suso_para_clockmap , saving(`"`TMQ'"')
+            local timingopt `"qxmap(`"`TMQ'"')"'
             quietly gen long qx_order = _n
-            quietly keep qx_var qx_order qx_section
+            quietly keep qx_var qx_order qx_section qx_text
             quietly drop if strtrim(qx_var)==""
             quietly bysort qx_var (qx_order): keep if _n==1
             quietly rename qx_var para_var
             quietly isid para_var
+            * Keep every parsed questionnaire label, including questions absent from timing.
+            mata: _suso_qxlabels_json(st_local("QXLABELS"))
+            quietly drop qx_text
             quietly replace qx_section = strtrim(qx_section)
             quietly egen long section_id = min(qx_order), by(qx_section)
             quietly replace section_id = 0 if qx_section==""
@@ -8749,6 +9209,12 @@ program _suso_para_report, rclass
     }
     quietly _suso_para_statusmap , saving(`"`QWS'"') data(`"`data'"') replace
     quietly _suso_para_sectionpayload , saving(`"`STF'"') `sectionopt'
+    quietly _suso_para_timechecks , saving(`"`TMF'"') `timingopt' startvar(`"`startvar'"') endvar(`"`endvar'"')
+    local timing_notice ""
+    if `"`startvar'"'!="" & (r(startcaptures)==0 | r(endcaptures)==0) {
+        local timing_notice "Explicit boundary fields: `startvar' (`=r(startcaptures)' field answer events), `endvar' (`=r(endcaptures)' field answer events). A field has no observed captures in this role scope; no missing boundary value is inferred. Check the exact variable spelling and supplied paradata."
+        di as txt "suso paradata: `timing_notice'"
+    }
     di as txt "  [behaviour 2/5] building compact interview/question summaries ..."
 
     * coverage of the event stream (freshness line in the header)
@@ -9602,6 +10068,11 @@ program _suso_para_report, rclass
     quietly replace pce_field_outside = 0 if missing(pce_field_outside)
     quietly replace pce_nonfield_outside = 0 if missing(pce_nonfield_outside)
     quietly replace pce_detail = "" if missing(pce_detail)
+    quietly merge 1:1 interview__id using `"`TMF'"', keep(master match) nogenerate
+    quietly replace timing_evidence = "[]" if timing_evidence==""
+    foreach tv in timing_pauses timing_backwards timing_revisions {
+        quietly replace `tv' = 0 if missing(`tv')
+    }
     quietly merge 1:1 interview__id using `"`VERF'"', keep(master match) nogenerate
     quietly merge 1:1 interview__id using `"`NQF'"',  keep(master match) nogenerate
     quietly merge 1:1 interview__id using `"`RTF'"',  keep(master match) nogenerate
@@ -9814,7 +10285,7 @@ program _suso_para_report, rclass
     file write `fh' `"@media (prefers-reduced-motion: reduce){.shead .chev{transition:none}}"' _n
     file write `fh' `":root{--ink:#002244;--line:#dce4ec;--muted:#556575}*{box-sizing:border-box}[hidden]{display:none!important}button,input,select{font:inherit}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:3px solid #1675b8;outline-offset:3px}"' _n
     file write `fh' `".review-workspace .wrap{max-width:1480px;padding:12px 24px 36px}.review-workspace .mast{padding:14px 24px}.review-workspace .logobar{padding:7px 24px}.review-workspace .cards{margin:10px 0 6px}.review-workspace .card{padding:8px 12px}.review-workspace .card .v{font-size:22px}.review-workspace .datasetline{font-size:11px;line-height:1.6}.review-workspace .panel{position:sticky;top:0;z-index:20;margin:0 0 10px;padding:10px 12px;box-shadow:0 2px 5px #0022440d}.review-workspace .prow{gap:10px}.review-workspace #c_resp{min-width:165px}.review-workspace .ctrl label{font-size:10px}.review-workspace .ctrl select,.review-workspace .ctrl input{padding:6px 8px}.review-workspace .chipnav{position:static;top:auto;margin:8px 0}.review-workspace .chipnav .chiputil,.review-workspace .chipnav [data-sec='s_att'],.review-workspace .chipnav [data-sec='s_enum'],.review-workspace .chipnav [data-sec='s_qt'],.review-workspace .chipnav [data-sec='s_rem'],.review-workspace .chipnav [data-sec='s_hist']{display:none}"' _n
-    file write `fh' `".report-method{font-size:11px;color:#697786;margin-top:16px}.report-method summary{cursor:pointer}.report-method .foot{margin-top:8px}.review-nav{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line);padding-top:8px;margin-bottom:10px}.view-button{padding:10px 15px;background:transparent;color:var(--muted);border:0;border-bottom:3px solid transparent;cursor:pointer;font-size:13px}.view-button.active{border-bottom-color:var(--ink);color:var(--ink);font-weight:700}.chipx.active{background:var(--ink);color:#fff}.scope-line{font-size:12px;line-height:1.5;background:#edf3f8;border-left:3px solid #426681;padding:7px 10px;margin:8px 0}.review-workspace .sblock{margin:10px 0;overflow:visible}.review-workspace .shead{cursor:default;padding:12px 14px}.review-workspace .shead .chev{display:none}.review-workspace .sbody{padding:10px 14px}.review-workspace .sbody section{padding:0;margin-top:8px}.review-workspace .sbody> .note{max-width:105ch}.review-workspace #s_qt .question-help,.review-workspace #s_hist .question-help{max-width:none;width:100%}.question-help ul{margin:4px 0 10px;padding-left:20px}.question-help li{margin:6px 0;line-height:1.55}.question-help p{margin:8px 0}.review-help{font-size:12px;color:var(--muted);margin:0 0 10px}.review-help summary,.case-context summary{cursor:pointer;font-weight:600;padding:7px 0}.review-toolbar{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px}.review-toolbar input{min-width:240px}.review-toolbar #c_csv{margin-left:auto}.review-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(340px,1fr);gap:16px;align-items:start}.review-list{min-width:0}.table-x{overflow-x:auto}.review-workspace #t_worst{table-layout:fixed;width:100%;min-width:620px}#t_worst .tier{min-width:92px;white-space:nowrap;overflow-wrap:normal;text-align:center}#t_worst th{font-size:10px;text-transform:uppercase;letter-spacing:.03em;white-space:normal}#t_worst th:nth-child(1){width:112px}#t_worst th:nth-child(2){width:126px}#t_worst th:nth-child(3){width:110px}#t_worst th:last-child{width:66px}#t_worst td{padding:10px 7px;font-size:12px;vertical-align:top;overflow-wrap:anywhere}#t_worst .selected{background:#edf5fc;box-shadow:inset 3px 0 #1675b8}.case-select,.actor-review{font-size:12px;font-weight:600;background:transparent;border:0;padding:0;color:#07588c;cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:3px}.row-status{display:block;color:#697786;font-size:10px;margin-top:5px}.row-reason{line-height:1.45}.review-pagination{display:flex;align-items:center;gap:8px;padding:12px 0;color:var(--muted);font-size:12px}#review_count{margin-right:auto}.pbtn:disabled{opacity:.45;cursor:default}.review-detail{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0;overflow-wrap:anywhere}.empty-detail{min-height:200px}.review-detail h3{font-size:17px;margin:8px 0;color:var(--ink)}.review-detail h4{font-size:12px;margin:16px 0 8px}.case-head{display:flex;align-items:start;justify-content:space-between;gap:10px}.case-head .pbtn{padding:5px 9px}.case-meta{font-size:12px;color:var(--muted);margin:2px 0 12px}.case-actions{display:flex;gap:7px;flex-wrap:wrap}.case-actions .hqlinks{display:flex;flex-wrap:wrap;gap:6px}.case-actions .hqlink{margin:0}.case-actions .pbtn{padding:5px 8px}.review-detail .ev{background:white;border:1px solid #e6ebef;border-left:3px solid #c5a34d;border-radius:4px;padding:9px;font-size:12px;line-height:1.5;margin:7px 0}.case-context{border-top:1px solid var(--line);margin-top:12px;color:var(--muted);font-size:12px}.case-context .facts{font-size:12px;line-height:1.8;background:transparent;padding:6px 0}.case-context .cpy{font-size:10px;background:#fff;border:1px solid #ccd6df;border-radius:3px;padding:2px 5px}.review-workspace .hv-tablewrap,.review-workspace .hvc-wrap,.review-workspace .hv-timeline{max-height:none;overflow-y:visible}.review-workspace .bremcase{overflow-wrap:anywhere}"' _n
+    file write `fh' `".report-method{font-size:11px;color:#697786;margin-top:16px}.report-method summary{cursor:pointer}.report-method .foot{margin-top:8px}.review-nav{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line);padding-top:8px;margin-bottom:10px}.view-button{padding:10px 15px;background:transparent;color:var(--muted);border:0;border-bottom:3px solid transparent;cursor:pointer;font-size:13px}.view-button.active{border-bottom-color:var(--ink);color:var(--ink);font-weight:700}.chipx.active{background:var(--ink);color:#fff}.scope-line{font-size:12px;line-height:1.5;background:#edf3f8;border-left:3px solid #426681;padding:7px 10px;margin:8px 0}.review-workspace .sblock{margin:10px 0;overflow:visible}.review-workspace .shead{cursor:default;padding:12px 14px}.review-workspace .shead .chev{display:none}.review-workspace .sbody{padding:10px 14px}.review-workspace .sbody section{padding:0;margin-top:8px}.review-workspace .sbody> .note{max-width:105ch}.review-workspace #s_qt .question-help,.review-workspace #s_hist .question-help{max-width:none;width:100%}.question-help ul{margin:4px 0 10px;padding-left:20px}.question-help li{margin:6px 0;line-height:1.55}.question-help p{margin:8px 0}.review-help{font-size:12px;color:var(--muted);margin:0 0 10px}.review-help summary,.case-context summary{cursor:pointer;font-weight:600;padding:7px 0}.review-toolbar{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px}.review-toolbar input{min-width:240px}.review-toolbar #c_csv{margin-left:auto}.review-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(340px,1fr);gap:16px;align-items:start}.review-list{min-width:0}.table-x{overflow-x:auto}.review-workspace #t_worst{table-layout:fixed;width:100%;min-width:620px}#t_worst .tier{min-width:92px;white-space:nowrap;overflow-wrap:normal;text-align:center}#t_worst th{font-size:10px;text-transform:uppercase;letter-spacing:.03em;white-space:normal}#t_worst th:nth-child(1){width:112px}#t_worst th:nth-child(2){width:126px}#t_worst th:nth-child(3){width:110px}#t_worst th:last-child{width:66px}#t_worst td{padding:10px 7px;font-size:12px;vertical-align:top;overflow-wrap:anywhere}#t_worst tbody tr.selected>td{background:#edf5fc}#t_worst tbody tr.selected>td:first-child{box-shadow:inset 3px 0 #1675b8}#t_worst tbody tr:not(.selected):hover>td{background:#f1f6fa}#t_worst .case-select:focus-visible{outline:2px solid #1675b8;outline-offset:3px}.case-select,.actor-review{font-size:12px;font-weight:600;background:transparent;border:0;padding:0;color:#07588c;cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:3px}.row-status{display:block;color:#697786;font-size:10px;margin-top:5px}.row-reason{line-height:1.45}.review-pagination{display:flex;align-items:center;gap:8px;padding:12px 0;color:var(--muted);font-size:12px}#review_count{margin-right:auto}.pbtn:disabled{opacity:.45;cursor:default}.review-detail{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0;overflow-wrap:anywhere}.empty-detail{min-height:200px}.review-detail h3{font-size:17px;margin:8px 0;color:var(--ink)}.review-detail h4{font-size:12px;margin:16px 0 8px}.case-head{display:flex;align-items:start;justify-content:space-between;gap:10px}.case-head .pbtn{padding:5px 9px}.case-meta{font-size:12px;color:var(--muted);margin:2px 0 12px}.case-actions{display:flex;gap:7px;flex-wrap:wrap}.case-actions .hqlinks{display:flex;flex-wrap:wrap;gap:6px}.case-actions .hqlink{margin:0}.case-actions .pbtn{padding:5px 8px}.review-detail .ev{background:white;border:1px solid #e6ebef;border-left:3px solid #c5a34d;border-radius:4px;padding:9px;font-size:12px;line-height:1.5;margin:7px 0}.case-context{border-top:1px solid var(--line);margin-top:12px;color:var(--muted);font-size:12px}.case-context .facts{font-size:12px;line-height:1.8;background:transparent;padding:6px 0}.case-context .cpy{font-size:10px;background:#fff;border:1px solid #ccd6df;border-radius:3px;padding:2px 5px}.review-workspace .hv-tablewrap,.review-workspace .hvc-wrap,.review-workspace .hv-timeline{max-height:none;overflow-y:visible}.review-workspace .bremcase{overflow-wrap:anywhere}"' _n
     file write `fh' `"@media(max-width:1100px){.review-grid{grid-template-columns:1fr}.review-detail{min-height:0}.review-workspace .wrap{padding:10px 14px}.review-workspace .panel{position:static}.review-toolbar #c_csv{margin-left:0}}@media(max-width:640px){.view-button{padding:9px}.review-toolbar input{min-width:180px}#t_worst{min-width:620px}.review-workspace .card{flex-basis:100px}.review-workspace .sbody{padding:8px}.review-pagination{flex-wrap:wrap}}@media print{.review-workspace .panel,.review-nav,.review-toolbar,.review-pagination,.case-head button{display:none!important}.review-grid{display:block}.review-detail{margin-top:16px}.review-workspace .sblock[hidden]{display:none!important}.case-context{display:block}}"' _n
     file write `fh' `".hv-section-times{border:1px solid #dce5ec;border-radius:6px;background:#fff}.review-workspace .sbody .hv-section-times{margin:16px 0;padding:14px}.hv-section-times .scope-line{overflow-wrap:anywhere}.hv-section-times #hv_section_totals{margin:0;padding:7px 0;font-variant-numeric:tabular-nums}.hv-section-times .st-method{max-width:none}.hv-section-times .st-method li{margin:6px 0;line-height:1.55}.hv-section-times h3{font-size:17px;margin:0 0 8px;color:#002244}#hv_section_table{width:100%;min-width:640px;table-layout:fixed}#hv_section_table th{white-space:normal}#hv_section_table td.r,#hv_section_table th.r{text-align:center}#hv_section_table thead th:first-child{width:46%}#hv_section_table thead th:nth-child(2){width:12%}#hv_section_table thead th:nth-child(3){width:16%}#hv_section_table thead th:nth-child(4){width:14%}#hv_section_table thead th:nth-child(5){width:12%}#hv_section_table th[scope=row]{text-align:left;font-weight:500;color:#1a1a1a;background:#fff;overflow-wrap:anywhere;border-bottom:1px solid #eef0f2}#hv_section_table td,#hv_section_table th{padding:10px 12px;vertical-align:middle;font-variant-numeric:tabular-nums}#hv_section_table tbody tr:nth-child(even) th{background:#fafbfc}#hv_section_table tr[data-section-id='0']>*{background:#fff8e8}.st-toolbar{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:12px 0}.st-toolbar .ctrl{min-width:170px}.st-toolbar #st_csv{margin-left:auto}.st-kpis{display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:12px;margin:14px 0}.st-kpi{padding:14px;background:#f0f5f9;border:1px solid #dce5ec;border-radius:6px}.st-kpi strong{display:block;font-size:25px;line-height:1.25;color:#163d59;font-variant-numeric:tabular-nums}.st-kpi span,.st-sub{display:block;font-size:12px;color:#526577;margin-top:4px}#t_sections th[scope=row]{font-weight:500;text-align:left;white-space:normal;min-width:190px;max-width:380px;overflow-wrap:anywhere}#t_sections td,#t_sections th{padding:11px 9px;font-variant-numeric:tabular-nums}#t_sections th[scope=col]{font-size:11px;white-space:normal}#t_sections tr[data-section-id='0']{background:#fff8e8}.st-share{display:flex;gap:8px;align-items:center;min-width:155px}.st-share>span:last-child{min-width:43px;text-align:right}.st-track{width:100%;height:9px;background:#e2e9ef;border-radius:5px;overflow:hidden}.st-track>span{display:block;height:100%;background:#24688f}#st_empty,#st_mapping{padding:10px 12px;background:#fff8e8;color:#654e20;border-radius:4px;font-size:12px}#st_quality{font-size:12px;color:#526577}.st-method{font-size:12px;color:#526577;margin-top:12px;max-width:110ch}.st-method summary{cursor:pointer;font-weight:600;padding:6px 0}.st-method p{line-height:1.6}@media(max-width:600px){.st-kpis{grid-template-columns:1fr}.st-toolbar #st_csv{margin-left:0}.st-toolbar .ctrl{width:100%}}"' _n
     file write `fh' `"</style></head><body>"' _n
@@ -9889,7 +10360,7 @@ program _suso_para_report, rclass
     file write `fh' `"</nav>"' _n
     file write `fh' `"<div id="review_scope" class="scope-line" role="status"></div><div id="verdict" class="verdict"></div>"' _n
     file write `fh' `"<div class='sblock' id='s_att'><button class='shead' type='button' aria-expanded='false'><h2>What needs attention</h2><span class='pillc' id='p_att' style='display:none'></span><span class='sfind' id='f_att'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
-    file write `fh' `"<details class="review-help"><summary>How priorities are assigned</summary><div class="note">Every interview here comes with the evidence in plain words. <b>Investigate</b> = an unchanged rejection cycle or signals from at least three independent risk domains. <b>Verify</b> = two risk domains, a concentrated pace/duration pattern, a quick correction cycle, an overlap screen, or an unresolved removal history. <b>Watch</b> = one isolated domain or a long/multi-day continuation. Speed and fast streak belong to one pace domain; short and duration-outlier belong to one duration domain, so correlated measures are not double-counted as independent evidence. Click a row for its detail; the key is what you paste into Headquarters. All signals are screening evidence for review, never proof of fabrication. <span id="w_none"></span></div></details>"' _n
+    file write `fh' `"<details class="review-help"><summary>How priorities are assigned</summary><div class="note">Every interview here comes with the evidence in plain words. <b>Investigate</b> = an in-survey pause, a comparable end-before-start answer, a boundary-time revision of at least one minute, an unchanged rejection cycle, or signals from at least three independent risk domains. Terminal pauses emitted with/after completion are excluded. Time revisions compare the same question/roster/actor and compatible timezone bases; first captures alone do not trigger. <b>Verify</b> = two risk domains, a concentrated pace/duration pattern, a quick correction cycle, an overlap screen, or an unresolved removal history. <b>Watch</b> = one isolated domain or a long/multi-day continuation. Speed and fast streak belong to one pace domain; short and duration-outlier belong to one duration domain, so correlated measures are not double-counted as independent evidence. Click a row for its detail; the key is what you paste into Headquarters. All signals are screening evidence for review, never proof of fabrication. <span id="w_none"></span></div></details>"' _n
     file write `fh' `"<section><div class="review-toolbar"><div class="ctrl"><label for="review_search">Find interview or enumerator</label><input id="review_search" type="search" placeholder="Key, ID, actor or status"></div><div class="ctrl"><label for="review_tier">Priority</label><select id="review_tier"><option value="">All priorities</option><option value="A">Investigate</option><option value="V">Verify</option><option value="W">Watch</option><option value="N">No active signals</option></select></div><button id="c_csv" class="pbtn ghost" type="button" title="Interviews matching the current filters, search and priority; includes every page">Download review list (CSV)</button></div><div class="review-grid"><div class="review-list"><div class="table-x"><table id="t_worst" aria-label="Interviews for review"></table></div><div class="review-pagination"><span id="review_count" role="status"></span><button id="review_prev" type="button" class="pbtn ghost">Previous</button><button id="review_next" type="button" class="pbtn ghost">Next</button></div></div><aside id="review_detail" class="review-detail" aria-label="Selected interview evidence"></aside></div></section>"' _n
     file write `fh' `"</div></div>"' _n
     file write `fh' `"<div class='sblock' id='s_flags'><button class='shead' type='button' aria-expanded='false'><h2>Behaviour flags</h2><span class='sfind' id='f_flags'></span><span class='chev'>&#9654;</span></button><div class='sbody'>"' _n
@@ -10034,7 +10505,7 @@ program _suso_para_report, rclass
         quietly gen strL e_state = "<b>Current paradata state:</b> " + ///
             strofreal(nreanswered) + " answered again; " + strofreal(nopen) + ///
             " still appear removed; " + strofreal(nunknown) + " unknown."
-        quietly gen strL e_action = "<b>Check in final .dta:</b> <span class=" + char(34) + "mono" + char(34) + ">" + e_check + "</span>. Reject only if a listed value is actually blank and should have been asked."
+        quietly gen strL e_action = "<b>Check in final .dta:</b> <span class=" + char(34) + "mono" + char(34) + " data-qvars>" + e_check + "</span>. Reject only if a listed value is actually blank and should have been asked."
         quietly replace e_action = "<b>Priority check:</b> review the final .dta and interview history because multiple unresolved sequences or sections are involved." if tier=="A"
         quietly gen str24 e_dt = cond(missing(ts0),"time unavailable",       ///
             string(ts0/86400000, "%tdDD_Mon_CCYY"))
@@ -10058,8 +10529,8 @@ program _suso_para_report, rclass
                 file write `fh' `"<div class="note" style="margin:4px 0 0;color:#333">"' (e_action[`i']) `"</div>"' _n
                 file write `fh' `"<details style="margin-top:5px"><summary style="cursor:pointer;color:#556575;font-size:11.5px">Technical details</summary>"' _n
                 file write `fh' `"<div class="note">"' (e_rel[`i']) `" &nbsp; Removal events: "' (strofreal(nrem[`i'])) `"</div>"' _n
-                if e_qt[`i']!="" file write `fh' `"<div class="note"><span class="mono">"' (e_tg[`i']) `"</span>: &quot;"' (e_qt[`i']) `"&quot;</div>"' _n
-                if e_wl[`i']!="" file write `fh' `"<div class="note">Affected questions: <span class="mono">"' (e_wl[`i']) (cond(length(wlc[`i'])>300," ...","")) `"</span></div>"' _n
+                if e_qt[`i']!="" file write `fh' `"<div class="note"><span class="mono" data-qvars>"' (e_tg[`i']) `"</span>: &quot;"' (e_qt[`i']) `"&quot;</div>"' _n
+                if e_wl[`i']!="" file write `fh' `"<div class="note">Affected questions: <span class="mono" data-qvars>"' (e_wl[`i']) (cond(length(wlc[`i'])>300," ...","")) `"</span></div>"' _n
                 file write `fh' `"</details></div>"' _n
             }
         }
@@ -10088,11 +10559,13 @@ program _suso_para_report, rclass
     file write `fh' `"</div></div>"' _n
     _suso_para_hesc `"`rolenote'"'
     local rnesc `"`r(out)'"'
+    if `"`timing_notice'"'!="" file write `fh' `"<p class="note" id="timing_capture_notice">`timing_notice'</p>"' _n
     local veline ""
     if `hasve' local veline " Open validation errors count the questions whose last validity event is a failure."
-    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.37) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
+    file write `fh' `"<div class="foot"><b>Method.</b> Timing uses `rnesc'. Full-stream lifecycle, session, actor, resubmission, overlap and post-completion metrics are derived before any vars() question scope is applied. Initial CAPI preload AnswerSet events and non-interviewer roles are excluded from field behaviour. First-pass timing stops at the first interviewer completion; later correction work is retained separately. Active time sums ordinary within-session inter-event gaps, caps each at `gapmins' minutes, and contributes zero across pauses, workflow boundaries, actor handoffs and inferred long-gap session boundaries. Answer speed preserves milliseconds and is the gap preceding each newly reached question instance within the same actor and session; repeat taps are excluded. Peer speed compares the primary actor's timed questions with survey medians for those same question instances. Shared-minute overlap is based on the same actor recording answer events in two interviews in a UTC-minute bucket; it retains actor, minute and counterpart as a screening trace and is not proof of simultaneity. Night and field dates use device-local time; missing, changing or atypical offsets are disclosed and unreliable timing flags are suppressed. Pure CAWI and mixed-mode histories suppress interviewer timing signals. Duration outliers use robust median/MAD z-scores on first-pass active time.`veline' Records with no interviewer activity (`nuntouchedc' of `nintsc' here, typically API-preloaded grid points) are excluded from behaviour figures. Flags are screening signals for review, never evidence of fabrication by themselves.<br><b>Produced by</b> suso paradata report (suso v1.7.39) on `now'. Thresholds shown in the control panel are live and local to this page.</div>"' _n
     file write `fh' `"</div>"' _n
 
+    _suso_para_labels_js `fh'
     _suso_para_history_js `fh'
     * ---- embedded data ------------------------------------------------------------
     file write `fh' `"<script>"' _n
@@ -10179,6 +10652,7 @@ program _suso_para_report, rclass
         if `"`fjm'"'!="" local fjm `","f":{`fjm'}"'
         local sep = cond(`i'==1, "", ",")
         file write `fh' `"`sep'{"id":"`ij'","k":"`kj'","a":"`aj'","r":"`rj'","le":"`lej'","fi":"`fij'","na":`=n_field_actors[`i']',"ho":`=handoff[`i']',"pas":`pasj',"ws":"`wsj'","wsp":"`wspj'","wsd":"`wsdj'","wss":"`wssj'","wsc":"`wscj'","wsm":`=ws_mismatch[`i']'`fjm',"d0":"`=__d0[`i']'","d1":"`=__d1[`i']'","m":`=iscawi[`i']',"mm":`=mixedmode[`i']',"mu":`=mode_unknown[`i']',"tq":`=timing_ok[`i']',"lq":`=local_time_ok[`i']',"itq":`=interview_timing_ok[`i']',"ilq":`=interview_local_time_ok[`i']',"im":`=interview_iscawi[`i']',"imm":`=interview_mixedmode[`i']',"imu":`=interview_mode_unknown[`i']',"itz":`=cond(missing(interview_tzh[`i']),"null",string(interview_tzh[`i'],"%12.1f"))',"ito":`=interview_tzodd[`i']',"cb":`=n_clockback[`i']',"nt":`=n_timed[`i']',"ntt":`=n_timed_total[`i']',"nc":`=n_completed[`i']',"act":`=string(active_min[`i'],"%12.3f")',"af":`afj',"paf":`pafj',"pact":`pactj',"pans":`pansj',"pansf":`pansfj',"pss":`pssj',"sp":`spj',"spf":`spfj',"lp":`lpj',"lpp":`lppj',"wd":`=work_days_first[`i']',"wdt":`=work_days[`i']',"on":`onj',"pr":`=postcompletion_return[`i']',"med":`med',"fsh":`fsh',"nsh":`nsh',"ch":`=string(churn[`i'],"%12.3f")',"cas":`=n_cascades[`i']',"rem":`=casc_removed[`i']',"wip":`=casc_questions[`i']',"cop":`=casc_open[`i']',"cr":`=casc_reanswered[`i']',"cu":`=casc_unknown[`i']',"fda":`=casc_finalanswered[`i']',"fad":`=casc_answered_disabled[`i']',"feb":`=casc_expectedblank[`i']',"fbe":`=casc_blank_enabled[`i']',"flu":`=casc_logicunknown[`i']',"fnd":`=casc_notindata[`i']',"fck":`=casc_finalcheck[`i']',"fdc":`=casc_datachecked[`i']',"fr":`=fr[`i']'"'
+        file write `fh' `","npause":"' (timing_pauses[`i']) `","nback":"' (timing_backwards[`i']) `","nrevision":"' (timing_revisions[`i']) `","te":"' (timing_evidence[`i'])
         file write `fh' `","rt":`rtj',"ov":`=ovm[`i']',"ovt":`=ovm_total[`i']',"ova":"`ovaj'","ovd":"`ovdj'","rj":`=n_rejected[`i']',"rb":`rbj',"rq":`rqj',"re":`rej',"ref":`refj',"rba":"`rbaj'","rbv":"`rbvj'","rbc":`=rb_complete[`i']',"rbb":`=rb_clockbad[`i']',"pc":`=pce[`i']',"pca":`=pce_all[`i']',"pcn":`=pce_nonfield[`i']',"pco":`=pce_outside[`i']',"pcf":`=pce_field_outside[`i']',"pcno":`=pce_nonfield_outside[`i']',"pcd":"`pcdj'","ve":`vej',"nq":`nqj',"pq":`pqj',"ss":`=sessions[`i']',"sf":`=sessions_first[`i']',"sr":`=sessions_rework[`i']',"rs":`=n_restarted[`i']',"tz":`=cond(missing(tzh[`i']),"null",string(tzh[`i'],"%12.1f"))',"to":`=tzodd[`i']'`vecs'}"' _n
     }
     file write `fh' `"],"' _n
@@ -10221,6 +10695,18 @@ program _suso_para_report, rclass
     }
     file write `fh' `"],"' _n
     file write `fh' `""sections":[{"id":0,"label":"Unmapped activity"}`jsections'],"' _n
+    file write `fh' `""ql":["' _n
+    if `hasqxorder' {
+        tempname qlf
+        file open `qlf' using `"`QXLABELS'"', read text
+        file read `qlf' qlline
+        while r(eof)==0 {
+            file write `fh' `"`macval(qlline)'"' _n
+            file read `qlf' qlline
+        }
+        file close `qlf'
+    }
+    file write `fh' `"],"' _n
     file write `fh' `""sq":[`jsectionvars'],"' _n
     file write `fh' `""sa":["' _n
     quietly use `"`SACT'"', clear
@@ -10535,7 +11021,21 @@ end
 
 program _suso_para_check, rclass
     version 14.2
-    syntax [if] , QX(string) DATA(string) [ SAVing(string) replace MISScodes(numlist) TOP(integer 10) HTML(string) STatus(string) FILTERS(string) ]
+    * Defer expression validation until data() is loaded: its columns need not
+    * exist in the caller's current (usually paradata) dataset.
+    syntax [anything(name=restriction equalok everything)] , QX(string) DATA(string) [ SAVing(string) replace MISScodes(numlist) TOP(integer 10) HTML(string) STatus(string) FILTERS(string) ]
+    local if `"`restriction'"'
+    if `"`if'"'!="" {
+        gettoken qualifier expression : if
+        if "`qualifier'"!="if" | strtrim(`"`expression'"')=="" {
+            di as err "suso paradata check: only an if expression may precede the options."
+            exit 198
+        }
+    }
+    if `top'<0 {
+        di as err "suso paradata check: top() must be nonnegative."
+        exit 198
+    }
     confirm file `"`qx'"'
     confirm file `"`data'"'
     if "`misscodes'"=="" local misscodes "-999999999"
@@ -11121,7 +11621,7 @@ program _suso_para_check, rclass
     file write `hf' `"<div class="note">Click any row for the question text, its skip condition, and the offending values. <span id="l_more"></span></div>"' _n
     file write `hf' `"<div id="list"></div>"' _n
     file write `hf' `"</div></div>"' _n
-    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.37) on `now'.</div>"' _n
+    file write `hf' `"<div class="foot"><b>Method.</b> Enabling conditions from the questionnaire HTML are translated to tri-state Stata expressions (true / false / unknown). OR uses max() and AND uses min(), so true OR unknown stays true and false AND unknown stays false; only the unresolved final gate is excluded as undetermined. Missing codes normalised: `misscodes' and the ##N/A## string sentinel. Unsupported residual conditions remain unknown and are never guessed. Produced by suso paradata check (suso v1.7.39) on `now'.</div>"' _n
     file write `hf' `"</div><script>"' _n
     file write `hf' `"var D={"meta":{"statuses":[`jmeta'],"fdims":[`jfdims']},"rows":["' _n
     forvalues i = 1/`=_N' {
@@ -11510,10 +12010,24 @@ end
 * element ids stay isolated while Headquarters links can open in a new tab.
 program _suso_para_suite, rclass
     version 14.2
-    syntax [if] [, SAVing(string) replace TITle(string) QX(string) DATA(string)  ///
+    syntax [anything(name=restriction equalok everything)] [, SAVing(string) replace TITle(string) QX(string) DATA(string)  ///
         GAPMins(real 30) FASTsecs(real 2) ALLRoles LITEcap(integer 15000)         ///
         CASCade(integer 3) WINdow(real 60) TOP(integer 15)                         ///
-        MISScodes(numlist) STatus(string) FILTERS(string) VARS(string) HQURL(string) ]
+        MISScodes(numlist) STatus(string) FILTERS(string) VARS(string) HQURL(string) STARTVAR(string) ENDVAR(string) ]
+    _suso_para_timeopts , startvar(`"`startvar'"') endvar(`"`endvar'"')
+    local if `"`restriction'"'
+    if `"`if'"'!="" {
+        gettoken qualifier expression : if
+        if "`qualifier'"!="if" | strtrim(`"`expression'"')=="" {
+            di as err "suso paradata suite: only an if expression may precede the options."
+            exit 198
+        }
+    }
+    if `litecap'<0 | `top'<0 | `cascade'<1 | missing(`window') | `window'<=0 {
+        di as err "suso paradata suite: litecap() and top() must be nonnegative;"
+        di as err "                     cascade() must be at least 1 and window() must be positive."
+        exit 198
+    }
     local missopt ""
     if "`misscodes'"!="" local missopt "misscodes(`misscodes')"
     _suso_para_need events
@@ -11586,7 +12100,7 @@ program _suso_para_suite, rclass
         if "$SUSO_WS"!="" local title "Survey QC Suite — $SUSO_WS"
     }
     di as txt "suso paradata: building the QC suite ..."
-    di as txt "  code build: 1.7.37-FILTERSEARCH"
+    di as txt "  code build: 1.7.39-REVIEWFLAGS"
     tempfile EVX T1 T2 T3
     quietly save `"`EVX'"'
 
@@ -11621,7 +12135,7 @@ program _suso_para_suite, rclass
         data(`"`data'"') filters(`"`filters'"') vars(`"`vars'"')                  ///
         gapmins(`gapmins') fastsecs(`fastsecs') `allroles'                        ///
         cascade(`cascade') window(`window') litecap(`litecap') hqurl(`"`hqbase'"') ///
-        skiphtml(`"`T2'"') skiptop(`top') `missopt'
+        skiphtml(`"`T2'"') skiptop(`top') `missopt' startvar(`"`startvar'"') endvar(`"`endvar'"')
     local rc1 = _rc
     if `rc1' {
         quietly use `"`EVX'"', clear
@@ -11658,9 +12172,13 @@ program _suso_para_suite, rclass
     _suso_para_hesc `"`sub'"'
     local sub `"`r(out)'"'
     local t1p `"`T1'"'
-    mata: _suso_suite_write(st_local("saving"), st_local("etitle"), st_local("sub"), ///
+    * Mata fopen(...,"w") refuses an existing file. Serialize to a fresh
+    * temporary file, then honor Stata's replace option only after success.
+    tempfile SUITEHTML
+    mata: _suso_suite_write(st_local("SUITEHTML"), st_local("etitle"), st_local("sub"), ///
         st_local("t1p"), st_local("t2p"), st_local("t3p"),                           ///
         st_local("note2"), st_local("note3"))
+    quietly copy `"`SUITEHTML'"' `"`saving'"', `replace'
 
     local fullp `"`saving'"'
     if strpos(`"`saving'"',"/")==0 & strpos(`"`saving'"',"\")==0 local fullp `"`c(pwd)'/`saving'"'
@@ -11780,6 +12298,176 @@ end
 version 14.2
 mata:
 
+// Timing evidence comes from Stata's ordered, role-scoped event stream.
+string scalar _suso_tm_quote(string scalar s)
+{
+    return(char(34)+suso_jsonesc(s)+char(34))
+}
+string scalar _suso_tm_num(real scalar x)
+{
+    return(missing(x) ? "null" : strtrim(strofreal(x,"%21.3f")))
+}
+string scalar _suso_tm_when(real scalar t, real scalar valid, real scalar ord)
+{
+    if (valid & !missing(t)) return(strtrim(strofreal(t,"%tcCCYY-NN-DD_HH:MM:SS"))+" UTC")
+    return("event "+strtrim(strofreal(ord))+" (UTC time unavailable)")
+}
+// Return milliseconds and time basis: 1=explicit UTC, 2=naive local.
+// Full dates plus times are required. No date-only or ambiguous MDY parsing.
+real rowvector _suso_tm_parse(string scalar raw)
+{
+    string scalar v, tail, core
+    real scalar t, off, hh, mm, sign, basis, fraction
+    v = strtrim(raw)
+    if (substr(v,1,1)==char(34) & substr(v,strlen(v),1)==char(34)) v=substr(v,2,strlen(v)-2)
+    if (!regexm(v,"^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][T ][0-9][0-9]:[0-9][0-9]:[0-9][0-9]")) return((.,.))
+    core=substr(v,1,19); tail=substr(v,20,.)
+    fraction=0
+    if (regexm(tail,"^[.][0-9]+")) {
+        fraction=strtoreal("0"+regexs(0))*1000
+        tail=regexr(tail,"^[.][0-9]+","")
+    }
+    basis=2; off=0
+    if (tail=="Z" | tail=="z") basis=1
+    else if (regexm(tail,"^[+-][0-9][0-9]:[0-9][0-9]$")) {
+        hh=strtoreal(substr(tail,2,2)); mm=strtoreal(substr(tail,5,2))
+        if (hh>14 | mm>59 | (hh==14 & mm>0)) return((.,.))
+        sign=substr(tail,1,1)=="-" ? -1 : 1
+        off=sign*(hh*3600000+mm*60000); basis=1
+    }
+    else if (tail!="") return((.,.))
+    t=clock(subinstr(core,"T"," "),"YMDhms")
+    if (missing(t)) return((.,.))
+    return((t+fraction-off,basis))
+}
+real scalar _suso_tm_comparable(real rowvector a, real rowvector b)
+{
+    if (missing(a[1]) | missing(b[1]) | a[2]!=b[2]) return(0)
+    if (a[2]==1) return(1)
+    // Never assume naive local answers have the same UTC basis after a
+    // device-offset change or when offset metadata is unavailable.
+    return(!missing(a[3]) & !missing(b[3]) & a[3]==b[3])
+}
+string scalar _suso_tm_item(string scalar kind, string scalar actor, string scalar ak,
+    string scalar role, string scalar text, string scalar t0, string scalar t1,
+    real scalar seconds, string scalar variable)
+{
+    return("{"+_suso_tm_quote("kind")+":"+_suso_tm_quote(kind)+","+
+        _suso_tm_quote("actor")+":"+_suso_tm_quote(actor)+","+
+        _suso_tm_quote("actorKey")+":"+_suso_tm_quote(ak)+","+
+        _suso_tm_quote("role")+":"+_suso_tm_quote(role)+","+
+        _suso_tm_quote("text")+":"+_suso_tm_quote(text)+","+
+        _suso_tm_quote("start")+":"+_suso_tm_quote(t0)+","+
+        _suso_tm_quote("end")+":"+_suso_tm_quote(t1)+","+
+        _suso_tm_quote("seconds")+":"+_suso_tm_num(seconds)+","+
+        _suso_tm_quote("variable")+":"+_suso_tm_quote(variable)+"}")
+}
+void _suso_tm_scan()
+{
+    string matrix S
+    real matrix X
+    transmorphic scalar previous, starts, ends
+    real scalar n,b,e,i,j,k,nxt,active,np,nb,nr,seconds,terminal,kind
+    real colvector following
+    real rowvector parsed,cur,old,first,last
+    string scalar out,item,key,pair,who,t0,t1,txt,q,priorraw,priorwho,priorwhen
+    // id,event,actor,actor-key,variable,roster,value,pair,role
+    S=st_sdata(.,tokens("interview__id para_ev para_actor para_actor_key para_var para_roster para_val tm_pair tm_role"))
+    // time,UTC valid,offset,in scope,answer,removed,completed,order,boundary kind
+    st_view(X,.,tokens("para_tsu para_utc_valid para_off para_ivw para_fieldans para_fieldrem para_fieldcmp para_ord tm_kind"))
+    n=rows(X); following=J(n,1,.)
+    b=1
+    while (b<=n) {
+        e=b
+        while (e<n) {
+            if (S[e+1,1]!=S[b,1]) break
+            e++
+        }
+        nxt=.; for (i=e;i>=b;i--) {
+            following[i]=nxt
+            if (X[i,4] & (X[i,5] | X[i,6] | X[i,7] | anyof(("resumed","restarted","started"),S[i,2]))) nxt=i
+        }
+        previous=asarray_create("string",1); starts=asarray_create("string",1); ends=asarray_create("string",1)
+        out=""; np=0; nb=0; nr=0; active=0
+        for (i=b;i<=e;i++) {
+            kind=X[i,9]
+            key=S[i,5]+char(30)+S[i,6]
+            pair=S[i,8]+char(30)+S[i,6]
+            if (!X[i,4]) {
+                // Out-of-scope boundary edits invalidate stale field state;
+                // they never become field-actor allegations or comparisons.
+                if (kind>0 & anyof(("answerset","answerremoved"),S[i,2])) {
+                    if (asarray_contains(previous,key)) asarray_remove(previous,key)
+                    if (kind==1 & asarray_contains(starts,pair)) asarray_remove(starts,pair)
+                    if (kind==2 & asarray_contains(ends,pair)) asarray_remove(ends,pair)
+                }
+                continue
+            }
+            who=S[i,3]; if (who=="") who="Unknown actor"
+            if (S[i,9]!="") who=who+" ["+S[i,9]+"]"
+            t0=_suso_tm_when(X[i,1],X[i,2],X[i,8]); item=""
+            if (S[i,2]=="paused" & active & !missing(following[i])) {
+                j=following[i]; seconds=.
+                if (X[i,2] & X[j,2] & !missing(X[i,1]) & !missing(X[j,1]) & X[j,1]>=X[i,1]) seconds=(X[j,1]-X[i,1])/1000
+                terminal=X[j,7] & (missing(seconds) | seconds<60)
+                if (!terminal) {
+                    t1=_suso_tm_when(X[j,1],X[j,2],X[j,8])
+                    txt="In-survey Paused event by "+who+" at "+t0+"; next field event "+S[j,2]+" by "+S[j,3]+" at "+t1+". "
+                    txt=txt+(missing(seconds) ? "The interval cannot be aligned reliably in UTC." : "Recorded interval: "+strtrim(strofreal(seconds/60,"%12.2f"))+" min.")
+                    txt=txt+" Review the reason for this interruption; a pause alone does not establish misconduct."
+                    item=_suso_tm_item("pause",S[i,3],S[i,4],S[i,9],txt,t0,t1,seconds,"")
+                    out=out+(out!="" ? "," : "")+item; np++
+                }
+                active=0
+            }
+            if (X[i,7]) active=0
+            if (X[i,5] | X[i,6] | anyof(("resumed","restarted","started"),S[i,2])) active=1
+            if (!kind | (!X[i,5] & !X[i,6])) continue
+            if (X[i,6]) {
+                // A removed value is absent; don't compare a later end with it.
+                if (asarray_contains(previous,key)) asarray_remove(previous,key)
+                if (kind==1 & S[i,8]!="" & asarray_contains(starts,pair)) asarray_remove(starts,pair)
+                if (kind==2 & S[i,8]!="" & asarray_contains(ends,pair)) asarray_remove(ends,pair)
+                continue
+            }
+            parsed=_suso_tm_parse(S[i,7])
+            if (missing(parsed[1])) {
+                if (asarray_contains(previous,key)) asarray_remove(previous,key)
+                if (kind==1 & asarray_contains(starts,pair)) asarray_remove(starts,pair)
+                if (kind==2 & asarray_contains(ends,pair)) asarray_remove(ends,pair)
+                continue
+            }
+            cur=(parsed,X[i,3],i)
+            q=S[i,5]+(S[i,6]!="" ? " [roster "+S[i,6]+"]" : "")
+            if (asarray_contains(previous,key)) {
+                old=asarray(previous,key)
+                if (S[i,4]!="" & S[old[4],4]==S[i,4] & _suso_tm_comparable(cur,old) & abs(cur[1]-old[1])>=60000) {
+                    j=old[4]; priorwhen=_suso_tm_when(X[j,1],X[j,2],X[j,8])
+                    txt="Interview boundary "+q+" changed by "+who+" from "+S[j,7]+" (recorded "+priorwhen+") to "+S[i,7]+" (recorded "+t0+"). Comparable recorded value shifted "+strtrim(strofreal((cur[1]-old[1])/60000,"%12.2f"))+" min. Review whether this was a correction or a new time capture."
+                    item=_suso_tm_item("time_revision",S[i,3],S[i,4],S[i,9],txt,priorwhen,t0,(cur[1]-old[1])/1000,q)
+                    out=out+(out!="" ? "," : "")+item; nr++
+                }
+            }
+            asarray(previous,key,cur)
+            if (kind==1 & S[i,8]!="") asarray(starts,pair,cur)
+            if (kind==2 & S[i,8]!="") asarray(ends,pair,cur)
+            if (S[i,8]!="" & asarray_contains(starts,pair) & asarray_contains(ends,pair)) {
+                first=asarray(starts,pair); last=asarray(ends,pair)
+                if (_suso_tm_comparable(first,last) & last[1]<first[1]) {
+                    j=first[4]; k=last[4]
+                    priorwhen=_suso_tm_when(X[j,1],X[j,2],X[j,8]); t1=_suso_tm_when(X[k,1],X[k,2],X[k,8])
+                    txt="Boundary answers are inconsistent after "+q+" was recorded by "+who+" at "+t0+": end "+S[k,5]+" = "+S[k,7]+" (by "+S[k,3]+" at "+t1+") precedes start "+S[j,5]+" = "+S[j,7]+" (by "+S[j,3]+" at "+priorwhen+") by "+strtrim(strofreal((first[1]-last[1])/60000,"%12.2f"))+" min on a comparable time basis. Verify these boundary answers and their correction history."
+                    item=_suso_tm_item("end_before_start",S[i,3],S[i,4],S[i,9],txt,priorwhen,t1,(last[1]-first[1])/1000,q)
+                    out=out+(out!="" ? "," : "")+item; nb++
+                }
+            }
+        }
+        st_sstore(e,"timing_evidence","["+out+"]")
+        st_store(e,"timing_pauses",np); st_store(e,"timing_backwards",nb); st_store(e,"timing_revisions",nr)
+        b=e+1
+    }
+}
+
 // Numeric-only rows are streamed in small blocks, avoiding hundreds of
 // thousands of Stata macro expansions while keeping full filter granularity.
 void _suso_section_json(string scalar path)
@@ -11803,6 +12491,21 @@ void _suso_section_json(string scalar path)
         if (mod(i,50)==0) { fput(fh, out); out = ""; }
     }
     if (strlen(out)>0) fput(fh, out)
+    fclose(fh)
+}
+
+// Serialize questionnaire labels directly from string data; no Stata macro evaluation.
+void _suso_qxlabels_json(string scalar path)
+{
+    real scalar fh, i
+    string scalar row
+    fh = fopen(path, "w")
+    for (i=1; i<=st_nobs(); i++) {
+        row = (i>1 ? "," : "") + "[" + char(34) + ///
+            suso_jsonesc(st_sdata(i,"para_var")) + char(34) + "," + char(34) + ///
+            suso_jsonesc(st_sdata(i,"qx_text")) + char(34) + "]"
+        fput(fh, row)
+    }
     fclose(fh)
 }
 
@@ -11902,7 +12605,7 @@ void _suso_qx_parse(string scalar fn)
         if (ustrregexm(ch, `"(?s)class="variable_name">\s*(.*?)\s*</div>"')) v = strtrim(ustrregexs(1))
         if (v != "") {
             ti = ""
-            if (ustrregexm(ch, `"(?s)class="question-title"[^>]*>(.*?)</div>"')) ti = substr(_suso_qx_clean(ustrregexs(1)), 1, 800)
+            if (ustrregexm(ch, `"(?s)class="question-title"[^>]*>(.*?)</div>"')) ti = _suso_qx_clean(ustrregexs(1))
             ty = ""
             if (ustrregexm(ch, `"(?s)class="type">\s*(.*?)\s*</div>"')) ty = substr(_suso_qx_clean(ustrregexs(1)), 1, 60)
             en = ""

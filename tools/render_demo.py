@@ -257,6 +257,7 @@ def fixture():
                 if count: aq.append(dict(q[-1],r=a,k=a.lower(),n=count,ni=count,nt=count))
     rem=[dict(a=c['an'],k=c['ak'],t='has_employees',id=c['id'],ws=c['ws'],wc=c['wc'],cp=c['cp'],tu=0,cev=0,out=1,n=1,q=1,ra=0,ck=c['need'],tier=c['t']) for c in cases]
     data=dict(meta=meta,rows=rows,actors=actors,q=q,aq=aq,rem=rem,daily=[dict(r=a,d='2026-09-04',c=sum(x['ans'] for x in actors if x['r']==a)) for a in names])
+    data['ql']=[['employees','How many permanent employees work at this business?'],['has_employees','Does the business have permanent employees?'],['sales','What were total annual sales?'],['history_only','A question appearing only in later event history.']]
     # Compact section timing is illustrative, with exact per-actor totals.
     data['meta']['hassections']=1
     data['sections']=[dict(id=0,label='Unmapped activity'),dict(id=1,label='Employment'),dict(id=3,label='Sales'),dict(id=4,label='Business costs'),dict(id=5,label='Finance')]
@@ -328,6 +329,8 @@ def render(source, output):
     src=source.read_text(encoding='utf-8'); output.mkdir(parents=True,exist_ok=True)
     data,cases,dq,questions=fixture()
     macros=dict(htitle='Paradata review — synthetic example',wst=' — SYNTHETIC EXAMPLE',now='04 Sep 2026',sub='Synthetic illustration — no real interviews',nintsc=18,nstartedc=18,ncompletedc=18,nuntouchedc=0,tothrc=10,nhist=3,nfinalcheck=2,nexpectedblank=1,nfinalanswered=0,nanswereddisabled=0,nevents=650,covline='',cascade=3,window=5,fastsecs=2,gapmins=30,rnesc='interviewer roles',veline='',qordernote='Questionnaire order is used. ',qorderbutton='Reset questionnaire order',dnote='device-local date',remsev='w',histplural='ies',nobsc=18,k_eval=1,k_nocond=2,k_noev=0,k_absent=0,dsrc='Synthetic final export',misscodes='-9',nobs=18,nraw_allroles_global=3,nraw_role_global=3,nhist_global=3,ncasc_global=0,ncompactevents_global=0)
+    # No explicit startvar()/endvar() override is used by the synthetic demo.
+    macros['timing_notice']=''
     r=Renderer(src,macros)
     skip=program(src,'_suso_para_skips')
     for c in cases:
@@ -349,7 +352,8 @@ def render(source, output):
         assignments(between(behavior,'quietly gen strL e_eventline','file write `fh\' `"<div class="note">Only unresolved histories'),env)
         cards_html+=r.writes(row_markup,dict(i=1,nshow=2),env)
     tail=between(behavior,'file write `fh\' `"<div id="r_action_none"','_suso_para_history_js `fh\'')
-    pages[1]=r.writes(body)+r.writes(begin_cards,dict(nshow=2),{})+cards_html+r.writes(tail)+r.js('_suso_para_history_js')+'<script>var D='+j(data)+';\n'+r.js('_suso_para_report_js')
+    labels=r.js('_suso_para_labels_js') if re.search(r'^program _suso_para_labels_js\b',src,re.M) else ''
+    pages[1]=r.writes(body)+r.writes(begin_cards,dict(nshow=2),{})+cards_html+r.writes(tail)+labels+r.js('_suso_para_history_js')+'<script>var D='+j(data)+';\n'+r.js('_suso_para_report_js')
     check=program(src,'_suso_para_check')
     head=between(check,'file write `hf\' `"<!DOCTYPE html>','file write `hf\' `"var D=')
     engine=between(check,'file write `hf\' `"/* suso paradata check - dynamic dashboard engine */','file close `hf\'')

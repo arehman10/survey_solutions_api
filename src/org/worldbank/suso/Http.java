@@ -2,9 +2,7 @@ package org.worldbank.suso;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.net.Authenticator;
 import java.net.InetSocketAddress;
-import java.net.PasswordAuthentication;
 import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -22,6 +20,7 @@ import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.List;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -76,6 +75,7 @@ public final class Http {
             if (authorization != null && !authorization.isEmpty()) {
                 request.header("Authorization", authorization);
             }
+            proxyAuthorization(request, proxyHost, proxyPort, proxyUser, proxyPassword);
             request.header("Accept", empty(accept) ? "application/json" : accept);
             request.header("User-Agent", "suso-stata/1.7.32");
             if (!empty(body)) {
@@ -114,6 +114,7 @@ public final class Http {
                     .uri(uri)
                     .timeout(Duration.ofMillis(readTimeout <= 0 ? 300000L : readTimeout));
             if (!empty(authorization)) request.header("Authorization", authorization);
+            proxyAuthorization(request, proxyHost, proxyPort, proxyUser, proxyPassword);
             request.header("Accept", empty(accept) ? "application/json" : accept);
             request.header("User-Agent", "suso-stata/1.7.32");
             request.header("GraphQL-Preflight", "1");
@@ -146,32 +147,18 @@ public final class Http {
         synchronized (CLIENTS) {
             HttpClient cached = cacheable ? CLIENTS.get(key) : null;
             if (cached != null) return cached;
-            HttpClient created = newClient(connectMillis, selector, explicitProxy,
-                    proxyUser, proxyPassword, insecure, defaultTls);
+            HttpClient created = newClient(connectMillis, selector, insecure, defaultTls);
             if (cacheable) CLIENTS.put(key, created);
             return created;
         }
     }
 
     private static HttpClient newClient(long connectMillis, ProxySelector selector,
-            boolean explicitProxy, String proxyUser, String proxyPassword,
             boolean insecure, SSLContext defaultTls) throws Exception {
         HttpClient.Builder builder = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofMillis(connectMillis));
         if (selector != null) builder.proxy(selector);
-        if (explicitProxy) {
-            if (!empty(proxyUser)) {
-                final String user = proxyUser;
-                final char[] password = (proxyPassword == null ? "" : proxyPassword).toCharArray();
-                builder.authenticator(new Authenticator() {
-                    @Override protected PasswordAuthentication getPasswordAuthentication() {
-                        return getRequestorType() == RequestorType.PROXY
-                                ? new PasswordAuthentication(user, password) : null;
-                    }
-                });
-            }
-        }
         if (insecure) {
             // Deliberately scoped to this client. Never mutate the JVM-global
             // jdk.internal.httpclient.disableHostnameVerification property.
@@ -180,6 +167,19 @@ public final class Http {
             builder.sslContext(trustAllContext());
         } else builder.sslContext(defaultTls);
         return builder.build();
+    }
+
+    private static void proxyAuthorization(HttpRequest.Builder request, String host,
+            int port, String user, String password) {
+        if (empty(host) || port <= 0 || empty(user)) return;
+        // A client Authenticator causes the JDK to discard an explicitly supplied
+        // origin Authorization header, including Bearer tokens. Keep credentials
+        // on this request instead. For HTTPS the JDK sends Proxy-* only on CONNECT,
+        // strips them from the TLS origin request, and still enforces its configured
+        // jdk.http.auth.tunneling.disabledSchemes policy.
+        String credentials = user + ":" + (password == null ? "" : password);
+        request.header("Proxy-Authorization", "Basic " + Base64.getEncoder().encodeToString(
+                credentials.getBytes(StandardCharsets.ISO_8859_1)));
     }
 
     private static final class ClientKey {
