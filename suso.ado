@@ -1,3 +1,4 @@
+*! suso v1.7.40 build 2026-09-30-ZIPPASSWORD  (preserve literal ZIP passwords and accept compatible ZipCrypto headers)
 *! suso v1.7.39 build 2026-09-21-REVIEWFLAGS  (questionnaire hover labels, explicit interview clocks, pause/time investigation and selection fix)
 *! suso v1.7.38 build 2026-09-19-WINDOWSQA  (local validation: Stata options, API pagination, GraphQL and offline workflows)
 *! suso v1.7.37 build 2026-09-08-FILTERSEARCH  (local review: keep matching interviews searchable when signals clear)
@@ -248,7 +249,9 @@ program _suso_config, rclass
     if "`auditfile'"!="" global SUSO_AUDIT   "`auditfile'"
     if "`guid'"!=""      global SUSO_GUID    "`guid'"
     if `qver'>0          global SUSO_QVER    "`qver'"
-    if `"`exportpw'"'!="" global SUSO_EXPORTPWD `"`exportpw'"'   // export-archive password
+    * Copy secrets as data: ordinary macro expansion would reinterpret dollar
+    * signs, local-macro delimiters, and adjacent backslashes in the password.
+    if `: length local exportpw'>0 mata: st_global("SUSO_EXPORTPWD", st_local("exportpw"))
 
     * Configuration also serves offline extraction/report workflows. Credential
     * prompting belongs to explicit login or the first actual API request.
@@ -261,7 +264,7 @@ program _suso_config, rclass
         di as err "      the WBG root CA into your Stata JVM trust store (see the README)."
     }
 
-    if "`show'"!="" | trim(`"`server'`workspace'`user'`password'`token'`auth'`jar'`proxyhost'`exportpw'"')=="" {
+    if "`show'"!="" | (trim(`"`server'`workspace'`user'`password'`token'`auth'`jar'`proxyhost'"')=="" & `: length local exportpw'==0) {
         _suso_showconfig
     }
 end
@@ -280,7 +283,7 @@ program _suso_showconfig
     di as txt "  user        : " as res cond("$SUSO_USER"=="","(not set)","$SUSO_USER")
     di as txt "  password    : " as res cond("$SUSO_PWD"=="","(not set)","********")
     if "$SUSO_TOKEN"!="" di as txt "  bearer token: " as res "********"
-    if `"$SUSO_EXPORTPWD"'!="" di as txt "  export pw   : " as res "********"
+    if `: length global SUSO_EXPORTPWD'>0 di as txt "  export pw   : " as res "********"
     di as txt "  jar         : " as res cond("$SUSO_JAR"=="","(auto-locate on adopath)","$SUSO_JAR")
     if "$SUSO_PROXYHOST"!="" di as txt "  proxy       : " as res "$SUSO_PROXYHOST:$SUSO_PROXYPORT"
     di as txt "  TLS chain   : " as res cond("$SUSO_INSECURE"=="1","DISABLED (hostname still checked)","verified")
@@ -297,7 +300,7 @@ end
 
 program _suso_about, rclass
     di as txt _n "{hline 66}"
-    di as txt "  suso  v1.7.39 (build 2026-09-21-REVIEWFLAGS)  —  Survey Solutions REST API client for Stata"
+    di as txt "  suso  v1.7.40 (build 2026-09-30-ZIPPASSWORD)  —  Survey Solutions REST API client for Stata"
     di as txt "{hline 66}"
     di as txt "  Author       : Attique Ur Rehman, Economist, The World Bank"
     di as txt "                 Development Economics (DEC) · Enterprise Surveys"
@@ -307,9 +310,9 @@ program _suso_about, rclass
     di as txt "  Java backend : suso.jar (requires a Java 11+ runtime)"
     di as txt "  Help         : {help suso}        Diagnostics: {stata suso doctor:suso doctor}"
     di as txt "{hline 66}"
-    return local version "1.7.39"
-    return local build "2026-09-21-REVIEWFLAGS"
-    return local expected_backend "1.7.38-WINDOWSQA"
+    return local version "1.7.40"
+    return local build "2026-09-30-ZIPPASSWORD"
+    return local expected_backend "1.7.40-ZIPPASSWORD"
 end
 
 *===============================================================================
@@ -325,7 +328,7 @@ program _suso_doctor, rclass
     di as txt "suso doctor — environment check"
     di as txt "{hline 62}"
     di as txt "Stata"
-    di as txt "  ado code build : " as res "1.7.39-REVIEWFLAGS"
+    di as txt "  ado code build : " as res "1.7.40-ZIPPASSWORD"
     di as txt "  version       : " as res "`c(flavor)' `c(stata_version)'"
     di as txt "  sysdir PLUS   : " as res "`c(sysdir_plus)'"
     di as txt "  sysdir PERSON : " as res "`c(sysdir_personal)'"
@@ -348,10 +351,10 @@ program _suso_doctor, rclass
             local javaver "$SUSO_JAVAVER"
             di as txt "  Java 11+      : " as res "yes  ($SUSO_JAVAVER)"
             di as txt "  backend build : " as res cond("$SUSO_JARBUILD"=="","(not reported)","$SUSO_JARBUILD")
-            if "$SUSO_JARBUILD"!="1.7.38-WINDOWSQA" {
+            if "$SUSO_JARBUILD"!="1.7.40-ZIPPASSWORD" {
                 local ok 0
                 di as err "  WARNING       : suso.jar does not match the backend required by this package."
-                di as err "                  Reinstall both files from the same v1.7.39 package, then restart Stata."
+                di as err "                  Reinstall both files from the same v1.7.40 package, then restart Stata."
             }
         }
         else {
@@ -2174,9 +2177,9 @@ program _suso_export, rclass
             di as err `"suso export extract: archive not found: `file'"'
             exit 601
         }
-        if `"`unzipw'"'=="" local unzipw `"$SUSO_EXPORTPWD"'
+        if `: length local unzipw'==0 mata: st_local("unzipw", st_global("SUSO_EXPORTPWD"))
         local unzip_started = clock("`c(current_date)' `c(current_time)'", "DMYhms")
-        _suso_unzip , file(`"`file'"') dir(`"`unzipto'"') pwd(`"`unzipw'"')
+        _suso_unzip , file(`"`file'"') dir(`"`unzipto'"') pwd(`"`macval(unzipw)'"')
         local unzipped = r(nfiles)
         return add
         return scalar unzipped = `unzipped'
@@ -2290,10 +2293,10 @@ program _suso_export, rclass
             exit
         }
         di as txt "suso: downloaded export to " as res `"`gsaved'"'
-        if "`unzip'"!="" | `"`unzipw'"'!="" | `"`unzipto'"'!="" {
-            if `"`unzipw'"'=="" local unzipw `"$SUSO_EXPORTPWD"'
+        if "`unzip'"!="" | `: length local unzipw'>0 | `"`unzipto'"'!="" {
+            if `: length local unzipw'==0 mata: st_local("unzipw", st_global("SUSO_EXPORTPWD"))
             local unzip_started = clock("`c(current_date)' `c(current_time)'", "DMYhms")
-            _suso_unzip , file(`"`gsaved'"') dir(`"`unzipto'"') pwd(`"`unzipw'"')
+            _suso_unzip , file(`"`gsaved'"') dir(`"`unzipto'"') pwd(`"`macval(unzipw)'"')
             return local unzipdir `"`r(unzipdir)'"'
             return scalar unzipped = r(nfiles)
             return local manifest `"`r(manifest)'"'
@@ -2327,10 +2330,10 @@ program _suso_export, rclass
         if !missing(`download_seconds') di as txt "suso: transfer and verification took " as res %8.2f `download_seconds' as txt "s."
         if `"`checksum'"'!="" di as txt "      SHA-256: " as res "`checksum'"
         if `"`backup'"'!="" di as txt "      Previous file kept at " as res `"`backup'"'
-        if "`unzip'"!="" | `"`unzipw'"'!="" | `"`unzipto'"'!="" {
-            if `"`unzipw'"'=="" local unzipw `"$SUSO_EXPORTPWD"'
+        if "`unzip'"!="" | `: length local unzipw'>0 | `"`unzipto'"'!="" {
+            if `: length local unzipw'==0 mata: st_local("unzipw", st_global("SUSO_EXPORTPWD"))
             local unzip_started = clock("`c(current_date)' `c(current_time)'", "DMYhms")
-            _suso_unzip , file(`"`zsaved'"') dir(`"`unzipto'"') pwd(`"`unzipw'"')
+            _suso_unzip , file(`"`zsaved'"') dir(`"`unzipto'"') pwd(`"`macval(unzipw)'"')
             return local unzipdir `"`r(unzipdir)'"'
             return scalar unzipped = r(nfiles)
             return local manifest `"`r(manifest)'"'
@@ -2856,8 +2859,8 @@ program _suso_para_get, rclass
         ISTATUS(string) FROM(string) TO(string) REDUCED PWD(string)            ///
         UNZIPW(string) POLLSecs(integer 10) JOBTimeout(integer 3600)           ///
         replace VERBOSE ]
-    if `"`unzipw'"'!="" local pwd `"`unzipw'"'    // unzipw() = house synonym for pwd()
-    if `"`pwd'"'==""    local pwd `"$SUSO_EXPORTPWD"'   // default from suso config , exportpw()
+    if `: length local unzipw'>0 local pwd : copy local unzipw
+    if `: length local pwd'==0 mata: st_local("pwd", st_global("SUSO_EXPORTPWD"))
 
     if `"`saving'"'=="" {
         local stamp : di %tcCCYYNNDD-HHMMSS ///
@@ -2888,11 +2891,11 @@ program _suso_para_get, rclass
     return add
 
     local unzip_started = clock("`c(current_date)' `c(current_time)'", "DMYhms")
-    capture noisily _suso_unzip , file(`"`zip'"') dir(`"`dir'"') pwd(`"`pwd'"')
+    capture noisily _suso_unzip , file(`"`zip'"') dir(`"`dir'"') pwd(`"`macval(pwd)'"')
     if _rc {
         local rc = _rc
         di as err _n "suso paradata: could not extract the downloaded archive."
-        if `"`pwd'"'=="" {
+        if `: length local pwd'==0 {
             di as err "  Your server may password-protect exports (Export Encryption). The"
             di as err "  download itself succeeded and is kept — no need to re-export. Retry:"
         }
@@ -2929,8 +2932,8 @@ end
 program _suso_para_load, rclass
     version 14.2
     syntax [, FILE(string) DIR(string) PWD(string) UNZIPW(string) ]
-    if `"`unzipw'"'!="" local pwd `"`unzipw'"'    // unzipw() = house synonym for pwd()
-    if `"`pwd'"'==""    local pwd `"$SUSO_EXPORTPWD"'   // default from suso config , exportpw()
+    if `: length local unzipw'>0 local pwd : copy local unzipw
+    if `: length local pwd'==0 mata: st_local("pwd", st_global("SUSO_EXPORTPWD"))
 
     if `"`file'"'=="" & `"`dir'"'=="" {
         di as err "suso paradata load: specify the downloaded export,  file(<paradata .zip or .tab>)."
@@ -2947,11 +2950,11 @@ program _suso_para_load, rclass
         local k = strrpos(`"`file'"', ".")
         local ext = cond(`k'>0, lower(substr(`"`file'"', `k', .)), "")
         if "`ext'"==".zip" {
-            capture noisily _suso_unzip , file(`"`file'"') dir(`"`dir'"') pwd(`"`pwd'"')
+            capture noisily _suso_unzip , file(`"`file'"') dir(`"`dir'"') pwd(`"`macval(pwd)'"')
             if _rc {
                 local rc = _rc
                 di as err _n "suso paradata: could not extract the archive."
-                if `"`pwd'"'=="" di as err `"  If your server password-protects exports, add unzipw() or set:  suso config , exportpw("...")"'
+                if `: length local pwd'==0 di as err `"  If your server password-protects exports, add unzipw() or set:  suso config , exportpw("...")"'
                 else            di as err "  A password was supplied but extraction failed — check the password."
                 exit `rc'
             }
