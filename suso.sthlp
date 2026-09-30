@@ -312,6 +312,19 @@ This option also requests extraction.{p_end}
 Supply the archive password and request extraction. Alternatively set
 {opt exportpw()} once with {cmd:suso config}.{p_end}
 
+{marker zip_password}{...}
+{pmore}
+Stata expands macros before {cmd:suso} receives the password. For the literal
+password {cmd:qa$QA_LITERAL}, enter {cmd:unzipw("qa\$QA_LITERAL")}.
+The same rule applies to {cmd:suso config, exportpw("qa\$QA_LITERAL")}.
+Quotes alone do not prevent macro expansion.{p_end}
+
+{pmore}
+Prefix a literal opening backtick with a backslash too: for the password
+{cmd:qa`QA_LITERAL'pw}, enter {cmd:unzipw("qa\`QA_LITERAL'pw")}.
+Keep a literal backslash-asterisk sequence unchanged: the password
+{cmd:qa\*pw} is entered as {cmd:unzipw("qa\*pw")}.{p_end}
+
 {pstd}
 To extract a ZIP already on disk, without contacting the server:{p_end}
 
@@ -545,6 +558,29 @@ include speed, fast streaks, short duration, night work, churn, duration outlier
 peer speed and overlap. It is not a ranking of the six Stata flags alone.{p_end}
 
 {pstd}
+The review list shows {bf:Date} immediately after the reason for review and opens
+with the most recent interview starts first. Click the date heading to reverse
+the order. The date comes from the first dated interviewing activity in event
+order, using its local date when available and UTC otherwise. Undated interviews
+stay last in either direction; later corrections do not change the start date.{p_end}
+
+{pstd}
+With {opt qx()}, {bf:Question-order deviations} identifies earlier-position
+questions first answered after a later-position question. It considers first-pass
+field answers and counts each base question once across roster rows. Later edits,
+reanswers and work after first completion are excluded. Missing or ambiguous
+positions and uncertain event sequences limit assessment; absent mapping is not
+a clean pass. Skips alone are not deviations, and legitimate branching can
+produce a signal, so these are {bf:Watch} items for review.{p_end}
+
+{pstd}
+Use the review check selector for question order, short interviews, either check
+or both checks. Short means first-pass active minutes strictly below
+{bf:Min first-pass active min}; equality is not short and zero disables the
+short check. Missing or unreliable timing is not classified as short. Changing
+the threshold refreshes the list and its CSV export.{p_end}
+
+{pstd}
 Separate {bf:Investigate} evidence identifies pauses during interviewing,
 comparable end-before-start values, and clock revisions of at least 60 seconds
 when the immediately preceding valid capture was by the same known actor.
@@ -558,6 +594,11 @@ queue to CSV. The raw-history explorer requires selecting a matching local
 {cmd:paradata.tab}; that file is read locally and is not uploaded. Raw events are
 not embedded in the report, so a recipient needs their own authorized copy.
 Open interview/assignment links use the browser's Headquarters session.{p_end}
+
+{pstd}
+Event history has {bf:Top} and {bf:Back to review} controls. Returning to the review
+list preserves its filters and selected interview. {bf:No Responsible Actor} is
+unchecked when event history opens; select it to include those events.{p_end}
 
 {marker suite}{...}
 {title:Combined QC suite}
@@ -1344,6 +1385,13 @@ with {cmd:suso config, jar("C:/path/to/suso.jar")}.{p_end}
 Check {cmd:suso config, show}, then run {cmd:suso login} and {cmd:suso ping}.
 Verify the base URL, workspace short name, API credentials, and permissions.
 Add {opt verbose} to a failing API call to inspect the method, URL, and status.{p_end}
+
+{phang}{bf:A correct archive password gives a wrong ZIP password error}{break}
+If the password works in another extractor, check the
+{help suso##zip_password:literal-character entry rules} above.
+The downloaded ZIP is retained. Retry locally with
+{cmd:suso export extract, file("C:/survey/data.zip")}
+and the corrected {opt unzipw()}; no new download is needed.{p_end}
 
 {phang}{bf:Only part of an API list appears}{break}
 Add {opt all}. If the row limit is reached, review the configured
