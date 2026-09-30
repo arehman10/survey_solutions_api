@@ -301,6 +301,7 @@ final class Zip {
         if (readU16(raf) != entry.flags || readU16(raf) != entry.method) {
             throw new IOException("local/central ZIP header mismatch for " + entry.name);
         }
+        int localModTime = readU16(raf);
         raf.seek(entry.localOffset + 14);
         long localCrc = readU32(raf), localCompressed = readU32(raf), localSize = readU32(raf);
         boolean zip64Local = localCompressed == 0xffffffffL || localSize == 0xffffffffL;
@@ -354,9 +355,16 @@ final class Zip {
             byte[] header = new byte[12];
             readFully(compressed, header);
             for (int i = 0; i < header.length; i++) header[i] = decryptByte(keys, header[i]);
-            int check = (entry.flags & 8) != 0 ? (entry.modTime >>> 8) & 0xff
-                    : (int)((entry.expectedCrc >>> 24) & 0xff);
-            if ((header[11] & 0xff) != check) {
+            int check = header[11] & 0xff;
+            int crcCheck = (int)((entry.expectedCrc >>> 24) & 0xff);
+            // ZipCrypto writers use either CRC or DOS time with data descriptors.
+            // A streaming writer uses the local time present when encryption starts;
+            // keep accepting the central time for archives using that convention.
+            // This byte is only an early password hint: full CRC/size validation
+            // below remains mandatory before the publisher can change any files.
+            boolean timeCheck = descriptor && (check == ((localModTime >>> 8) & 0xff)
+                    || check == ((entry.modTime >>> 8) & 0xff));
+            if (check != crcCheck && !timeCheck) {
                 result.badPassword = true;
                 throw new IOException("wrong ZIP password for " + entry.name);
             }

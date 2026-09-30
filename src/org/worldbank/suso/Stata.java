@@ -43,7 +43,7 @@ import java.util.regex.Pattern;
 public final class Stata {
 
     /** Backend identifier checked by suso.ado before parsing questionnaire metadata. */
-    private static final String BACKEND_BUILD = "1.7.38-WINDOWSQA";
+    private static final String BACKEND_BUILD = "1.7.40-ZIPPASSWORD";
 
     // Restored from the shipped backend: Stata's working directory can differ from the JVM's.
     private static Path resolvePath(String file, String cwd) {
