@@ -504,7 +504,7 @@ on disk; after extraction failure, retry with {cmd:load}. Prefer full exports:
 {opt title(text)} {opt qx(file.html)} {opt data(main.dta)}
 {opt startvar(name)} {opt endvar(name)} {opt filters(varlist)} {opt vars(patterns)}
 {opt gapmins(#)} {opt fastsecs(#)} {opt allroles} {opt cascade(#)} {opt window(#)}
-{opt litecap(#)} {opt misscodes(numlist)} {opt hqurl(url)}]{p_end}
+{opt litecap(#)} {opt misscodes(numlist)} {opt hqurl(url)} {opt gpsvar(name)}]{p_end}
 
 {pstd}
 Run directly after loading events. The report contains a review queue, actor and
@@ -553,9 +553,12 @@ matching. Missing captures and incompatible time bases remain unknown.{p_end}
 {pstd}
 Start with {bf:What needs attention}, then open a row's evidence. The queue uses
 {bf:Investigate}, {bf:Verify} and {bf:Watch} priorities. It considers individual
-contributors, workflow and multiple risk domains. Its eight behaviour signals
+contributors, workflow and multiple risk domains. Its nine behaviour signals
 include speed, fast streaks, short duration, night work, churn, duration outliers,
-peer speed and overlap. It is not a ranking of the six Stata flags alone.{p_end}
+peer speed, overlap and reading speed. It is not a ranking of the six Stata flags
+alone. The evidence panel shows one heading per issue, with its risk domain, a
+one-line summary, a compact table where the evidence is a list, and the fixed
+explanation once under {bf:About this check}.{p_end}
 
 {pstd}
 The review list shows {bf:Date} immediately after the reason for review and opens
@@ -568,17 +571,67 @@ stay last in either direction; later corrections do not change the start date.{p
 With {opt qx()}, {bf:Question-order deviations} identifies earlier-position
 questions first answered after a later-position question. It considers first-pass
 field answers and counts each base question once across roster rows. Later edits,
-reanswers and work after first completion are excluded. Missing or ambiguous
+reanswers, edits of preloaded or previously answered questions and work after the
+interview left the tablet are excluded. When some events carry an event order,
+an answer without one cannot be placed and is not assessed. Missing or ambiguous
 positions and uncertain event sequences limit assessment; absent mapping is not
 a clean pass. Skips alone are not deviations, and legitimate branching can
 produce a signal, so these are {bf:Watch} items for review.{p_end}
+
+{dlgtab:Reading speed, worked backwards and GPS}
+
+{pstd}
+{bf:Reading speed (R)} needs {opt qx()}. A question is assessed when its type is
+read aloud (not GPS, picture, audio, barcode, area, a current-time stamp or a
+calculated variable) and it has at least 8 readable words: the question text
+without its leading code (such as {cmd:K.3b.} or {cmd:SRI.B.24.}) and without
+runs of two or more ALL-CAPS words, which Survey Solutions questionnaires use for
+interviewer instructions. Its minimum time is readable words / 3.5 seconds. A
+first-pass, newly reached, timed CAPI answer counts as unread when it is faster
+than that minimum {it:and} faster than the 5th percentile of other interviewers'
+answers to the same question (20 or more needed; otherwise not assessed). R is
+raised for an interviewer with at least 10 assessed answers of which at least 25%
+are unread. Text in a script written without spaces between words (Chinese,
+Japanese, Thai, Lao, Khmer, Myanmar, Tibetan) is not assessed. Word counts use the
+language of the supplied preview, usually the original questionnaire.{p_end}
+
+{pstd}
+{bf:Worked backwards} uses the same first answers as the question-order check. A
+part starts where the interviewer jumped back to an earlier question and ends at
+the next jump back or when the interviewer moves past the furthest question
+already reached; parts of fewer than 3 first answers are ignored. Three or more
+parts in a row, each started earlier in the questionnaire than the one before,
+raise the signal. Parts are named by questionnaire sub-section, else section.
+It is a risk domain of its own; the enumerator table shows how many interviews
+each enumerator worked backwards and the mean number of backward jumps.{p_end}
+
+{pstd}
+{bf:GPS checks} read GPS answers ({it:latitude,longitude}[{it:accuracy}]{it:altitude})
+from the event parameters, with or without {opt qx()}. {it:Impossible travel}
+(a risk domain) compares one interviewer's consecutive GPS captures in different
+interviews: at least 1 km apart after subtracting both reported accuracies, at
+more than 100 km/h. {it:Repeated location} ({bf:Watch} only) finds another
+interview within 20 m captured at least 12 hours apart, using the interview
+location question: {opt gpsvar()}, or the only GPS question asked outside a
+roster. Same-day close points are context; accuracy worse than 50 m is
+information only. The report embeds distances, times and speeds, never
+coordinates.{p_end}
 
 {pstd}
 Use the review check selector for question order, short interviews, either check
 or both checks. Short means first-pass active minutes strictly below
 {bf:Min first-pass active min}; equality is not short and zero disables the
-short check. Missing or unreliable timing is not classified as short. Changing
-the threshold refreshes the list and its CSV export.{p_end}
+short check. Missing or unreliable timing is not classified as short, nor is a
+completed interview without any measurable first-pass interval. A completed
+interview without answers takes its mode from its completion. Changing the
+threshold refreshes the list and its CSV export.{p_end}
+
+{pstd}
+An interviewer can complete an interview and restart it on the tablet before it
+leaves the tablet. The work after such a restart is first-pass work for all of
+these checks. The restart remains a {bf:Watch} note that counts the edits that
+changed a recorded value, answered a question for the first time, re-entered the
+same value or removed an answer; the CSV export carries the same counts.{p_end}
 
 {pstd}
 Separate {bf:Investigate} evidence identifies pauses during interviewing,
@@ -600,6 +653,14 @@ Event history has {bf:Top} and {bf:Back to review} controls. Returning to the re
 list preserves its filters and selected interview. {bf:No Responsible Actor} is
 unchecked when event history opens; select it to include those events.{p_end}
 
+{pstd}
+Device-local times use each event's recorded UTC offset, with one exception. An
+event recorded with offset 00:00:00 between events of the same responsible actor
+that share another offset (seen on tablet {cmd:Restarted} events) keeps its UTC
+time, and its local time uses that shared offset. Event history marks such times
+with {bf:*}; loaded events carry {cmd:para_off_inferred} and {cmd:para_off_local}.
+Offset-quality checks still use the recorded offsets.{p_end}
+
 {marker suite}{...}
 {title:Combined QC suite}
 
@@ -609,7 +670,7 @@ unchecked when event history opens; select it to include those events.{p_end}
 {opt data(main.dta)} {opt startvar(name)} {opt endvar(name)}
 {opt gapmins(#)} {opt fastsecs(#)} {opt allroles} {opt cascade(#)} {opt window(#)}
 {opt litecap(#)} {opt top(#)} {opt misscodes(numlist)} {opt status(status)}
-{opt filters(varlist)} {opt vars(patterns)} {opt hqurl(url)}]{p_end}
+{opt filters(varlist)} {opt vars(patterns)} {opt hqurl(url)} {opt gpsvar(name)}]{p_end}
 
 {pstd}
 The suite contains Behaviour and Skips tabs. Add both {opt qx()} and {opt data()}
@@ -668,6 +729,13 @@ least 1. {opt window(#)} is its positive finite time window in seconds; default
 nonnegative integer.{p_end}
 
 {phang}
+{opt gpsvar(name)} names the GPS question that records the interview location,
+for {cmd:report} and {cmd:suite}. It is needed only when more than one GPS
+question is asked outside rosters; a roster question is refused. Without it, and
+with several candidates, repeated location is not assessed (a note says so);
+impossible travel always uses every GPS capture.{p_end}
+
+{phang}
 {opt litecap(#)} controls report/suite size; default 15000, nonnegative integer.
 When qualifying field-answer interviews exceed it, detailed hour/gap vectors are
 omitted and speed/share and night-window controls use build-time settings.
@@ -704,9 +772,14 @@ Reports contain interview-level information; share them as survey data.{p_end}
 {opt by(interview)} is the default. {opt by(question)} summarizes first-pass
 question timing; {opt by(interviewer)} summarizes actors. Each replaces events
 with its summary table. Active time estimates eligible within-session intervals;
-it excludes pauses, workflow/session boundaries, actor handoffs and long gaps.
-First-pass timing ends at first interviewer completion. Later work remains in
-total/workflow metrics. Invalid timing remains unavailable.{p_end}
+it excludes pauses, workflow/session boundaries, actor handoffs and gaps longer
+than {opt gapmins()}, which contribute nothing rather than being capped.
+First-pass timing ends at the interviewer completion after which the interview
+leaves the tablet: a completion followed by a {cmd:Restarted} from the same
+interviewer, before any supervisor, headquarters or API action, continues the first
+pass. Later work remains in total/workflow metrics. An interviewer event without
+a valid time makes the timing incomplete, and invalid timing remains
+unavailable.{p_end}
 
 {p 8 12 2}
 {cmd:suso paradata flags} [{cmd:,} {opt gapmins(#)} {opt fastsecs(#)} {opt allroles}
@@ -1249,6 +1322,13 @@ events and interviews loaded ({cmd:paradata get}/{cmd:load}){p_end}
 {phang}
 {cmd:r(nflagged)}, {cmd:r(n_}{it:flag}{cmd:)}{break}
 flagged interviews, and count per flag ({cmd:paradata flags}){p_end}
+
+{phang}
+{cmd:r(nread)}, {cmd:r(nbackwards)}, {cmd:r(ngpstravel)}, {cmd:r(ngpsnear)}, {cmd:r(ngpscaptures)}, {cmd:r(gpsvar)}{break}
+interviews with reading speed (primary actor), worked backwards, impossible GPS travel and repeated GPS location at the
+build-time rules; GPS captures; the location question used ({cmd:paradata report}). The table left in memory carries
+{cmd:read_assessed}, {cmd:read_unread}, {cmd:flag_read}, {cmd:back_parts}, {cmd:back_jumps}, {cmd:flag_backwards},
+{cmd:gps_*}, {cmd:flag_gps_travel} and {cmd:note_gps_near}.{p_end}
 
 {phang}
 {cmd:r(nhistories)}, {cmd:r(nhistories_global)}{break}
